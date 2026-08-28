@@ -15,24 +15,24 @@ public:
 
 	/// Constructor
 	inline				Sphere() = default;
-	inline				Sphere(const Float3 &inCenter, float inRadius)			: mCenter(inCenter), mRadius(inRadius) { }
-	inline				Sphere(Vec3Arg inCenter, float inRadius)				: mRadius(inRadius) { inCenter.StoreFloat3(&mCenter); }
+	inline				Sphere(const Float4 &inCenter, float inRadius)			: mCenter(inCenter), mRadius(inRadius) { }
+	inline				Sphere(Vec4Arg inCenter, float inRadius)				: mRadius(inRadius) { inCenter.StoreFloat4(&mCenter); }
 
 	/// Calculate the support vector for this convex shape.
-	inline Vec3			GetSupport(Vec3Arg inDirection) const
+	inline Vec4			GetSupport(Vec4Arg inDirection) const
 	{
 		float length = inDirection.Length();
-		return length > 0.0f ? Vec3::sLoadFloat3Unsafe(mCenter) + (mRadius/ length) * inDirection : Vec3::sLoadFloat3Unsafe(mCenter);
+		return length > 0.0f ? Vec4(mCenter) + (mRadius / length) * inDirection : Vec4(mCenter);
 	}
 
 	// Properties
-	inline Vec3			GetCenter() const										{ return Vec3::sLoadFloat3Unsafe(mCenter); }
+	inline Vec4			GetCenter() const										{ return Vec4(mCenter); }
 	inline float		GetRadius() const										{ return mRadius; }
 
 	/// Test if two spheres overlap
 	inline bool			Overlaps(const Sphere &inB) const
 	{
-		return (Vec3::sLoadFloat3Unsafe(mCenter) - Vec3::sLoadFloat3Unsafe(inB.mCenter)).LengthSq() <= Square(mRadius + inB.mRadius);
+		return (Vec4(mCenter) - Vec4(inB.mCenter)).LengthSq() <= Square(mRadius + inB.mRadius);
 	}
 
 	/// Check if this sphere overlaps with a box
@@ -42,11 +42,11 @@ public:
 	}
 
 	/// Create the minimal sphere that encapsulates this sphere and inPoint
-	inline void			EncapsulatePoint(Vec3Arg inPoint)
+	inline void			EncapsulatePoint(Vec4Arg inPoint)
 	{
 		// Calculate distance between point and center
-		Vec3 center = GetCenter();
-		Vec3 d_vec = inPoint - center;
+		Vec4 center = GetCenter();
+		Vec4 d_vec = inPoint - center;
 		float d_sq = d_vec.LengthSq();
 		if (d_sq > Square(mRadius))
 		{
@@ -59,13 +59,13 @@ public:
 			center += (radius - mRadius) / d * d_vec;
 
 			// Store new sphere
-			center.StoreFloat3(&mCenter);
+			center.StoreFloat4(&mCenter);
 			mRadius = radius;
 		}
 	}
 
 private:
-	Float3				mCenter;
+	Float4				mCenter;
 	float				mRadius;
 };
 

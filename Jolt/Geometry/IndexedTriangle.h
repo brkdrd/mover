@@ -40,14 +40,19 @@ public:
 			|| (mIdx[0] == inRHS.mIdx[2] && mIdx[1] == inRHS.mIdx[1] && mIdx[2] == inRHS.mIdx[0]);
 	}
 
-	/// Check if triangle is degenerate
+	/// Check if triangle is degenerate (dimension-agnostic via Gram determinant)
 	bool			IsDegenerate(const VertexList &inVertices) const
 	{
-		Vec3 v0(inVertices[mIdx[0]]);
-		Vec3 v1(inVertices[mIdx[1]]);
-		Vec3 v2(inVertices[mIdx[2]]);
+		Vec4 v0(inVertices[mIdx[0]]);
+		Vec4 v1(inVertices[mIdx[1]]);
+		Vec4 v2(inVertices[mIdx[2]]);
 
-		return (v1 - v0).Cross(v2 - v0).IsNearZero();
+		Vec4 e0 = v1 - v0;
+		Vec4 e1 = v2 - v0;
+		float d00 = e0.Dot(e0);
+		float d01 = e0.Dot(e1);
+		float d11 = e1.Dot(e1);
+		return d00 * d11 - d01 * d01 < 1.0e-12f;
 	}
 
 	/// Rotate the vertices so that the second vertex becomes first etc. This does not change the represented triangle.
@@ -60,9 +65,9 @@ public:
 	}
 
 	/// Get center of triangle
-	Vec3			GetCentroid(const VertexList &inVertices) const
+	Vec4			GetCentroid(const VertexList &inVertices) const
 	{
-		return (Vec3(inVertices[mIdx[0]]) + Vec3(inVertices[mIdx[1]]) + Vec3(inVertices[mIdx[2]])) / 3.0f;
+		return (Vec4(inVertices[mIdx[0]]) + Vec4(inVertices[mIdx[1]]) + Vec4(inVertices[mIdx[2]])) / 3.0f;
 	}
 
 	/// Get the hash value of this structure

@@ -13,7 +13,7 @@ JPH_NAMESPACE_BEGIN
 
 class AABox;
 
-/// Oriented box
+/// Oriented box (4D)
 class JPH_EXPORT_GCC_BUG_WORKAROUND [[nodiscard]] OrientedBox
 {
 public:
@@ -21,19 +21,20 @@ public:
 
 	/// Constructor
 					OrientedBox() = default;
-					OrientedBox(Mat44Arg inOrientation, Vec3Arg inHalfExtents)			: mOrientation(inOrientation), mHalfExtents(inHalfExtents) { }
+					OrientedBox(Mat44Arg inOrientation, Vec4Arg inTranslation, Vec4Arg inHalfExtents) : mOrientation(inOrientation), mTranslation(inTranslation), mHalfExtents(inHalfExtents) { }
 
-	/// Construct from axis aligned box and transform. Only works for rotation/translation matrix (no scaling / shearing).
-					OrientedBox(Mat44Arg inOrientation, const AABox &inBox)				: OrientedBox(inOrientation.PreTranslated(inBox.GetCenter()), inBox.GetExtent()) { }
+	/// Construct from axis aligned box, rotation and translation. Only works for rotation matrix (no scaling / shearing).
+					OrientedBox(Mat44Arg inOrientation, Vec4Arg inTranslation, const AABox &inBox) : mOrientation(inOrientation), mTranslation(inTranslation + Vec4(inOrientation * Lane4(inBox.GetCenter()))), mHalfExtents(inBox.GetExtent()) { }
 
-	/// Test if oriented box overlaps with axis aligned box each other
+	/// Test if oriented box overlaps with axis aligned box
 	bool			Overlaps(const AABox &inBox, float inEpsilon = 1.0e-6f) const;
 
 	/// Test if two oriented boxes overlap each other
 	bool			Overlaps(const OrientedBox &inBox, float inEpsilon = 1.0e-6f) const;
 
-	Mat44			mOrientation;														///< Transform that positions and rotates the local space axis aligned box into world space
-	Vec3			mHalfExtents;														///< Half extents (half the size of the edge) of the local space axis aligned box
+	Mat44			mOrientation;														///< Pure rotation matrix for the OBB
+	Vec4			mTranslation;														///< Center position of the OBB
+	Vec4			mHalfExtents;														///< Half extents (half the size of each edge) in local space
 };
 
 JPH_NAMESPACE_END

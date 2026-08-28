@@ -140,7 +140,8 @@ JPH_INLINE Vec4 RayTetrahedron4(Vec4Arg inOrigin, Vec4Arg inDirection,
 	Vec4 det_sign = Vec4::sAnd(det, UVec4::sReplicate(0x80000000).ReinterpretAsFloat());
 	Vec4 abs_det = Vec4::sXor(det, det_sign);
 	UVec4 det_near_zero = Vec4::sLess(abs_det, epsilon);
-	Vec4 safe_det = Vec4::sSelect(det, Vec4::sOne(), det_near_zero);
+	// Note: no division by the determinant is needed - the barycentrics below are kept un-normalized
+	// (scaled by abs_det) and only compared against zero, and det_near_zero rejects the degenerate case.
 
 	// Barycentric numerators (Cramer's rule)
 	Vec4 l1_num = b0 * c00 + b1 * c01 + b2 * c02;

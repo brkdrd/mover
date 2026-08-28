@@ -14,11 +14,11 @@ JPH_NAMESPACE_BEGIN
 class JPH_EXPORT ConvexHullBuilder2D : public NonCopyable
 {
 public:
-	using Positions = Array<Vec3>;
+	using Positions = Array<Vec4>;
 	using Edges = Array<int>;
 
 	/// Constructor
-	/// @param inPositions Positions used to make the hull. Uses X and Y component of Vec3 only!
+	/// @param inPositions Positions used to make the hull. Uses X and Y components only!
 	explicit			ConvexHullBuilder2D(const Positions &inPositions);
 
 	/// Destructor
@@ -78,13 +78,13 @@ private:
 		explicit		Edge(int inStartIdx)						: mStartIdx(inStartIdx) { }
 
 		/// Calculate the center of the edge and the edge normal
-		void			CalculateNormalAndCenter(const Vec3 *inPositions);
+		void			CalculateNormalAndCenter(const Vec4 *inPositions);
 
 		/// Check if this edge is facing inPosition
-		inline bool		IsFacing(Vec3Arg inPosition) const			{ return mNormal.Dot(inPosition - mCenter) > 0.0f; }
+		inline bool		IsFacing(Vec4Arg inPosition) const			{ return mNormal.Dot(inPosition - mCenter) > 0.0f; }
 
-		Vec3			mNormal;									///< Normal of the edge (not normalized)
-		Vec3			mCenter;									///< Center of the edge
+		Vec4			mNormal;									///< Normal of the edge (not normalized)
+		Vec4			mCenter;									///< Center of the edge
 		ConflictList	mConflictList;								///< Positions associated with this edge (that are closest to this edge). Last entry is the one furthest away from the edge, remainder is unsorted.
 		Edge *			mPrevEdge = nullptr;						///< Previous edge in circular list
 		Edge *			mNextEdge = nullptr;						///< Next edge in circular list

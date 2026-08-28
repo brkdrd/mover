@@ -9,34 +9,36 @@
 JPH_NAMESPACE_BEGIN
 
 /// Helper functions to get the support point for a convex object
-/// Structure that transforms a convex object (supports only uniform scaling)
+/// Structure that transforms a convex object (rotation + translation, no scaling)
 template <typename ConvexObject>
 struct TransformedConvexObject
 {
 	/// Create transformed convex object.
-	TransformedConvexObject(Mat44Arg inTransform, const ConvexObject &inObject) :
-		mTransform(inTransform),
+	TransformedConvexObject(Mat44Arg inRotation, Vec4Arg inTranslation, const ConvexObject &inObject) :
+		mRotation(inRotation),
+		mTranslation(inTranslation),
 		mObject(inObject)
 	{
 	}
 
 	/// Calculate the support vector for this convex shape.
-	Vec3					GetSupport(Vec3Arg inDirection) const
+	Vec4					GetSupport(Vec4Arg inDirection) const
 	{
-		return mTransform * mObject.GetSupport(mTransform.Multiply3x3Transposed(inDirection));
+		return Vec4(mRotation * Lane4(mObject.GetSupport(Vec4(mRotation.Transposed() * Lane4(inDirection))))) + mTranslation;
 	}
 
 	/// Get the vertices of the face that faces inDirection the most
 	template <class VERTEX_ARRAY>
-	void					GetSupportingFace(Vec3Arg inDirection, VERTEX_ARRAY &outVertices) const
+	void					GetSupportingFace(Vec4Arg inDirection, VERTEX_ARRAY &outVertices) const
 	{
-		mObject.GetSupportingFace(mTransform.Multiply3x3Transposed(inDirection), outVertices);
+		mObject.GetSupportingFace(Vec4(mRotation.Transposed() * Lane4(inDirection)), outVertices);
 
-		for (Vec3 &v : outVertices)
-			v = mTransform * v;
+		for (Vec4 &v : outVertices)
+			v = Vec4(mRotation * Lane4(v)) + mTranslation;
 	}
 
-	Mat44					mTransform;
+	Mat44					mRotation;
+	Vec4					mTranslation;
 	const ConvexObject &	mObject;
 };
 
@@ -51,7 +53,7 @@ struct AddConvexRadius
 	}
 
 	/// Calculate the support vector for this convex shape.
-	Vec3					GetSupport(Vec3Arg inDirection) const
+	Vec4					GetSupport(Vec4Arg inDirection) const
 	{
 		float length = inDirection.Length();
 		return length > 0.0f ? mObject.GetSupport(inDirection) + (mRadius / length) * inDirection : mObject.GetSupport(inDirection);
@@ -72,7 +74,7 @@ struct MinkowskiDifference
 	}
 
 	/// Calculate the support vector for this convex shape.
-	Vec3					GetSupport(Vec3Arg inDirection) const
+	Vec4					GetSupport(Vec4Arg inDirection) const
 	{
 		return mObjectA.GetSupport(inDirection) - mObjectB.GetSupport(-inDirection);
 	}
@@ -85,19 +87,19 @@ struct MinkowskiDifference
 struct PointConvexSupport
 {
 	/// Calculate the support vector for this convex shape.
-	Vec3					GetSupport([[maybe_unused]] Vec3Arg inDirection) const
+	Vec4					GetSupport([[maybe_unused]] Vec4Arg inDirection) const
 	{
 		return mPoint;
 	}
 
-	Vec3					mPoint;
+	Vec4					mPoint;
 };
 
 /// Class that wraps a triangle so that it can used with convex collision detection
 struct TriangleConvexSupport
 {
 	/// Constructor
-							TriangleConvexSupport(Vec3Arg inV1, Vec3Arg inV2, Vec3Arg inV3) :
+							TriangleConvexSupport(Vec4Arg inV1, Vec4Arg inV2, Vec4Arg inV3) :
 		mV1(inV1),
 		mV2(inV2),
 		mV3(inV3)
@@ -105,7 +107,7 @@ struct TriangleConvexSupport
 	}
 
 	/// Calculate the support vector for this convex shape.
-	Vec3					GetSupport(Vec3Arg inDirection) const
+	Vec4					GetSupport(Vec4Arg inDirection) const
 	{
 		// Project vertices on inDirection
 		float d1 = mV1.Dot(inDirection);
@@ -131,7 +133,7 @@ struct TriangleConvexSupport
 
 	/// Get the vertices of the face that faces inDirection the most
 	template <class VERTEX_ARRAY>
-	void					GetSupportingFace([[maybe_unused]] Vec3Arg inDirection, VERTEX_ARRAY &outVertices) const
+	void					GetSupportingFace([[maybe_unused]] Vec4Arg inDirection, VERTEX_ARRAY &outVertices) const
 	{
 		outVertices.push_back(mV1);
 		outVertices.push_back(mV2);
@@ -139,9 +141,43 @@ struct TriangleConvexSupport
 	}
 
 	/// The three vertices of the triangle
-	Vec3					mV1;
-	Vec3					mV2;
-	Vec3					mV3;
+	Vec4					mV1;
+	Vec4					mV2;
+	Vec4					mV3;
+};
+
+/// Class that wraps a tetrahedron so that it can be used with convex collision detection
+struct TetrahedronConvexSupport
+{
+	/// Constructor
+							TetrahedronConvexSupport(Vec4Arg inV1, Vec4Arg inV2, Vec4Arg inV3, Vec4Arg inV4) :
+		mV1(inV1),
+		mV2(inV2),
+		mV3(inV3),
+		mV4(inV4)
+	{
+	}
+
+	/// Calculate the support vector for this convex shape.
+	Vec4					GetSupport(Vec4Arg inDirection) const
+	{
+		float d1 = mV1.Dot(inDirection);
+		float d2 = mV2.Dot(inDirection);
+		float d3 = mV3.Dot(inDirection);
+		float d4 = mV4.Dot(inDirection);
+
+		float max_d = d1;
+		Vec4 result = mV1;
+		if (d2 > max_d) { max_d = d2; result = mV2; }
+		if (d3 > max_d) { max_d = d3; result = mV3; }
+		if (d4 > max_d) { result = mV4; }
+		return result;
+	}
+
+	Vec4					mV1;
+	Vec4					mV2;
+	Vec4					mV3;
+	Vec4					mV4;
 };
 
 /// Class that wraps a polygon so that it can used with convex collision detection
@@ -155,9 +191,9 @@ struct PolygonConvexSupport
 	}
 
 	/// Calculate the support vector for this convex shape.
-	Vec3					GetSupport(Vec3Arg inDirection) const
+	Vec4					GetSupport(Vec4Arg inDirection) const
 	{
-		Vec3 support_point = mVertices[0];
+		Vec4 support_point = mVertices[0];
 		float best_dot = mVertices[0].Dot(inDirection);
 
 		for (typename VERTEX_ARRAY::const_iterator v = mVertices.begin() + 1; v < mVertices.end(); ++v)
@@ -175,9 +211,9 @@ struct PolygonConvexSupport
 
 	/// Get the vertices of the face that faces inDirection the most
 	template <class VERTEX_ARRAY_ARG>
-	void					GetSupportingFace([[maybe_unused]] Vec3Arg inDirection, VERTEX_ARRAY_ARG &outVertices) const
+	void					GetSupportingFace([[maybe_unused]] Vec4Arg inDirection, VERTEX_ARRAY_ARG &outVertices) const
 	{
-		for (Vec3 v : mVertices)
+		for (Vec4 v : mVertices)
 			outVertices.push_back(v);
 	}
 

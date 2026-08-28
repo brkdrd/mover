@@ -9,14 +9,14 @@
 
 JPH_NAMESPACE_BEGIN
 
-static JPH_INLINE const Float3 &sIndexifyGetFloat3(const TriangleList &inTriangles, uint32 inVertexIndex)
+static JPH_INLINE const Float4 &sIndexifyGetFloat4(const TriangleList &inTriangles, uint32 inVertexIndex)
 {
 	return inTriangles[inVertexIndex / 3].mV[inVertexIndex % 3];
 }
 
-static JPH_INLINE Vec3 sIndexifyGetVec3(const TriangleList &inTriangles, uint32 inVertexIndex)
+static JPH_INLINE Vec4 sIndexifyGetVec4(const TriangleList &inTriangles, uint32 inVertexIndex)
 {
-	return Vec3::sLoadFloat3Unsafe(sIndexifyGetFloat3(inTriangles, inVertexIndex));
+	return Vec4(sIndexifyGetFloat4(inTriangles, inVertexIndex));
 }
 
 static void sIndexifyVerticesBruteForce(const TriangleList &inTriangles, const uint32 *inVertexIndices, const uint32 *inVertexIndicesEnd, Array<uint32> &ioWeldedVertices, float inVertexWeldDistance)
@@ -26,12 +26,12 @@ static void sIndexifyVerticesBruteForce(const TriangleList &inTriangles, const u
 	// Compare every vertex
 	for (const uint32 *v1_idx = inVertexIndices; v1_idx < inVertexIndicesEnd; ++v1_idx)
 	{
-		Vec3 v1 = sIndexifyGetVec3(inTriangles, *v1_idx);
+		Vec4 v1 =sIndexifyGetVec4(inTriangles, *v1_idx);
 
 		// with every other vertex...
 		for (const uint32 *v2_idx = v1_idx + 1; v2_idx < inVertexIndicesEnd; ++v2_idx)
 		{
-			Vec3 v2 = sIndexifyGetVec3(inTriangles, *v2_idx);
+			Vec4 v2 =sIndexifyGetVec4(inTriangles, *v2_idx);
 
 			// If they're weldable
 			if ((v2 - v1).LengthSq() <= weld_dist_sq)
@@ -83,7 +83,7 @@ static void sIndexifyVerticesRecursively(const TriangleList &inTriangles, uint32
 	// Calculate bounds
 	AABox bounds;
 	for (const uint32 *v = ioVertexIndices, *v_end = ioVertexIndices + inNumVertices; v < v_end; ++v)
-		bounds.Encapsulate(sIndexifyGetVec3(inTriangles, *v));
+		bounds.Encapsulate(sIndexifyGetVec4(inTriangles, *v));
 
 	// Determine split plane
 	int split_axis = bounds.GetExtent().GetHighestComponentIndex();
@@ -95,7 +95,7 @@ static void sIndexifyVerticesRecursively(const TriangleList &inTriangles, uint32
 	while (v_read < v_end)
 	{
 		// Calculate distance to plane
-		float distance_to_split_plane = sIndexifyGetFloat3(inTriangles, *v_read)[split_axis] - split_value;
+		float distance_to_split_plane = sIndexifyGetFloat4(inTriangles, *v_read)[split_axis] - split_value;
 		if (distance_to_split_plane < -inVertexWeldDistance)
 		{
 			// Vertex is on the right side
@@ -182,7 +182,7 @@ void Indexify(const TriangleList &inTriangles, VertexList &outVertices, IndexedT
 		{
 			// New vertex
 			welded_vertices[i] = (uint32)outVertices.size();
-			outVertices.push_back(sIndexifyGetFloat3(inTriangles, i));
+			outVertices.push_back(sIndexifyGetFloat4(inTriangles, i));
 		}
 		else
 		{

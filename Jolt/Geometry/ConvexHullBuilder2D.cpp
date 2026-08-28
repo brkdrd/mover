@@ -12,21 +12,21 @@
 
 JPH_NAMESPACE_BEGIN
 
-void ConvexHullBuilder2D::Edge::CalculateNormalAndCenter(const Vec3 *inPositions)
+void ConvexHullBuilder2D::Edge::CalculateNormalAndCenter(const Vec4 *inPositions)
 {
-	Vec3 p1 = inPositions[mStartIdx];
-	Vec3 p2 = inPositions[mNextEdge->mStartIdx];
+	Vec4 p1 = inPositions[mStartIdx];
+	Vec4 p2 = inPositions[mNextEdge->mStartIdx];
 
 	// Center of edge
 	mCenter = 0.5f * (p1 + p2);
 
 	// Create outward pointing normal.
 	// We have two choices for the normal (which satisfies normal . edge = 0):
-	// normal1 = (-edge.y, edge.x, 0)
-	// normal2 = (edge.y, -edge.x, 0)
-	// We want (normal x edge).z > 0 so that the normal points out of the polygon. Only normal2 satisfies this condition.
-	Vec3 edge = p2 - p1;
-	mNormal = Vec3(edge.GetY(), -edge.GetX(), 0);
+	// normal1 = (-edge.y, edge.x, 0, 0)
+	// normal2 = (edge.y, -edge.x, 0, 0)
+	// We want the normal to point out of the polygon (CCW winding). Only normal2 satisfies this condition.
+	Vec4 edge = p2 - p1;
+	mNormal = Vec4(edge.GetY(), -edge.GetX(), 0, 0);
 }
 
 ConvexHullBuilder2D::ConvexHullBuilder2D(const Positions &inPositions) :
@@ -42,12 +42,12 @@ ConvexHullBuilder2D::ConvexHullBuilder2D(const Positions &inPositions) :
 	}
 	else
 	{
-		Vec3 maxv = Vec3::sReplicate(-FLT_MAX), minv = Vec3::sReplicate(FLT_MAX);
-		for (Vec3 v : mPositions)
+		Vec4 maxv = Vec4::sReplicate(-FLT_MAX), minv = Vec4::sReplicate(FLT_MAX);
+		for (Vec4 v : mPositions)
 		{
-			minv = Vec3::sMin(minv, v);
-			maxv = Vec3::sMax(maxv, v);
-			mOffset -= v;
+			minv = Vec4::sMin(minv, v);
+			maxv = Vec4::sMax(maxv, v);
+			mOffset -= Vec3(v.GetX(), v.GetY(), v.GetZ());
 		}
 		mOffset /= Real(mPositions.size());
 		mDelta = Vec3((maxv - minv).GetX() + 0.5f, 0, 0);
@@ -109,7 +109,7 @@ void ConvexHullBuilder2D::ValidateEdges() const
 
 void ConvexHullBuilder2D::AssignPointToEdge(int inPositionIdx, const Array<Edge *> &inEdges) const
 {
-	Vec3 point = mPositions[inPositionIdx];
+	Vec4 point = mPositions[inPositionIdx];
 
 	Edge *best_edge = nullptr;
 	float best_dist_sq = 0.0f;
@@ -158,16 +158,19 @@ ConvexHullBuilder2D::EResult ConvexHullBuilder2D::Initialize(int inIdx1, int inI
 
 	// Determine a suitable tolerance for detecting that points are colinear
 	// Formula as per: Implementing Quickhull - Dirk Gregorius.
-	Vec3 vmax = Vec3::sZero();
-	for (Vec3 v : mPositions)
-		vmax = Vec3::sMax(vmax, v.Abs());
+	Vec4 vmax = Vec4::sZero();
+	for (Vec4 v : mPositions)
+		vmax = Vec4::sMax(vmax, v.Abs());
 	float colinear_tolerance_sq = Square(2.0f * FLT_EPSILON * (vmax.GetX() + vmax.GetY()));
 
 	// Increase desired tolerance if accuracy doesn't allow it
 	float tolerance_sq = max(colinear_tolerance_sq, Square(inTolerance));
 
 	// Start with the initial indices in counter clockwise order
-	float z = (mPositions[inIdx2] - mPositions[inIdx1]).Cross(mPositions[inIdx3] - mPositions[inIdx1]).GetZ();
+	// 2D cross product (determinant of XY components) to determine winding
+	Vec4 edge12 = mPositions[inIdx2] - mPositions[inIdx1];
+	Vec4 edge13 = mPositions[inIdx3] - mPositions[inIdx1];
+	float z = edge12.GetX() * edge13.GetY() - edge12.GetY() * edge13.GetX();
 	if (z < 0.0f)
 		std::swap(inIdx1, inIdx2);
 
@@ -228,7 +231,7 @@ ConvexHullBuilder2D::EResult ConvexHullBuilder2D::Initialize(int inIdx1, int inI
 		// Take the furthest point
 		int furthest_point_idx = edge_with_furthest_point->mConflictList.back();
 		edge_with_furthest_point->mConflictList.pop_back();
-		Vec3 furthest_point = mPositions[furthest_point_idx];
+		Vec4 furthest_point = mPositions[furthest_point_idx];
 
 		// Find the horizon of edges that need to be removed
 		Edge *first_edge = edge_with_furthest_point;
@@ -316,13 +319,20 @@ void ConvexHullBuilder2D::DrawState()
 		// Get unique color per edge
 		Color color = Color::sGetDistinctColor(color_idx++);
 
+		// Project Vec4 positions to Vec3 for debug drawing
+		auto ToVec3 = [](Vec4 v) -> Vec3 { return Vec3(v.GetX(), v.GetY(), v.GetZ()); };
+
 		// Draw edge and normal
-		DebugRenderer::sInstance->DrawArrow(cDrawScale * (mOffset + mPositions[edge->mStartIdx]), cDrawScale * (mOffset + mPositions[next->mStartIdx]), color, 0.1f);
-		DebugRenderer::sInstance->DrawArrow(cDrawScale * (mOffset + edge->mCenter), cDrawScale * (mOffset + edge->mCenter) + edge->mNormal.NormalizedOr(Vec3::sZero()), Color::sGreen, 0.1f);
+		DebugRenderer::sInstance->DrawArrow(cDrawScale * (mOffset + ToVec3(mPositions[edge->mStartIdx])), cDrawScale * (mOffset + ToVec3(mPositions[next->mStartIdx])), color, 0.1f);
+		Vec3 center3 = ToVec3(edge->mCenter);
+		Vec3 normal3 = ToVec3(edge->mNormal);
+		float normal_len = normal3.Length();
+		Vec3 normalized_normal = normal_len > 0.0f ? normal3 / normal_len : Vec3::sZero();
+		DebugRenderer::sInstance->DrawArrow(cDrawScale * (mOffset + center3), cDrawScale * (mOffset + center3) + normalized_normal, Color::sGreen, 0.1f);
 
 		// Draw points that belong to this edge in the same color
 		for (int idx : edge->mConflictList)
-			DebugRenderer::sInstance->DrawMarker(cDrawScale * (mOffset + mPositions[idx]), color, 0.05f);
+			DebugRenderer::sInstance->DrawMarker(cDrawScale * (mOffset + ToVec3(mPositions[idx])), color, 0.05f);
 
 		edge = next;
 	} while (edge != mFirstEdge);

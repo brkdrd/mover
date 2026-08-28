@@ -9,169 +9,118 @@
 
 JPH_NAMESPACE_BEGIN
 
+/// Helper: test a single separating axis. Returns true if the boxes are separated along this axis.
+static JPH_INLINE bool sTestSeparatingAxis(Vec4Arg inAxis, Vec4Arg inD, const Vec4 *inAxesA, Vec4Arg inHalfA, const Vec4 *inAxesB, Vec4Arg inHalfB, float inEpsilon)
+{
+	float len_sq = inAxis.LengthSq();
+	if (len_sq < 1.0e-12f)
+		return false; // Degenerate axis, cannot separate
+
+	float ra = 0, rb = 0;
+	for (int i = 0; i < 4; i++)
+	{
+		ra += abs(inAxis.Dot(inAxesA[i])) * inHalfA[i];
+		rb += abs(inAxis.Dot(inAxesB[i])) * inHalfB[i];
+	}
+	return abs(inAxis.Dot(inD)) > ra + rb + inEpsilon;
+}
+
 bool OrientedBox::Overlaps(const AABox &inBox, float inEpsilon) const
 {
-	// Taken from: Real Time Collision Detection - Christer Ericson
-	// Chapter 4.4.1, page 103-105.
-	// Note that the code is swapped around: A is the aabox and B is the oriented box (this saves us from having to invert the orientation of the oriented box)
+	// 4D SAT: OBB vs AABox requires 56 separating axes
+	// 4 face normals of A (standard basis), 4 face normals of B (OBB axes),
+	// 24 edge-face axes (A edge x B face pair), 24 face-edge axes (B edge x A face pair)
 
-	// Convert AABox to center / extent representation
-	Vec3 a_center = inBox.GetCenter();
-	Vec3 a_half_extents = inBox.GetExtent();
+	Vec4 a_center = inBox.GetCenter();
+	Vec4 a_half = inBox.GetExtent();
 
-	// Compute rotation matrix expressing b in a's coordinate frame
-	Mat44 rot(mOrientation.GetColumn4(0), mOrientation.GetColumn4(1), mOrientation.GetColumn4(2), mOrientation.GetColumn4(3) - Vec4(a_center, 0));
+	// A axes = standard basis (identity columns)
+	Vec4 a_axes[4] = { Vec4(1, 0, 0, 0), Vec4(0, 1, 0, 0), Vec4(0, 0, 1, 0), Vec4(0, 0, 0, 1) };
 
-	// Compute common subexpressions. Add in an epsilon term to
-	// counteract arithmetic errors when two edges are parallel and
-	// their cross product is (near) null (see text for details)
-	Vec3 epsilon = Vec3::sReplicate(inEpsilon);
-	Vec3 abs_r[3] { rot.GetAxisX().Abs() + epsilon, rot.GetAxisY().Abs() + epsilon, rot.GetAxisZ().Abs() + epsilon };
+	// B axes = OBB rotation columns
+	Vec4 b_axes[4] = { Vec4(mOrientation.GetColumn4(0)), Vec4(mOrientation.GetColumn4(1)), Vec4(mOrientation.GetColumn4(2)), Vec4(mOrientation.GetColumn4(3)) };
 
-	// Test axes L = A0, L = A1, L = A2
-	float ra, rb;
-	for (int i = 0; i < 3; i++)
-	{
-		ra = a_half_extents[i];
-		rb = mHalfExtents[0] * abs_r[0][i] + mHalfExtents[1] * abs_r[1][i] + mHalfExtents[2] * abs_r[2][i];
-		if (abs(rot(i, 3)) > ra + rb) return false;
-	}
+	// Translation vector between centers
+	Vec4 d = mTranslation - a_center;
 
-	// Test axes L = B0, L = B1, L = B2
-	for (int i = 0; i < 3; i++)
-	{
-		ra = a_half_extents.Dot(abs_r[i]);
-		rb = mHalfExtents[i];
-		if (abs(rot.GetTranslation().Dot(rot.GetColumn3(i))) > ra + rb) return false;
-	}
+	// Test 4 face normals of A (standard basis axes)
+	for (int i = 0; i < 4; i++)
+		if (sTestSeparatingAxis(a_axes[i], d, a_axes, a_half, b_axes, mHalfExtents, inEpsilon))
+			return false;
 
-	// Test axis L = A0 x B0
-	ra = a_half_extents[1] * abs_r[0][2] + a_half_extents[2] * abs_r[0][1];
-	rb = mHalfExtents[1] * abs_r[2][0] + mHalfExtents[2] * abs_r[1][0];
-	if (abs(rot(2, 3) * rot(1, 0) - rot(1, 3) * rot(2, 0)) > ra + rb) return false;
+	// Test 4 face normals of B (OBB axes)
+	for (int i = 0; i < 4; i++)
+		if (sTestSeparatingAxis(b_axes[i], d, a_axes, a_half, b_axes, mHalfExtents, inEpsilon))
+			return false;
 
-	// Test axis L = A0 x B1
-	ra = a_half_extents[1] * abs_r[1][2] + a_half_extents[2] * abs_r[1][1];
-	rb = mHalfExtents[0] * abs_r[2][0] + mHalfExtents[2] * abs_r[0][0];
-	if (abs(rot(2, 3) * rot(1, 1) - rot(1, 3) * rot(2, 1)) > ra + rb) return false;
+	// Test 24 edge-face axes: sCross(A_edge_i, B_edge_j, B_edge_k) for j < k
+	for (int i = 0; i < 4; i++)
+		for (int j = 0; j < 4; j++)
+			for (int k = j + 1; k < 4; k++)
+			{
+				Vec4 axis = Vec4::sCross(a_axes[i], b_axes[j], b_axes[k]);
+				if (sTestSeparatingAxis(axis, d, a_axes, a_half, b_axes, mHalfExtents, inEpsilon))
+					return false;
+			}
 
-	// Test axis L = A0 x B2
-	ra = a_half_extents[1] * abs_r[2][2] + a_half_extents[2] * abs_r[2][1];
-	rb = mHalfExtents[0] * abs_r[1][0] + mHalfExtents[1] * abs_r[0][0];
-	if (abs(rot(2, 3) * rot(1, 2) - rot(1, 3) * rot(2, 2)) > ra + rb) return false;
+	// Test 24 face-edge axes: sCross(B_edge_i, A_edge_j, A_edge_k) for j < k
+	for (int i = 0; i < 4; i++)
+		for (int j = 0; j < 4; j++)
+			for (int k = j + 1; k < 4; k++)
+			{
+				Vec4 axis = Vec4::sCross(b_axes[i], a_axes[j], a_axes[k]);
+				if (sTestSeparatingAxis(axis, d, a_axes, a_half, b_axes, mHalfExtents, inEpsilon))
+					return false;
+			}
 
-	// Test axis L = A1 x B0
-	ra = a_half_extents[0] * abs_r[0][2] + a_half_extents[2] * abs_r[0][0];
-	rb = mHalfExtents[1] * abs_r[2][1] + mHalfExtents[2] * abs_r[1][1];
-	if (abs(rot(0, 3) * rot(2, 0) - rot(2, 3) * rot(0, 0)) > ra + rb) return false;
-
-	// Test axis L = A1 x B1
-	ra = a_half_extents[0] * abs_r[1][2] + a_half_extents[2] * abs_r[1][0];
-	rb = mHalfExtents[0] * abs_r[2][1] + mHalfExtents[2] * abs_r[0][1];
-	if (abs(rot(0, 3) * rot(2, 1) - rot(2, 3) * rot(0, 1)) > ra + rb) return false;
-
-	// Test axis L = A1 x B2
-	ra = a_half_extents[0] * abs_r[2][2] + a_half_extents[2] * abs_r[2][0];
-	rb = mHalfExtents[0] * abs_r[1][1] + mHalfExtents[1] * abs_r[0][1];
-	if (abs(rot(0, 3) * rot(2, 2) - rot(2, 3) * rot(0, 2)) > ra + rb) return false;
-
-	// Test axis L = A2 x B0
-	ra = a_half_extents[0] * abs_r[0][1] + a_half_extents[1] * abs_r[0][0];
-	rb = mHalfExtents[1] * abs_r[2][2] + mHalfExtents[2] * abs_r[1][2];
-	if (abs(rot(1, 3) * rot(0, 0) - rot(0, 3) * rot(1, 0)) > ra + rb) return false;
-
-	// Test axis L = A2 x B1
-	ra = a_half_extents[0] * abs_r[1][1] + a_half_extents[1] * abs_r[1][0];
-	rb = mHalfExtents[0] * abs_r[2][2] + mHalfExtents[2] * abs_r[0][2];
-	if (abs(rot(1, 3) * rot(0, 1) - rot(0, 3) * rot(1, 1)) > ra + rb) return false;
-
-	// Test axis L = A2 x B2
-	ra = a_half_extents[0] * abs_r[2][1] + a_half_extents[1] * abs_r[2][0];
-	rb = mHalfExtents[0] * abs_r[1][2] + mHalfExtents[1] * abs_r[0][2];
-	if (abs(rot(1, 3) * rot(0, 2) - rot(0, 3) * rot(1, 2)) > ra + rb) return false;
-
-	// Since no separating axis is found, the OBB and AAB must be intersecting
+	// No separating axis found
 	return true;
 }
 
 bool OrientedBox::Overlaps(const OrientedBox &inBox, float inEpsilon) const
 {
-	// Taken from: Real Time Collision Detection - Christer Ericson
-	// Chapter 4.4.1, page 103-105.
-	// Note that A is this, B is inBox
+	// 4D SAT: OBB vs OBB requires 56 separating axes
 
-	// Compute rotation matrix expressing b in a's coordinate frame
-	Mat44 rot = mOrientation.InversedRotationTranslation() * inBox.mOrientation;
+	// A axes
+	Vec4 a_axes[4] = { Vec4(mOrientation.GetColumn4(0)), Vec4(mOrientation.GetColumn4(1)), Vec4(mOrientation.GetColumn4(2)), Vec4(mOrientation.GetColumn4(3)) };
 
-	// Compute common subexpressions. Add in an epsilon term to
-	// counteract arithmetic errors when two edges are parallel and
-	// their cross product is (near) null (see text for details)
-	Vec3 epsilon = Vec3::sReplicate(inEpsilon);
-	Vec3 abs_r[3] { rot.GetAxisX().Abs() + epsilon, rot.GetAxisY().Abs() + epsilon, rot.GetAxisZ().Abs() + epsilon };
+	// B axes
+	Vec4 b_axes[4] = { Vec4(inBox.mOrientation.GetColumn4(0)), Vec4(inBox.mOrientation.GetColumn4(1)), Vec4(inBox.mOrientation.GetColumn4(2)), Vec4(inBox.mOrientation.GetColumn4(3)) };
 
-	// Test axes L = A0, L = A1, L = A2
-	float ra, rb;
-	for (int i = 0; i < 3; i++)
-	{
-		ra = mHalfExtents[i];
-		rb = inBox.mHalfExtents[0] * abs_r[0][i] + inBox.mHalfExtents[1] * abs_r[1][i] + inBox.mHalfExtents[2] * abs_r[2][i];
-		if (abs(rot(i, 3)) > ra + rb) return false;
-	}
+	// Translation vector between centers
+	Vec4 d = inBox.mTranslation - mTranslation;
 
-	// Test axes L = B0, L = B1, L = B2
-	for (int i = 0; i < 3; i++)
-	{
-		ra = mHalfExtents.Dot(abs_r[i]);
-		rb = inBox.mHalfExtents[i];
-		if (abs(rot.GetTranslation().Dot(rot.GetColumn3(i))) > ra + rb) return false;
-	}
+	// Test 4 face normals of A
+	for (int i = 0; i < 4; i++)
+		if (sTestSeparatingAxis(a_axes[i], d, a_axes, mHalfExtents, b_axes, inBox.mHalfExtents, inEpsilon))
+			return false;
 
-	// Test axis L = A0 x B0
-	ra = mHalfExtents[1] * abs_r[0][2] + mHalfExtents[2] * abs_r[0][1];
-	rb = inBox.mHalfExtents[1] * abs_r[2][0] + inBox.mHalfExtents[2] * abs_r[1][0];
-	if (abs(rot(2, 3) * rot(1, 0) - rot(1, 3) * rot(2, 0)) > ra + rb) return false;
+	// Test 4 face normals of B
+	for (int i = 0; i < 4; i++)
+		if (sTestSeparatingAxis(b_axes[i], d, a_axes, mHalfExtents, b_axes, inBox.mHalfExtents, inEpsilon))
+			return false;
 
-	// Test axis L = A0 x B1
-	ra = mHalfExtents[1] * abs_r[1][2] + mHalfExtents[2] * abs_r[1][1];
-	rb = inBox.mHalfExtents[0] * abs_r[2][0] + inBox.mHalfExtents[2] * abs_r[0][0];
-	if (abs(rot(2, 3) * rot(1, 1) - rot(1, 3) * rot(2, 1)) > ra + rb) return false;
+	// Test 24 edge-face axes: sCross(A_edge_i, B_edge_j, B_edge_k) for j < k
+	for (int i = 0; i < 4; i++)
+		for (int j = 0; j < 4; j++)
+			for (int k = j + 1; k < 4; k++)
+			{
+				Vec4 axis = Vec4::sCross(a_axes[i], b_axes[j], b_axes[k]);
+				if (sTestSeparatingAxis(axis, d, a_axes, mHalfExtents, b_axes, inBox.mHalfExtents, inEpsilon))
+					return false;
+			}
 
-	// Test axis L = A0 x B2
-	ra = mHalfExtents[1] * abs_r[2][2] + mHalfExtents[2] * abs_r[2][1];
-	rb = inBox.mHalfExtents[0] * abs_r[1][0] + inBox.mHalfExtents[1] * abs_r[0][0];
-	if (abs(rot(2, 3) * rot(1, 2) - rot(1, 3) * rot(2, 2)) > ra + rb) return false;
+	// Test 24 face-edge axes: sCross(B_edge_i, A_edge_j, A_edge_k) for j < k
+	for (int i = 0; i < 4; i++)
+		for (int j = 0; j < 4; j++)
+			for (int k = j + 1; k < 4; k++)
+			{
+				Vec4 axis = Vec4::sCross(b_axes[i], a_axes[j], a_axes[k]);
+				if (sTestSeparatingAxis(axis, d, a_axes, mHalfExtents, b_axes, inBox.mHalfExtents, inEpsilon))
+					return false;
+			}
 
-	// Test axis L = A1 x B0
-	ra = mHalfExtents[0] * abs_r[0][2] + mHalfExtents[2] * abs_r[0][0];
-	rb = inBox.mHalfExtents[1] * abs_r[2][1] + inBox.mHalfExtents[2] * abs_r[1][1];
-	if (abs(rot(0, 3) * rot(2, 0) - rot(2, 3) * rot(0, 0)) > ra + rb) return false;
-
-	// Test axis L = A1 x B1
-	ra = mHalfExtents[0] * abs_r[1][2] + mHalfExtents[2] * abs_r[1][0];
-	rb = inBox.mHalfExtents[0] * abs_r[2][1] + inBox.mHalfExtents[2] * abs_r[0][1];
-	if (abs(rot(0, 3) * rot(2, 1) - rot(2, 3) * rot(0, 1)) > ra + rb) return false;
-
-	// Test axis L = A1 x B2
-	ra = mHalfExtents[0] * abs_r[2][2] + mHalfExtents[2] * abs_r[2][0];
-	rb = inBox.mHalfExtents[0] * abs_r[1][1] + inBox.mHalfExtents[1] * abs_r[0][1];
-	if (abs(rot(0, 3) * rot(2, 2) - rot(2, 3) * rot(0, 2)) > ra + rb) return false;
-
-	// Test axis L = A2 x B0
-	ra = mHalfExtents[0] * abs_r[0][1] + mHalfExtents[1] * abs_r[0][0];
-	rb = inBox.mHalfExtents[1] * abs_r[2][2] + inBox.mHalfExtents[2] * abs_r[1][2];
-	if (abs(rot(1, 3) * rot(0, 0) - rot(0, 3) * rot(1, 0)) > ra + rb) return false;
-
-	// Test axis L = A2 x B1
-	ra = mHalfExtents[0] * abs_r[1][1] + mHalfExtents[1] * abs_r[1][0];
-	rb = inBox.mHalfExtents[0] * abs_r[2][2] + inBox.mHalfExtents[2] * abs_r[0][2];
-	if (abs(rot(1, 3) * rot(0, 1) - rot(0, 3) * rot(1, 1)) > ra + rb) return false;
-
-	// Test axis L = A2 x B2
-	ra = mHalfExtents[0] * abs_r[2][1] + mHalfExtents[1] * abs_r[2][0];
-	rb = inBox.mHalfExtents[0] * abs_r[1][2] + inBox.mHalfExtents[1] * abs_r[0][2];
-	if (abs(rot(1, 3) * rot(0, 2) - rot(0, 3) * rot(1, 2)) > ra + rb) return false;
-
-	// Since no separating axis is found, the OBBs must be intersecting
+	// No separating axis found
 	return true;
 }
 

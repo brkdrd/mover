@@ -15,9 +15,9 @@ namespace ClosestPoint
 	/// Compute barycentric coordinates of closest point to origin for infinite line defined by (inA, inB)
 	/// Point can then be computed as inA * outU + inB * outV
 	/// Returns false if the points inA, inB do not form a line (are at the same point)
-	inline bool GetBaryCentricCoordinates(Vec3Arg inA, Vec3Arg inB, float &outU, float &outV)
+	inline bool GetBaryCentricCoordinates(Vec4Arg inA, Vec4Arg inB, float &outU, float &outV)
 	{
-		Vec3 ab = inB - inA;
+		Vec4 ab = inB - inA;
 		float denominator = ab.LengthSq();
 		if (denominator < Square(FLT_EPSILON))
 		{
@@ -47,16 +47,16 @@ namespace ClosestPoint
 	/// Compute barycentric coordinates of closest point to origin for plane defined by (inA, inB, inC)
 	/// Point can then be computed as inA * outU + inB * outV + inC * outW
 	/// Returns false if the points inA, inB, inC do not form a plane (are on the same line or at the same point)
-	inline bool GetBaryCentricCoordinates(Vec3Arg inA, Vec3Arg inB, Vec3Arg inC, float &outU, float &outV, float &outW)
+	inline bool GetBaryCentricCoordinates(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, float &outU, float &outV, float &outW)
 	{
 		// Taken from: Real-Time Collision Detection - Christer Ericson (Section: Barycentric Coordinates)
 		// With p = 0
 		// Adjusted to always include the shortest edge of the triangle in the calculation to improve numerical accuracy
 
 		// First calculate the three edges
-		Vec3 v0 = inB - inA;
-		Vec3 v1 = inC - inA;
-		Vec3 v2 = inC - inB;
+		Vec4 v0 = inB - inA;
+		Vec4 v1 = inC - inA;
+		Vec4 v2 = inC - inB;
 
 		// Make sure that the shortest edge is included in the calculation to keep the products a * b - c * d as small as possible to preserve accuracy
 		float d00 = v0.LengthSq();
@@ -127,9 +127,65 @@ namespace ClosestPoint
 		return true;
 	}
 
+	/// Compute barycentric coordinates of closest point to origin for hyperplane through (inA, inB, inC, inD)
+	/// Point can then be computed as inA * outU + inB * outV + inC * outW + inD * outX
+	/// Returns false if the points are degenerate (co-planar in 4D)
+	inline bool GetBaryCentricCoordinates(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, Vec4Arg inD, float &outU, float &outV, float &outW, float &outX)
+	{
+		// Edge vectors from A; solve the 3x3 Gram system to project the origin onto the affine hull
+		Vec4 e1 = inB - inA, e2 = inC - inA, e3 = inD - inA;
+
+		// 3x3 Gram matrix G: G_ij = e_i . e_j
+		float d00 = e1.Dot(e1), d01 = e1.Dot(e2), d02 = e1.Dot(e3);
+		float d11 = e2.Dot(e2), d12 = e2.Dot(e3), d22 = e3.Dot(e3);
+
+		// Cofactors of the 3x3 Gram matrix
+		float C00 = d11 * d22 - d12 * d12;
+		float C01 = d02 * d12 - d01 * d22;
+		float C02 = d01 * d12 - d02 * d11;
+		float C11 = d00 * d22 - d02 * d02;
+		float C12 = d01 * d02 - d00 * d12;
+		float C22 = d00 * d11 - d01 * d01;
+
+		// Gram determinant (always >= 0)
+		float det = d00 * C00 + d01 * C01 + d02 * C02;
+
+		if (det < 1.0e-12f)
+		{
+			// Degenerate tetrahedron, fall back to best triangle using largest Gram sub-determinant
+			if (C22 >= C00 && C22 >= C11)
+			{
+				GetBaryCentricCoordinates(inA, inB, inC, outU, outV, outW);
+				outX = 0.0f;
+			}
+			else if (C11 >= C00)
+			{
+				GetBaryCentricCoordinates(inA, inB, inD, outU, outV, outX);
+				outW = 0.0f;
+			}
+			else
+			{
+				GetBaryCentricCoordinates(inA, inC, inD, outU, outW, outX);
+				outV = 0.0f;
+			}
+			return false;
+		}
+
+		// RHS: b_i = -A . e_i
+		float b0 = -inA.Dot(e1), b1 = -inA.Dot(e2), b2 = -inA.Dot(e3);
+
+		// Cramer's rule: lambda = adj(G) * b / det(G)
+		float inv_det = 1.0f / det;
+		outV = (b0 * C00 + b1 * C01 + b2 * C02) * inv_det;
+		outW = (b0 * C01 + b1 * C11 + b2 * C12) * inv_det;
+		outX = (b0 * C02 + b1 * C12 + b2 * C22) * inv_det;
+		outU = 1.0f - outV - outW - outX;
+		return true;
+	}
+
 	/// Get the closest point to the origin of line (inA, inB)
 	/// outSet describes which features are closest: 1 = a, 2 = b, 3 = line segment ab
-	inline Vec3	GetClosestPointOnLine(Vec3Arg inA, Vec3Arg inB, uint32 &outSet)
+	inline Vec4	GetClosestPointOnLine(Vec4Arg inA, Vec4Arg inB, uint32 &outSet)
 	{
 		float u, v;
 		GetBaryCentricCoordinates(inA, inB, u, v);
@@ -157,7 +213,7 @@ namespace ClosestPoint
 	/// outSet describes which features are closest: 1 = a, 2 = b, 4 = c, 5 = line segment ac, 7 = triangle interior etc.
 	/// If MustIncludeC is true, the function assumes that C is part of the closest feature (vertex, edge, face) and does less work, if the assumption is not true then a closest point to the other features is returned.
 	template <bool MustIncludeC = false>
-	inline Vec3	GetClosestPointOnTriangle(Vec3Arg inA, Vec3Arg inB, Vec3Arg inC, uint32 &outSet)
+	inline Vec4	GetClosestPointOnTriangle(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, uint32 &outSet)
 	{
 		// Taken from: Real-Time Collision Detection - Christer Ericson (Section: Closest Point on Triangle to Point)
 		// With p = 0
@@ -169,18 +225,18 @@ namespace ClosestPoint
 		// We first check which of the edges is shorter and if bc is shorter than ac then we swap a with c to a is always on the shortest edge
 		UVec4 swap_ac;
 		{
-			Vec3 ac = inC - inA;
-			Vec3 bc = inC - inB;
-			swap_ac = Vec4::sLess(bc.DotV4(bc), ac.DotV4(ac));
+			Vec4 ac = inC - inA;
+			Vec4 bc = inC - inB;
+			swap_ac = Vec4::sLess(bc.DotV(bc), ac.DotV(ac));
 		}
-		Vec3 a = Vec3::sSelect(inA, inC, swap_ac);
-		Vec3 c = Vec3::sSelect(inC, inA, swap_ac);
+		Vec4 a = Vec4::sSelect(inA, inC, swap_ac);
+		Vec4 c = Vec4::sSelect(inC, inA, swap_ac);
 
-		// Calculate normal
-		Vec3 ab = inB - a;
-		Vec3 ac = c - a;
-		Vec3 n = ab.Cross(ac);
-		float n_len_sq = n.LengthSq();
+		// Calculate edges and Gram determinant (dimension-agnostic degeneracy check)
+		Vec4 ab = inB - a;
+		Vec4 ac = c - a;
+		float d00 = ab.Dot(ab), d01 = ab.Dot(ac), d11 = ac.Dot(ac);
+		float n_len_sq = d00 * d11 - d01 * d01; // Gram determinant = |ab x ac|^2 in 3D
 
 		// Check degenerate
 		if (n_len_sq < 1.0e-10f) // Square(FLT_EPSILON) was too small and caused numerical problems, see test case TestCollideParallelTriangleVsCapsule
@@ -189,7 +245,7 @@ namespace ClosestPoint
 
 			// Start with vertex C being the closest
 			uint32 closest_set = 0b0100;
-			Vec3 closest_point = inC;
+			Vec4 closest_point = inC;
 			float best_dist_sq = inC.LengthSq();
 
 			// If the closest point must include C then A or B cannot be closest
@@ -220,7 +276,7 @@ namespace ClosestPoint
 			if (ac_len_sq > Square(FLT_EPSILON))
 			{
 				float v = Clamp(-a.Dot(ac) / ac_len_sq, 0.0f, 1.0f);
-				Vec3 q = a + v * ac;
+				Vec4 q = a + v * ac;
 				float dist_sq = q.LengthSq();
 				if (dist_sq < best_dist_sq)
 				{
@@ -231,12 +287,12 @@ namespace ClosestPoint
 			}
 
 			// Edge BC
-			Vec3 bc = inC - inB;
+			Vec4 bc = inC - inB;
 			float bc_len_sq = bc.LengthSq();
 			if (bc_len_sq > Square(FLT_EPSILON))
 			{
 				float v = Clamp(-inB.Dot(bc) / bc_len_sq, 0.0f, 1.0f);
-				Vec3 q = inB + v * bc;
+				Vec4 q = inB + v * bc;
 				float dist_sq = q.LengthSq();
 				if (dist_sq < best_dist_sq)
 				{
@@ -255,7 +311,7 @@ namespace ClosestPoint
 				if (ab_len_sq > Square(FLT_EPSILON))
 				{
 					float v = Clamp(-inA.Dot(ab) / ab_len_sq, 0.0f, 1.0f);
-					Vec3 q = inA + v * ab;
+					Vec4 q = inA + v * ab;
 					float dist_sq = q.LengthSq();
 					if (dist_sq < best_dist_sq)
 					{
@@ -271,7 +327,7 @@ namespace ClosestPoint
 		}
 
 		// Check if P in vertex region outside A
-		Vec3 ap = -a;
+		Vec4 ap = -a;
 		float d1 = ab.Dot(ap);
 		float d2 = ac.Dot(ap);
 		if (d1 <= 0.0f && d2 <= 0.0f)
@@ -281,7 +337,7 @@ namespace ClosestPoint
 		}
 
 		// Check if P in vertex region outside B
-		Vec3 bp = -inB;
+		Vec4 bp = -inB;
 		float d3 = ab.Dot(bp);
 		float d4 = ac.Dot(bp);
 		if (d3 >= 0.0f && d4 <= d3)
@@ -299,7 +355,7 @@ namespace ClosestPoint
 		}
 
 		// Check if P in vertex region outside C
-		Vec3 cp = -c;
+		Vec4 cp = -c;
 		float d5 = ab.Dot(cp);
 		float d6 = ac.Dot(cp);
 		if (d6 >= 0.0f && d5 <= d6)
@@ -327,97 +383,103 @@ namespace ClosestPoint
 		}
 
 		// P inside face region.
-		// Here we deviate from Christer Ericson's article to improve accuracy.
-		// Determine distance between triangle and origin: distance = (centroid - origin) . normal / |normal|
-		// Closest point to origin is then: distance . normal / |normal|
-		// Note that this way of calculating the closest point is much more accurate than first calculating barycentric coordinates
-		// and then calculating the closest point based on those coordinates.
+		// Project origin onto triangle using barycentric coordinates (dimension-agnostic).
+		// Solve Gram system: [d00 d01; d01 d11] * [u; v] = [b0; b1]
+		// where b0 = -a.Dot(ab), b1 = -a.Dot(ac)
 		outSet = 0b0111;
-		return n * (a + inB + c).Dot(n) / (3.0f * n_len_sq);
+		float bp0 = -a.Dot(ab);
+		float bp1 = -a.Dot(ac);
+		float inv_det = 1.0f / n_len_sq;
+		float u = (d11 * bp0 - d01 * bp1) * inv_det;
+		float v = (d00 * bp1 - d01 * bp0) * inv_det;
+		return a + u * ab + v * ac;
 	}
 
-	/// Check if the origin is outside the plane of triangle (inA, inB, inC). inD specifies the front side of the plane.
-	inline bool OriginOutsideOfPlane(Vec3Arg inA, Vec3Arg inB, Vec3Arg inC, Vec3Arg inD)
+	/// Check if the origin is outside the face (inA, inB, inC) of tetrahedron (inA, inB, inC, inD).
+	/// Dimension-agnostic: uses Gram determinant / barycentric coordinates.
+	inline bool OriginOutsideOfPlane(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, Vec4Arg inD)
 	{
-		// Taken from: Real-Time Collision Detection - Christer Ericson (Section: Closest Point on Tetrahedron to Point)
-		// With p = 0
+		// Express -A in the basis {e1=B-A, e2=C-A, e3=D-A} by solving the Gram system.
+		// Origin is outside face ABC if the barycentric coordinate for D (lambda3) is negative.
+		Vec4 e1 = inB - inA, e2 = inC - inA, e3 = inD - inA;
 
-		// Test if point p and d lie on opposite sides of plane through abc
-		Vec3 n = (inB - inA).Cross(inC - inA);
-		float signp = inA.Dot(n); // [AP AB AC]
-		float signd = (inD - inA).Dot(n); // [AD AB AC]
+		float d00 = e1.Dot(e1), d01 = e1.Dot(e2), d02 = e1.Dot(e3);
+		float d11 = e2.Dot(e2), d12 = e2.Dot(e3), d22 = e3.Dot(e3);
 
-		// Points on opposite sides if expression signs are the same
-		// Note that we left out the minus sign in signp so we need to check > 0 instead of < 0 as in Christer's book
-		// We compare against a small negative value to allow for a little bit of slop in the calculations
-		return signp * signd > -FLT_EPSILON;
+		float b0 = -inA.Dot(e1), b1 = -inA.Dot(e2), b2 = -inA.Dot(e3);
+
+		// Cofactor for the (3,3) minor (used in both det_G and det_G3)
+		float c01_12 = d01 * d12 - d11 * d02;
+
+		float det_G = d00 * (d11 * d22 - d12 * d12) - d01 * (d01 * d22 - d12 * d02) + d02 * c01_12;
+		float det_G3 = d00 * (d11 * b2 - d12 * b1) - d01 * (d01 * b2 - d02 * b1) + b0 * c01_12;
+
+		// lambda3 = det_G3 / det_G. Origin is outside if lambda3 < 0 (opposite sign).
+		// We compare against a small negative value to allow for slop in the calculations
+		return det_G3 * det_G < FLT_EPSILON;
 	}
 
-	/// Returns for each of the planes of the tetrahedron if the origin is inside it
+	/// Returns for each of the planes of the tetrahedron if the origin is outside it.
+	/// Dimension-agnostic: uses barycentric coordinates via Gram matrix / Cramer's rule.
 	/// Roughly equivalent to:
 	///	[OriginOutsideOfPlane(inA, inB, inC, inD),
 	///	 OriginOutsideOfPlane(inA, inC, inD, inB),
 	///	 OriginOutsideOfPlane(inA, inD, inB, inC),
 	///	 OriginOutsideOfPlane(inB, inD, inC, inA)]
-	inline UVec4 OriginOutsideOfTetrahedronPlanes(Vec3Arg inA, Vec3Arg inB, Vec3Arg inC, Vec3Arg inD)
+	inline UVec4 OriginOutsideOfTetrahedronPlanes(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, Vec4Arg inD)
 	{
-		Vec3 ab = inB - inA;
-		Vec3 ac = inC - inA;
-		Vec3 ad = inD - inA;
-		Vec3 bd = inD - inB;
-		Vec3 bc = inC - inB;
+		// Edge vectors from A
+		Vec4 ab = inB - inA;
+		Vec4 ac = inC - inA;
+		Vec4 ad = inD - inA;
 
-		Vec3 ab_cross_ac = ab.Cross(ac);
-		Vec3 ac_cross_ad = ac.Cross(ad);
-		Vec3 ad_cross_ab = ad.Cross(ab);
-		Vec3 bd_cross_bc = bd.Cross(bc);
+		// Gram matrix G of {ab, ac, ad}: G_ij = e_i . e_j (symmetric, positive semi-definite)
+		float d00 = ab.Dot(ab), d01 = ab.Dot(ac), d02 = ab.Dot(ad);
+		float d11 = ac.Dot(ac), d12 = ac.Dot(ad), d22 = ad.Dot(ad);
 
-		// For each plane get the side on which the origin is
-		float signp0 = inA.Dot(ab_cross_ac); // ABC
-		float signp1 = inA.Dot(ac_cross_ad); // ACD
-		float signp2 = inA.Dot(ad_cross_ab); // ADB
-		float signp3 = inB.Dot(bd_cross_bc); // BDC
-		Vec4 signp(signp0, signp1, signp2, signp3);
+		// RHS: b_i = -A . e_i (projection of -A onto each edge)
+		float b0 = -inA.Dot(ab), b1 = -inA.Dot(ac), b2 = -inA.Dot(ad);
 
-		// For each plane get the side that is outside (determined by the 4th point)
-		float signd0 = ad.Dot(ab_cross_ac);  // D
-		float signd1 = ab.Dot(ac_cross_ad);  // B
-		float signd2 = ac.Dot(ad_cross_ab);  // C
-		float signd3 = -ab.Dot(bd_cross_bc); // A
-		Vec4 signd(signd0, signd1, signd2, signd3);
+		// Cofactors of the symmetric 3x3 Gram matrix (cofactor matrix is also symmetric)
+		float C00 = d11 * d22 - d12 * d12;
+		float C01 = d02 * d12 - d01 * d22;
+		float C02 = d01 * d12 - d02 * d11;
+		float C11 = d00 * d22 - d02 * d02;
+		float C12 = d01 * d02 - d00 * d12;
+		float C22 = d00 * d11 - d01 * d01;
 
-		// The winding of all triangles has been chosen so that signd should have the
-		// same sign for all components. If this is not the case the tetrahedron
-		// is degenerate and we return that the origin is in front of all sides
-		int sign_bits = signd.GetSignBits();
-		switch (sign_bits)
-		{
-		case 0:
-			// All positive
-			return Vec4::sGreaterOrEqual(signp, Vec4::sReplicate(-FLT_EPSILON));
+		// Gram determinant (always >= 0; zero iff edges are linearly dependent = degenerate)
+		float det_G = d00 * C00 + d01 * C01 + d02 * C02;
 
-		case 0xf:
-			// All negative
-			return Vec4::sLessOrEqual(signp, Vec4::sReplicate(FLT_EPSILON));
+		// Cramer's rule: barycentric coordinate numerators = adj(G) * b
+		float det_G1 = b0 * C00 + b1 * C01 + b2 * C02;  // lambda_B numerator
+		float det_G2 = b0 * C01 + b1 * C11 + b2 * C12;  // lambda_C numerator
+		float det_G3 = b0 * C02 + b1 * C12 + b2 * C22;  // lambda_D numerator
 
-		default:
-			// Mixed signs, degenerate tetrahedron
-			return UVec4::sReplicate(0xffffffff);
-		}
+		// lambda_A = 1 - lambda_B - lambda_C - lambda_D
+		float det_GA = det_G - det_G1 - det_G2 - det_G3;
+
+		// Origin is outside face i iff the opposite vertex's barycentric coordinate is negative.
+		// Since det_G >= 0 (Gram), lambda_i < 0 iff det_Gi < 0 iff det_Gi * det_G < 0.
+		// When det_G = 0 (degenerate), all products are zero < FLT_EPSILON → all faces outside.
+		// Order: [face ABC/D opposite, face ACD/B opposite, face ADB/C opposite, face BDC/A opposite]
+		Vec4 numerators(det_G3, det_G1, det_G2, det_GA);
+		Vec4 products = numerators * Vec4::sReplicate(det_G);
+		return Vec4::sLess(products, Vec4::sReplicate(FLT_EPSILON));
 	}
 
 	/// Get the closest point between tetrahedron (inA, inB, inC, inD) to the origin
 	/// outSet specifies which feature was closest, 1 = a, 2 = b, 4 = c, 8 = d. Edges have 2 bits set, triangles 3 and if the point is in the interior 4 bits are set.
 	/// If MustIncludeD is true, the function assumes that D is part of the closest feature (vertex, edge, face, tetrahedron) and does less work, if the assumption is not true then a closest point to the other features is returned.
 	template <bool MustIncludeD = false>
-	inline Vec3	GetClosestPointOnTetrahedron(Vec3Arg inA, Vec3Arg inB, Vec3Arg inC, Vec3Arg inD, uint32 &outSet)
+	inline Vec4	GetClosestPointOnTetrahedron(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, Vec4Arg inD, uint32 &outSet)
 	{
 		// Taken from: Real-Time Collision Detection - Christer Ericson (Section: Closest Point on Tetrahedron to Point)
 		// With p = 0
 
 		// Start out assuming point inside all halfspaces, so closest to itself
 		uint32 closest_set = 0b1111;
-		Vec3 closest_point = Vec3::sZero();
+		Vec4 closest_point = Vec4::sZero();
 		float best_dist_sq = FLT_MAX;
 
 		// Determine for each of the faces of the tetrahedron if the origin is in front of the plane
@@ -445,7 +507,7 @@ namespace ClosestPoint
 		if (origin_out_of_planes.GetY()) // OriginOutsideOfPlane(inA, inC, inD, inB)
 		{
 			uint32 set;
-			Vec3 q = GetClosestPointOnTriangle<MustIncludeD>(inA, inC, inD, set);
+			Vec4 q = GetClosestPointOnTriangle<MustIncludeD>(inA, inC, inD, set);
 			float dist_sq = q.LengthSq();
 			if (dist_sq < best_dist_sq)
 			{
@@ -462,7 +524,7 @@ namespace ClosestPoint
 			// and it improves consistency for GJK which will always add a new vertex D and keep the closest
 			// feature from the previous iteration in ABC
 			uint32 set;
-			Vec3 q = GetClosestPointOnTriangle<MustIncludeD>(inA, inB, inD, set);
+			Vec4 q = GetClosestPointOnTriangle<MustIncludeD>(inA, inB, inD, set);
 			float dist_sq = q.LengthSq();
 			if (dist_sq < best_dist_sq)
 			{
@@ -479,12 +541,182 @@ namespace ClosestPoint
 			// and it improves consistency for GJK which will always add a new vertex D and keep the closest
 			// feature from the previous iteration in ABC
 			uint32 set;
-			Vec3 q = GetClosestPointOnTriangle<MustIncludeD>(inB, inC, inD, set);
+			Vec4 q = GetClosestPointOnTriangle<MustIncludeD>(inB, inC, inD, set);
 			float dist_sq = q.LengthSq();
 			if (dist_sq < best_dist_sq)
 			{
 				closest_point = q;
 				closest_set = set << 1;
+			}
+		}
+
+		outSet = closest_set;
+		return closest_point;
+	}
+
+	/// Returns a bitmask for each of the 5 tetrahedral faces of the pentachoron if the origin is outside it.
+	/// Uses barycentric coordinates via 4x4 Gram matrix / Cramer's rule.
+	/// Bit 0: face ABCD (opposite E), Bit 1: face BCDE (opposite A),
+	/// Bit 2: face ACDE (opposite B), Bit 3: face ABDE (opposite C), Bit 4: face ABCE (opposite D)
+	inline uint32 OriginOutsideOfPentachoronPlanes(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, Vec4Arg inD, Vec4Arg inE)
+	{
+		// Edge vectors from A
+		Vec4 e1 = inB - inA, e2 = inC - inA, e3 = inD - inA, e4 = inE - inA;
+
+		// 4x4 Gram matrix G: G_ij = e_i . e_j (symmetric, 10 unique entries)
+		float d00 = e1.Dot(e1), d01 = e1.Dot(e2), d02 = e1.Dot(e3), d03 = e1.Dot(e4);
+		float d11 = e2.Dot(e2), d12 = e2.Dot(e3), d13 = e2.Dot(e4);
+		float d22 = e3.Dot(e3), d23 = e3.Dot(e4);
+		float d33 = e4.Dot(e4);
+
+		// RHS: b_i = -A . e_i
+		float b0 = -inA.Dot(e1), b1 = -inA.Dot(e2), b2 = -inA.Dot(e3), b3 = -inA.Dot(e4);
+
+		// 2x2 sub-determinants from rows 2,3 of G (6 values)
+		float s23_01 = d02 * d13 - d12 * d03;
+		float s23_02 = d02 * d23 - d22 * d03;
+		float s23_03 = d02 * d33 - d23 * d03;
+		float s23_12 = d12 * d23 - d22 * d13;
+		float s23_13 = d12 * d33 - d23 * d13;
+		float s23_23 = d22 * d33 - d23 * d23;
+
+		// 3x3 cofactors of G — first row (C0j) and second row (C1j)
+		float C00 =  d11 * s23_23 - d12 * s23_13 + d13 * s23_12;
+		float C01 = -(d01 * s23_23 - d12 * s23_03 + d13 * s23_02);
+		float C02 =  d01 * s23_13 - d11 * s23_03 + d13 * s23_01;
+		float C03 = -(d01 * s23_12 - d11 * s23_02 + d12 * s23_01);
+
+		float C11 =  d00 * s23_23 - d02 * s23_03 + d03 * s23_02;
+		float C12 = -(d00 * s23_13 - d01 * s23_03 + d03 * s23_01);
+		float C13 =  d00 * s23_12 - d01 * s23_02 + d02 * s23_01;
+
+		// 2x2 sub-determinants from rows 1,3 of G (5 values)
+		float s13_01 = d01 * d13 - d11 * d03;
+		float s13_02 = d01 * d23 - d12 * d03;
+		float s13_03 = d01 * d33 - d13 * d03;
+		float s13_12 = d11 * d23 - d12 * d13;
+		float s13_13 = d11 * d33 - d13 * d13;
+
+		// Third row cofactors
+		float C22 =  d00 * s13_13 - d01 * s13_03 + d03 * s13_01;
+		float C23 = -(d00 * s13_12 - d01 * s13_02 + d02 * s13_01);
+
+		// 2x2 sub-determinants from rows 1,2 of G (3 values)
+		float s12_01 = d01 * d12 - d11 * d02;
+		float s12_02 = d01 * d22 - d12 * d02;
+		float s12_12 = d11 * d22 - d12 * d12;
+
+		// Fourth row cofactor
+		float C33 = d00 * s12_12 - d01 * s12_02 + d02 * s12_01;
+
+		// Gram determinant (expansion along first row)
+		float det_G = d00 * C00 + d01 * C01 + d02 * C02 + d03 * C03;
+
+		// Cramer's rule: barycentric coordinate numerators = adj(G) * b
+		float num_B = b0 * C00 + b1 * C01 + b2 * C02 + b3 * C03;
+		float num_C = b0 * C01 + b1 * C11 + b2 * C12 + b3 * C13;
+		float num_D = b0 * C02 + b1 * C12 + b2 * C22 + b3 * C23;
+		float num_E = b0 * C03 + b1 * C13 + b2 * C23 + b3 * C33;
+		float num_A = det_G - num_B - num_C - num_D - num_E;
+
+		// Origin is outside face opposite vertex V iff lambda_V < 0 iff num_V * det_G < 0.
+		// When det_G = 0 (degenerate), all products are zero < FLT_EPSILON → all faces report outside.
+		uint32 result = 0;
+		if (num_E * det_G < FLT_EPSILON) result |= 0x01;	// face ABCD, opposite E
+		if (num_A * det_G < FLT_EPSILON) result |= 0x02;	// face BCDE, opposite A
+		if (num_B * det_G < FLT_EPSILON) result |= 0x04;	// face ACDE, opposite B
+		if (num_C * det_G < FLT_EPSILON) result |= 0x08;	// face ABDE, opposite C
+		if (num_D * det_G < FLT_EPSILON) result |= 0x10;	// face ABCE, opposite D
+		return result;
+	}
+
+	/// Get the closest point between pentachoron (inA, inB, inC, inD, inE) and the origin.
+	/// outSet specifies which feature was closest: bit 0 = A, bit 1 = B, bit 2 = C, bit 3 = D, bit 4 = E.
+	/// If MustIncludeE is true, the function assumes that E is part of the closest feature and does less work.
+	template <bool MustIncludeE = false>
+	inline Vec4	GetClosestPointOnPentachoron(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, Vec4Arg inD, Vec4Arg inE, uint32 &outSet)
+	{
+		// Start out assuming point inside pentachoron, so closest to itself
+		uint32 closest_set = 0b11111;
+		Vec4 closest_point = Vec4::sZero();
+		float best_dist_sq = FLT_MAX;
+
+		// Determine for each of the 5 tetrahedral faces if the origin is outside
+		uint32 origin_out_of_planes = OriginOutsideOfPentachoronPlanes(inA, inB, inC, inD, inE);
+
+		// Face ABCD (opposite E) — bit 0
+		if (origin_out_of_planes & 0x01)
+		{
+			if constexpr (MustIncludeE)
+			{
+				// E must be in closest feature, so ABCD cannot be closest.
+				// Return A as a fallback (same pattern as tetrahedron MustIncludeD).
+				closest_set = 0b00001;
+				closest_point = inA;
+			}
+			else
+			{
+				closest_point = GetClosestPointOnTetrahedron<false>(inA, inB, inC, inD, closest_set);
+			}
+			best_dist_sq = closest_point.LengthSq();
+		}
+
+		// Face BCDE (opposite A) — bit 1
+		if (origin_out_of_planes & 0x02)
+		{
+			uint32 set;
+			Vec4 q = GetClosestPointOnTetrahedron<MustIncludeE>(inB, inC, inD, inE, set);
+			float dist_sq = q.LengthSq();
+			if (dist_sq < best_dist_sq)
+			{
+				best_dist_sq = dist_sq;
+				closest_point = q;
+				// Tet bits: 0=B,1=C,2=D,3=E → pent bits: 1=B,2=C,3=D,4=E
+				closest_set = set << 1;
+			}
+		}
+
+		// Face ACDE (opposite B) — bit 2
+		if (origin_out_of_planes & 0x04)
+		{
+			uint32 set;
+			Vec4 q = GetClosestPointOnTetrahedron<MustIncludeE>(inA, inC, inD, inE, set);
+			float dist_sq = q.LengthSq();
+			if (dist_sq < best_dist_sq)
+			{
+				best_dist_sq = dist_sq;
+				closest_point = q;
+				// Tet bits: 0=A,1=C,2=D,3=E → pent bits: 0=A,2=C,3=D,4=E
+				closest_set = (set & 0b0001) | ((set & 0b1110) << 1);
+			}
+		}
+
+		// Face ABDE (opposite C) — bit 3
+		if (origin_out_of_planes & 0x08)
+		{
+			uint32 set;
+			Vec4 q = GetClosestPointOnTetrahedron<MustIncludeE>(inA, inB, inD, inE, set);
+			float dist_sq = q.LengthSq();
+			if (dist_sq < best_dist_sq)
+			{
+				best_dist_sq = dist_sq;
+				closest_point = q;
+				// Tet bits: 0=A,1=B,2=D,3=E → pent bits: 0=A,1=B,3=D,4=E
+				closest_set = (set & 0b0011) | ((set & 0b1100) << 1);
+			}
+		}
+
+		// Face ABCE (opposite D) — bit 4
+		if (origin_out_of_planes & 0x10)
+		{
+			uint32 set;
+			Vec4 q = GetClosestPointOnTetrahedron<MustIncludeE>(inA, inB, inC, inE, set);
+			float dist_sq = q.LengthSq();
+			if (dist_sq < best_dist_sq)
+			{
+				closest_point = q;
+				// Tet bits: 0=A,1=B,2=C,3=E → pent bits: 0=A,1=B,2=C,4=E
+				closest_set = (set & 0b0111) | ((set & 0b1000) << 1);
 			}
 		}
 

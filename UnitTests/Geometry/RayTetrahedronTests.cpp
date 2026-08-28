@@ -57,13 +57,14 @@ TEST_SUITE("RayTetrahedronTests")
 		Vec4 v2(0, 0, 1, 0);
 		Vec4 v3(0, 0, 0, 1);
 
-		// Ray that hits the hyperplane but outside the tetrahedron
+		// A ray straight down the x axis meets the hyperplane x+y+z+w=1 at (1,0,0,0), which is exactly
+		// the vertex v0 - a boundary case, so accept either a hit at t=6 or a rejection
 		Vec4 origin(-5, 0, 0, 0);
 		Vec4 direction(1, 0, 0, 0);
 		float t = RayTetrahedron(origin, direction, v0, v1, v2, v3);
-		// Hit point would be at (-5 + t, 0, 0, 0), on hyperplane x+y+z+w=1 => t=6
-		// But barycentric l2 = l3 = 0, l1 = 0, l0 = 1-1-0-0 = ... the hit is at (1,0,0,0) = v0
-		// Actually this hits v0 exactly. Let me try a ray that truly misses.
+		CHECK((t == FLT_MAX || abs(t - 6.0f) < 1.0e-4f));
+
+		// A ray that truly misses: it crosses the hyperplane outside the tetrahedron
 		Vec4 origin2(5, 5, -1, 0);
 		Vec4 direction2(-1, -1, 0, 0);
 		float t2 = RayTetrahedron(origin2, direction2, v0, v1, v2, v3);

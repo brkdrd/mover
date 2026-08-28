@@ -14,10 +14,10 @@ JPH_NAMESPACE_BEGIN
 /// @param inRayDirection Ray direction. Does not need to be normalized.
 /// @param inSphereCenter Position of the center of the sphere
 /// @param inSphereRadius Radius of the sphere
-JPH_INLINE float RaySphere(Vec3Arg inRayOrigin, Vec3Arg inRayDirection, Vec3Arg inSphereCenter, float inSphereRadius)
+JPH_INLINE float RaySphere(Vec4Arg inRayOrigin, Vec4Arg inRayDirection, Vec4Arg inSphereCenter, float inSphereRadius)
 {
 	// Solve: |RayOrigin + fraction * RayDirection - SphereCenter|^2 = SphereRadius^2 for fraction
-	Vec3 center_origin = inRayOrigin - inSphereCenter;
+	Vec4 center_origin = inRayOrigin - inSphereCenter;
 	float a = inRayDirection.LengthSq();
 	float b = 2.0f * inRayDirection.Dot(center_origin);
 	float c = center_origin.LengthSq() - inSphereRadius * inSphereRadius;
@@ -51,10 +51,10 @@ JPH_INLINE float RaySphere(Vec3Arg inRayOrigin, Vec3Arg inRayDirection, Vec3Arg 
 /// @param outMaxFraction Returned highest intersection fraction
 /// @return The amount of intersections with the sphere.
 /// If 1 intersection is returned outMinFraction will be equal to outMaxFraction
-JPH_INLINE int RaySphere(Vec3Arg inRayOrigin, Vec3Arg inRayDirection, Vec3Arg inSphereCenter, float inSphereRadius, float &outMinFraction, float &outMaxFraction)
+JPH_INLINE int RaySphere(Vec4Arg inRayOrigin, Vec4Arg inRayDirection, Vec4Arg inSphereCenter, float inSphereRadius, float &outMinFraction, float &outMaxFraction)
 {
 	// Solve: |RayOrigin + fraction * RayDirection - SphereCenter|^2 = SphereRadius^2 for fraction
-	Vec3 center_origin = inRayOrigin - inSphereCenter;
+	Vec4 center_origin = inRayOrigin - inSphereCenter;
 	float a = inRayDirection.LengthSq();
 	float b = 2.0f * inRayDirection.Dot(center_origin);
 	float c = center_origin.LengthSq() - inSphereRadius * inSphereRadius;

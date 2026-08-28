@@ -16,7 +16,9 @@ JPH_IMPLEMENT_SERIALIZABLE_NON_VIRTUAL(PhysicsScene)
 {
 	JPH_ADD_ATTRIBUTE(PhysicsScene, mBodies)
 	JPH_ADD_ATTRIBUTE(PhysicsScene, mConstraints)
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 	JPH_ADD_ATTRIBUTE(PhysicsScene, mSoftBodies)
+#endif // JPH_ENABLE_SOFT_BODY
 }
 
 JPH_IMPLEMENT_SERIALIZABLE_NON_VIRTUAL(PhysicsScene::ConnectedConstraint)
@@ -36,10 +38,12 @@ void PhysicsScene::AddConstraint(const TwoBodyConstraintSettings *inConstraint, 
 	mConstraints.emplace_back(inConstraint, inBody1, inBody2);
 }
 
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 void PhysicsScene::AddSoftBody(const SoftBodyCreationSettings &inSoftBody)
 {
 	mSoftBodies.push_back(inSoftBody);
 }
+#endif // JPH_ENABLE_SOFT_BODY
 
 bool PhysicsScene::FixInvalidScales()
 {
@@ -68,7 +72,11 @@ bool PhysicsScene::CreateBodies(PhysicsSystem *inSystem) const
 	BodyInterface &bi = inSystem->GetBodyInterface();
 
 	BodyIDVector body_ids;
+#ifdef JPH_ENABLE_SOFT_BODY
 	body_ids.reserve(mBodies.size() + mSoftBodies.size());
+#else
+	body_ids.reserve(mBodies.size()); // TODO(4D): SoftBody cut for v1
+#endif // JPH_ENABLE_SOFT_BODY
 
 	// Create bodies
 	for (const BodyCreationSettings &b : mBodies)
@@ -79,6 +87,7 @@ bool PhysicsScene::CreateBodies(PhysicsSystem *inSystem) const
 		body_ids.push_back(body->GetID());
 	}
 
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1, mSoftBodies is always empty
 	// Create soft bodies
 	for (const SoftBodyCreationSettings &b : mSoftBodies)
 	{
@@ -87,6 +96,7 @@ bool PhysicsScene::CreateBodies(PhysicsSystem *inSystem) const
 			break;
 		body_ids.push_back(body->GetID());
 	}
+#endif // JPH_ENABLE_SOFT_BODY
 
 	// Batch add bodies
 	BodyIDVector temp_body_ids = body_ids; // Body ID's get shuffled by AddBodiesPrepare
@@ -94,7 +104,11 @@ bool PhysicsScene::CreateBodies(PhysicsSystem *inSystem) const
 	bi.AddBodiesFinalize(temp_body_ids.data(), (int)temp_body_ids.size(), add_state, EActivation::Activate);
 
 	// If not all bodies are created, creating constraints will be unreliable
+#ifdef JPH_ENABLE_SOFT_BODY
 	if (body_ids.size() != mBodies.size() + mSoftBodies.size())
+#else
+	if (body_ids.size() != mBodies.size()) // TODO(4D): SoftBody cut for v1
+#endif // JPH_ENABLE_SOFT_BODY
 		return false;
 
 	// Create constraints
@@ -115,7 +129,9 @@ void PhysicsScene::SaveBinaryState(StreamOut &inStream, bool inSaveShapes, bool 
 	BodyCreationSettings::ShapeToIDMap shape_to_id;
 	BodyCreationSettings::MaterialToIDMap material_to_id;
 	BodyCreationSettings::GroupFilterToIDMap group_filter_to_id;
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 	SoftBodyCreationSettings::SharedSettingsToIDMap settings_to_id;
+#endif // JPH_ENABLE_SOFT_BODY
 
 	// Save bodies
 	inStream.Write((uint32)mBodies.size());
@@ -131,10 +147,16 @@ void PhysicsScene::SaveBinaryState(StreamOut &inStream, bool inSaveShapes, bool 
 		inStream.Write(cc.mBody2);
 	}
 
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 	// Save soft bodies
 	inStream.Write((uint32)mSoftBodies.size());
 	for (const SoftBodyCreationSettings &b : mSoftBodies)
 		b.SaveWithChildren(inStream, &settings_to_id, &material_to_id, inSaveGroupFilter? &group_filter_to_id : nullptr);
+#else
+	// Keep the stream format identical so a 4D scene file stays readable once SoftBody comes back
+	inStream.Write((uint32)0);
+#endif // JPH_ENABLE_SOFT_BODY
+
 }
 
 PhysicsScene::PhysicsSceneResult PhysicsScene::sRestoreFromBinaryState(StreamIn &inStream)
@@ -147,7 +169,9 @@ PhysicsScene::PhysicsSceneResult PhysicsScene::sRestoreFromBinaryState(StreamIn 
 	BodyCreationSettings::IDToShapeMap id_to_shape;
 	BodyCreationSettings::IDToMaterialMap id_to_material;
 	BodyCreationSettings::IDToGroupFilterMap id_to_group_filter;
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 	SoftBodyCreationSettings::IDToSharedSettingsMap id_to_settings;
+#endif // JPH_ENABLE_SOFT_BODY
 
 	// Reserve some memory to avoid frequent reallocations
 	id_to_shape.reserve(1024);
@@ -190,6 +214,7 @@ PhysicsScene::PhysicsSceneResult PhysicsScene::sRestoreFromBinaryState(StreamIn 
 	// Read soft bodies
 	len = 0;
 	inStream.Read(len);
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 	scene->mSoftBodies.resize(len);
 	for (SoftBodyCreationSettings &b : scene->mSoftBodies)
 	{
@@ -202,6 +227,13 @@ PhysicsScene::PhysicsSceneResult PhysicsScene::sRestoreFromBinaryState(StreamIn 
 		}
 		b = sbcs_result.Get();
 	}
+#else
+	if (len != 0)
+	{
+		result.SetError("Scene contains soft bodies, which are not supported in this build");
+		return result;
+	}
+#endif // JPH_ENABLE_SOFT_BODY
 
 	result.Set(scene);
 	return result;
@@ -235,8 +267,10 @@ void PhysicsScene::FromPhysicsSystem(const PhysicsSystem *inSystem)
 			// Convert to body creation settings
 			if (body.IsRigidBody())
 				AddBody(body.GetBodyCreationSettings());
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 			else
 				AddSoftBody(body.GetSoftBodyCreationSettings());
+#endif // JPH_ENABLE_SOFT_BODY
 		}
 	}
 

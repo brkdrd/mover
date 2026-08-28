@@ -20,7 +20,9 @@ JPH_NAMESPACE_BEGIN
 ///
 /// In 4D rigid body dynamics:
 ///   - Angular velocity is a bivector (replaces Vec3 in 3D)
-///   - Torque is a bivector: tau = r ^ F (wedge product, replaces cross product)
+///   - Torque is a bivector: tau = F ^ r (wedge product, replaces cross product). Note the operand
+///     order: it is the reverse of the 3D r x F, because Contract (below) is the negative adjoint
+///     of the wedge. See UnitTests/Physics/DynamicsConventionsTest.cpp.
 ///   - Angular momentum is a bivector: L = I * Omega
 ///   - The inertia tensor maps bivectors to bivectors (6x6 matrix)
 class [[nodiscard]] alignas(JPH_VECTOR_ALIGNMENT) Bivec
@@ -138,7 +140,9 @@ public:
 	///@{
 
 	/// Wedge product of two vectors: a ^ b (creates a bivector)
-	/// This is the 4D analog of the cross product for computing torque: tau = r ^ F
+	/// This is the 4D analog of the cross product for computing torque: tau = F ^ r. The 3D
+	/// expression "a x b" in a torque / Jacobian role becomes "b ^ a" in 4D (operands swapped),
+	/// because Contract is the negative adjoint of the wedge: <B _| r, v> == -<B, r ^ v>.
 	JPH_INLINE static Bivec		sWedge(Vec4Arg inA, Vec4Arg inB)
 	{
 		float a1 = inA.GetX(), a2 = inA.GetY(), a3 = inA.GetZ(), a4 = inA.GetW();

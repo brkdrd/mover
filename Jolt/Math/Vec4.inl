@@ -82,4 +82,23 @@ Vec4 Vec4::GetNormalizedPerpendicular() const
 	return result.Normalized();
 }
 
+void Vec4::GetNormalizedPerpendicularBasis(Vec4 &outPerp1, Vec4 &outPerp2, Vec4 &outPerp3) const
+{
+	outPerp1 = GetNormalizedPerpendicular();
+
+	// Pick the coordinate axis least aligned with {*this, outPerp1} to seed the next perpendicular, so
+	// that the generalized cross product below is well conditioned
+	Vec4 align = Abs() + outPerp1.Abs();
+	int best = 0;
+	float best_v = align.GetX();
+	if (align.GetY() < best_v) { best = 1; best_v = align.GetY(); }
+	if (align.GetZ() < best_v) { best = 2; best_v = align.GetZ(); }
+	if (align.GetW() < best_v) { best = 3; }
+	Vec4 seed = best == 0? sAxisX() : best == 1? sAxisY() : best == 2? sAxisZ() : sAxisW();
+
+	// sCross(a, b, c) is perpendicular to all three of its arguments
+	outPerp2 = sCross(*this, outPerp1, seed).Normalized();
+	outPerp3 = sCross(*this, outPerp1, outPerp2).Normalized();
+}
+
 JPH_NAMESPACE_END

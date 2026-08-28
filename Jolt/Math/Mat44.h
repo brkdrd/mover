@@ -104,6 +104,9 @@ public:
 	/// Transpose matrix
 	JPH_INLINE Mat44			Transposed() const;
 
+	/// Determinant of the 4x4 matrix. Zero (within tolerance) means Inversed() is not usable.
+	JPH_INLINE float			GetDeterminant() const;
+
 	/// Inverse 4x4 matrix
 	JPH_INLINE Mat44			Inversed() const;
 

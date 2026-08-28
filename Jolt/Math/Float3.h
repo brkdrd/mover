@@ -5,6 +5,7 @@
 #pragma once
 
 #include <Jolt/Core/HashCombine.h>
+#include <Jolt/Math/Float4.h>
 
 JPH_NAMESPACE_BEGIN
 
@@ -40,7 +41,7 @@ public:
 	float		z;
 };
 
-using VertexList = Array<Float3>;
+using VertexList = Array<Float4>;
 
 static_assert(std::is_trivial<Float3>(), "Is supposed to be a trivial type!");
 

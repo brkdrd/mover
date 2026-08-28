@@ -372,4 +372,86 @@ TEST_SUITE("RotorTests")
 		CHECK(Rotor::sExp(simple).IsClose(Rotor::sRotation(Vec4::sAxisX(), Vec4::sAxisY(), 1.4f), 1.0e-8f));
 	}
 #endif // JPH_ROTOR_HAS_EXP_LOG
+
+	// Extract the 6 bivector components (grade-2 part) of a reference multivector
+	static Bivec sBivecFromMV(const Cl4Ref::MV &inMV)
+	{
+		return Bivec(
+			float(inMV.mC[Cl4Ref::cBivecMask[0]]), float(inMV.mC[Cl4Ref::cBivecMask[1]]), float(inMV.mC[Cl4Ref::cBivecMask[2]]),
+			float(inMV.mC[Cl4Ref::cBivecMask[3]]), float(inMV.mC[Cl4Ref::cBivecMask[4]]), float(inMV.mC[Cl4Ref::cBivecMask[5]]));
+	}
+
+	// Validates Rotor::RotateBivec / InverseRotateBivec (the adjoint action on bivectors) against the
+	// brute-force sandwich R B ~R. This is the operation the world-space inverse-inertia operator and
+	// the gyroscopic integrator rely on (CLAUDE.md bug #3).
+	TEST_CASE("TestRotorRotateBivec")
+	{
+		UnitTestRandom random(778899);
+		uniform_real_distribution<float> dist(-1.0f, 1.0f);
+		for (int n = 0; n < 50; ++n)
+		{
+			Rotor r = sRandomRotor(random);
+			Bivec b(dist(random), dist(random), dist(random), dist(random), dist(random), dist(random));
+
+			// Brute force: the grade-2 part of R * B * ~R
+			Cl4Ref::MV full = Cl4Ref::Sandwich(Cl4Ref::FromRotor(r), Cl4Ref::FromBivec(b));
+			Bivec expected = sBivecFromMV(Cl4Ref::GradePart(full, 2));
+
+			Bivec got = r.RotateBivec(b);
+			CHECK((got - expected).Length() < 1.0e-4f);
+
+			// The sandwich must be purely grade 2 (no scalar / pseudoscalar leakage)
+			CHECK(std::abs(full.mC[0]) < 1.0e-4);
+			CHECK(std::abs(full.mC[0b1111]) < 1.0e-4);
+
+			// Inverse round-trips
+			Bivec back = r.InverseRotateBivec(got);
+			CHECK((back - b).Length() < 1.0e-4f);
+
+			// The adjoint is orthogonal: it preserves the bivector inner product
+			Bivec b2(dist(random), dist(random), dist(random), dist(random), dist(random), dist(random));
+			CHECK_APPROX_EQUAL(r.RotateBivec(b).Dot(r.RotateBivec(b2)), b.Dot(b2), 1.0e-3f);
+
+			// Consistency with vector rotation: Ad_R(a ^ c) == (R a) ^ (R c)
+			Vec4 a = sRandomUnit(random), c = sRandomUnit(random);
+			Bivec wedge_then_rotate = r.RotateBivec(Bivec::sWedge(a, c));
+			Bivec rotate_then_wedge = Bivec::sWedge(r * a, r * c);
+			CHECK((wedge_then_rotate - rotate_then_wedge).Length() < 1.0e-4f);
+		}
+	}
+
+	// The world-space inverse-inertia operator I^{-1} = Ad(R) D^{-1} Ad(R^{-1}) must be symmetric
+	// positive (semi)definite and reduce to the diagonal when the rotation is identity.
+	TEST_CASE("TestInverseInertiaAdjoint")
+	{
+		UnitTestRandom random(445566);
+		uniform_real_distribution<float> dist(0.5f, 3.0f);
+		uniform_real_distribution<float> vdist(-1.0f, 1.0f);
+
+		// Model the operator the same way MotionProperties does: Ad(R) (D * Ad(R^{-1}) v)
+		auto apply = [](RotorArg inR, BivecArg inDiag, BivecArg inV) {
+			return inR.RotateBivec(Bivec(inDiag.GetVec8() * inR.InverseRotateBivec(inV).GetVec8()));
+		};
+
+		for (int n = 0; n < 30; ++n)
+		{
+			Rotor r = sRandomRotor(random);
+			Bivec diag(dist(random), dist(random), dist(random), dist(random), dist(random), dist(random));
+
+			Bivec u(vdist(random), vdist(random), vdist(random), vdist(random), vdist(random), vdist(random));
+			Bivec v(vdist(random), vdist(random), vdist(random), vdist(random), vdist(random), vdist(random));
+
+			// Symmetry: <u, I^{-1} v> == <I^{-1} u, v>
+			CHECK_APPROX_EQUAL(u.Dot(apply(r, diag, v)), apply(r, diag, u).Dot(v), 1.0e-3f);
+
+			// Positive definite (diag > 0): <v, I^{-1} v> > 0 for v != 0
+			CHECK(v.Dot(apply(r, diag, v)) > 0.0f);
+		}
+
+		// Identity rotation reduces to the plain diagonal
+		Bivec diag(1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f);
+		Bivec v(0.3f, -0.7f, 0.2f, 0.9f, -0.1f, 0.5f);
+		Bivec expected(diag.GetVec8() * v.GetVec8());
+		CHECK((apply(Rotor::sIdentity(), diag, v) - expected).Length() < 1.0e-5f);
+	}
 }

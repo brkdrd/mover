@@ -277,6 +277,27 @@ DVec4::operator Vec3() const
 #endif
 }
 
+DVec4::operator Vec4() const
+{
+#if defined(JPH_USE_AVX)
+	return _mm256_cvtpd_ps(mValue);
+#elif defined(JPH_USE_SSE)
+	__m128 low = _mm_cvtpd_ps(mValue.mLow);
+	__m128 high = _mm_cvtpd_ps(mValue.mHigh);
+	return _mm_movelh_ps(low, high);
+#elif defined(JPH_USE_NEON)
+	return vcvt_high_f32_f64(vcvt_f32_f64(mValue.val[0]), mValue.val[1]);
+#elif defined(JPH_USE_RVV)
+	Vec4 v;
+	const vfloat64m2_t src = __riscv_vle64_v_f64m2(mF64, 4);
+	const vfloat32m1_t narrowed = __riscv_vfncvt_f_f_w_f32m1(src, 4);
+	__riscv_vse32_v_f32m1(v.mF32, narrowed, 4);
+	return v;
+#else
+	return Vec4((float)GetX(), (float)GetY(), (float)GetZ(), (float)GetW());
+#endif
+}
+
 DVec4 DVec4::sMin(DVec4Arg inV1, DVec4Arg inV2)
 {
 #if defined(JPH_USE_AVX)

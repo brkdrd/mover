@@ -159,6 +159,15 @@ public:
 	/// Rotate a 4D vector using the sandwich product: R * v * ~R
 	JPH_INLINE Vec4				operator * (Vec4Arg inValue) const;
 
+	/// Adjoint action of the rotor on a bivector: Ad(R)(B) = grade2(R * B * ~R). This is the way a
+	/// plane / angular quantity (angular velocity, torque, inertia axes) rotates. Implemented via
+	/// Ad(R)(e_i ^ e_j) = (R e_i ~R) ^ (R e_j ~R) extended linearly over the 6 bivector components.
+	JPH_INLINE Bivec			RotateBivec(BivecArg inBivec) const;
+
+	/// Inverse adjoint action: Ad(~R)(B) = grade2(~R * B * R). For a unit rotor this maps a world-space
+	/// bivector into the frame that R rotates from (i.e. the inverse of RotateBivec).
+	JPH_INLINE Bivec			InverseRotateBivec(BivecArg inBivec) const;
+
 	/// Dot product between two rotors (useful for SLERP)
 	JPH_INLINE float			Dot(RotorArg inRHS) const										{ return mValue.Dot(inRHS.mValue); }
 

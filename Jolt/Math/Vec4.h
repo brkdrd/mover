@@ -45,6 +45,12 @@ public:
 	/// Get normalized vector that is perpendicular to this vector (4D)
 	JPH_INLINE Vec4				GetNormalizedPerpendicular() const;
 
+	/// Get an orthonormal basis of the 3D subspace perpendicular to this vector. In 3D the orthogonal
+	/// complement of a direction is a plane (2 tangents); in 4D it is a hyperplane, so there are 3.
+	/// Used for contact friction (the tangent space of a contact is 3D) and for planar shape patches.
+	/// This vector must be normalized. The result is deterministic for a given input.
+	JPH_INLINE void				GetNormalizedPerpendicularBasis(Vec4 &outPerp1, Vec4 &outPerp2, Vec4 &outPerp3) const;
+
 	/// To String
 	friend ostream &			operator << (ostream &inStream, Vec4Arg inV)
 	{

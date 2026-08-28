@@ -391,6 +391,32 @@ Mat44 Mat44::Transposed() const
 #endif
 }
 
+float Mat44::GetDeterminant() const
+{
+	// Laplace expansion along the first two rows, pairing each 2x2 minor of rows 0/1 with its
+	// complementary 2x2 minor of rows 2/3
+	float m00 = mCol[0].mF32[0], m01 = mCol[1].mF32[0], m02 = mCol[2].mF32[0], m03 = mCol[3].mF32[0];
+	float m10 = mCol[0].mF32[1], m11 = mCol[1].mF32[1], m12 = mCol[2].mF32[1], m13 = mCol[3].mF32[1];
+	float m20 = mCol[0].mF32[2], m21 = mCol[1].mF32[2], m22 = mCol[2].mF32[2], m23 = mCol[3].mF32[2];
+	float m30 = mCol[0].mF32[3], m31 = mCol[1].mF32[3], m32 = mCol[2].mF32[3], m33 = mCol[3].mF32[3];
+
+	float s0 = m00 * m11 - m10 * m01;
+	float s1 = m00 * m12 - m10 * m02;
+	float s2 = m00 * m13 - m10 * m03;
+	float s3 = m01 * m12 - m11 * m02;
+	float s4 = m01 * m13 - m11 * m03;
+	float s5 = m02 * m13 - m12 * m03;
+
+	float c5 = m22 * m33 - m32 * m23;
+	float c4 = m21 * m33 - m31 * m23;
+	float c3 = m21 * m32 - m31 * m22;
+	float c2 = m20 * m33 - m30 * m23;
+	float c1 = m20 * m32 - m30 * m22;
+	float c0 = m20 * m31 - m30 * m21;
+
+	return s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0;
+}
+
 Mat44 Mat44::Inversed() const
 {
 #if defined(JPH_USE_SSE)

@@ -84,6 +84,9 @@ public:
 	/// Convert to float vector 3 rounding to nearest
 	JPH_INLINE explicit			operator Vec3() const;
 
+	/// Convert to float vector 4 rounding to nearest (all 4 components are preserved, just narrowed to float)
+	JPH_INLINE explicit			operator Vec4() const;
+
 	/// Prepare to convert to float vector 3 rounding towards zero (returns DVec4 that can be converted to a Vec3 to get the rounding)
 	JPH_INLINE DVec4			PrepareRoundToZero() const;
 

@@ -151,6 +151,40 @@ Vec4 Rotor::operator * (Vec4Arg inValue) const
 	return Vec4(r1, r2, r3, r4);
 }
 
+Bivec Rotor::RotateBivec(BivecArg inBivec) const
+{
+	// Ad(R)(e_i ^ e_j) = (R e_i ~R) ^ (R e_j ~R). The images of the basis vectors are the columns of
+	// the rotation, so the adjoint action on a bivector is linear in the wedges of those images.
+	Vec4 f1 = *this * Vec4::sAxisX();
+	Vec4 f2 = *this * Vec4::sAxisY();
+	Vec4 f3 = *this * Vec4::sAxisZ();
+	Vec4 f4 = *this * Vec4::sAxisW();
+
+	return inBivec.GetE12() * Bivec::sWedge(f1, f2)
+		 + inBivec.GetE13() * Bivec::sWedge(f1, f3)
+		 + inBivec.GetE14() * Bivec::sWedge(f1, f4)
+		 + inBivec.GetE23() * Bivec::sWedge(f2, f3)
+		 + inBivec.GetE24() * Bivec::sWedge(f2, f4)
+		 + inBivec.GetE34() * Bivec::sWedge(f3, f4);
+}
+
+Bivec Rotor::InverseRotateBivec(BivecArg inBivec) const
+{
+	// Ad(~R)(B): use the reversed (inverse) rotor's basis-vector images.
+	Rotor r = Reversed();
+	Vec4 f1 = r * Vec4::sAxisX();
+	Vec4 f2 = r * Vec4::sAxisY();
+	Vec4 f3 = r * Vec4::sAxisZ();
+	Vec4 f4 = r * Vec4::sAxisW();
+
+	return inBivec.GetE12() * Bivec::sWedge(f1, f2)
+		 + inBivec.GetE13() * Bivec::sWedge(f1, f3)
+		 + inBivec.GetE14() * Bivec::sWedge(f1, f4)
+		 + inBivec.GetE23() * Bivec::sWedge(f2, f3)
+		 + inBivec.GetE24() * Bivec::sWedge(f2, f4)
+		 + inBivec.GetE34() * Bivec::sWedge(f3, f4);
+}
+
 Rotor Rotor::Reversed() const
 {
 	// Negate grade-2 (bivectors), keep grade-0 (scalar) and grade-4 (pseudoscalar)

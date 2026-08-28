@@ -11,11 +11,13 @@ class DVec4;
 class Lane4;
 class Vec4;
 class Vec8;
+class Bivec;
 class Rotor;
 class UVec4;
 class BVec16;
 class Quat;
 class Mat44;
+class RMat44;
 
 // Types to use for passing arguments to functions
 using Vec3Arg = const Vec3;
@@ -30,7 +32,9 @@ using Vec8Arg = const Vec8;
 using UVec4Arg = const UVec4;
 using BVec16Arg = const BVec16;
 using QuatArg = const Quat;
+using BivecArg = const Bivec &;
 using RotorArg = const Rotor &;
 using Mat44Arg = const Mat44 &;
+using RMat44Arg = const RMat44 &;
 
 JPH_NAMESPACE_END

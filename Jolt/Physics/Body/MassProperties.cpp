@@ -21,153 +21,163 @@ JPH_IMPLEMENT_SERIALIZABLE_NON_VIRTUAL(MassProperties)
 	JPH_ADD_ATTRIBUTE(MassProperties, mInertia)
 }
 
-bool MassProperties::DecomposePrincipalMomentsOfInertia(Mat44 &outRotation, Vec3 &outDiagonal) const
+bool MassProperties::DecomposePrincipalMomentsOfInertia(Mat44 &outRotation, Vec4 &outDiagonal) const
 {
-	// Using eigendecomposition to get the principal components of the inertia tensor
+	// Using eigendecomposition on the 4x4 symmetric second moment tensor.
 	// See: https://en.wikipedia.org/wiki/Eigendecomposition_of_a_matrix
-	Matrix<3, 3> inertia;
-	inertia.CopyPart(mInertia, 0, 0, 3, 3, 0, 0);
-	Matrix<3, 3> eigen_vec = Matrix<3, 3>::sIdentity();
-	Vector<3> eigen_val;
+	Matrix<4, 4> inertia;
+	inertia.CopyPart(mInertia, 0, 0, 4, 4, 0, 0);
+	Matrix<4, 4> eigen_vec = Matrix<4, 4>::sIdentity();
+	Vector<4> eigen_val;
 	if (!EigenValueSymmetric(inertia, eigen_vec, eigen_val))
 		return false;
 
-	// Sort so that the biggest value goes first
-	int indices[] = { 0, 1, 2 };
-	InsertionSort(indices, indices + 3, [&eigen_val](int inLeft, int inRight) { return eigen_val[inLeft] > eigen_val[inRight]; });
+	// Sort so that the largest eigenvalue goes first
+	int indices[] = { 0, 1, 2, 3 };
+	InsertionSort(indices, indices + 4, [&eigen_val](int inLeft, int inRight) { return eigen_val[inLeft] > eigen_val[inRight]; });
 
-	// Convert to a regular Mat44 and Vec3
-	outRotation = Mat44::sIdentity();
-	for (int i = 0; i < 3; ++i)
+	// Build Mat44 from sorted eigenvectors / eigenvalues
+	Mat44 rotation = Mat44::sZero();
+	Vec4 diagonal = Vec4::sZero();
+	for (int i = 0; i < 4; ++i)
 	{
-		outRotation.SetColumn3(i, Vec3(reinterpret_cast<Float3 &>(eigen_vec.GetColumn(indices[i]))));
-		outDiagonal.SetComponent(i, eigen_val[indices[i]]);
+		const auto &col = eigen_vec.GetColumn(indices[i]);
+		rotation.SetColumn4(i, Lane4(col[0], col[1], col[2], col[3]));
+		diagonal[i] = eigen_val[indices[i]];
 	}
 
-	// Make sure that the rotation matrix is a right handed matrix
-	if (outRotation.GetAxisX().Cross(outRotation.GetAxisY()).Dot(outRotation.GetAxisZ()) < 0.0f)
-		outRotation.SetAxisZ(-outRotation.GetAxisZ());
+	// Ensure the rotation matrix is a proper rotation (determinant +1) rather than a reflection.
+	// In 4D, flipping a single axis changes determinant sign. We flip the last column if det < 0.
+	// Compute determinant via 4D cross product of first three columns dotted with the fourth.
+	Vec4 c0 = Vec4(rotation.GetColumn4(0));
+	Vec4 c1 = Vec4(rotation.GetColumn4(1));
+	Vec4 c2 = Vec4(rotation.GetColumn4(2));
+	Vec4 c3 = Vec4(rotation.GetColumn4(3));
+	if (Vec4::sCross(c0, c1, c2).Dot(c3) < 0.0f)
+		rotation.SetColumn4(3, -rotation.GetColumn4(3));
+
+	outRotation = rotation;
+	outDiagonal = diagonal;
 
 #ifdef JPH_ENABLE_ASSERTS
-	// Validate that the solution is correct, for each axis we want to make sure that the difference in inertia is
-	// smaller than some fraction of the inertia itself in that axis
-	Mat44 new_inertia = outRotation * Mat44::sScale(outDiagonal) * outRotation.Inversed();
-	for (int i = 0; i < 3; ++i)
-		JPH_ASSERT(new_inertia.GetColumn3(i).IsClose(mInertia.GetColumn3(i), mInertia.GetColumn3(i).LengthSq() * 1.0e-10f));
+	// Validate: M ~= R * diag(D) * R^T
+	Mat44 diag_mat = Mat44::sZero();
+	for (int i = 0; i < 4; ++i)
+		diag_mat(i, i) = diagonal[i];
+	Mat44 reconstructed = outRotation * diag_mat * outRotation.Transposed();
+	for (int i = 0; i < 4; ++i)
+	{
+		Vec4 col_orig = Vec4(mInertia.GetColumn4(i));
+		Vec4 col_recon = Vec4(reconstructed.GetColumn4(i));
+		JPH_ASSERT(col_recon.IsClose(col_orig, max(col_orig.LengthSq(), 1.0f) * 1.0e-6f));
+	}
 #endif
 
 	return true;
 }
 
-void MassProperties::SetMassAndInertiaOfSolidBox(Vec3Arg inBoxSize, float inDensity)
+Bivec MassProperties::sBivecInertiaFromSecondMomentDiagonal(Vec4Arg inDiagonal)
 {
-	// Calculate mass
-	mMass = inBoxSize.GetX() * inBoxSize.GetY() * inBoxSize.GetZ() * inDensity;
+	// In the principal frame the bivector inertia is diagonal with I_ij = M_ii + M_jj
+	float m1 = inDiagonal.GetX();
+	float m2 = inDiagonal.GetY();
+	float m3 = inDiagonal.GetZ();
+	float m4 = inDiagonal.GetW();
+	return Bivec(
+		m1 + m2,   // I_12 (XY plane)
+		m1 + m3,   // I_13 (XZ plane)
+		m1 + m4,   // I_14 (XW plane)
+		m2 + m3,   // I_23 (YZ plane)
+		m2 + m4,   // I_24 (YW plane)
+		m3 + m4);  // I_34 (ZW plane)
+}
 
-	// Calculate inertia
-	Vec3 size_sq = inBoxSize * inBoxSize;
-	Vec3 scale = (size_sq.Swizzle<SWIZZLE_Y, SWIZZLE_X, SWIZZLE_X>() + size_sq.Swizzle<SWIZZLE_Z, SWIZZLE_Z, SWIZZLE_Y>()) * (mMass / 12.0f);
-	mInertia = Mat44::sScale(scale);
+void MassProperties::SetMassAndInertiaOfSolidBox(Vec4Arg inBoxSize, float inDensity)
+{
+	// Mass = density * 4D hypervolume
+	mMass = inBoxSize.GetX() * inBoxSize.GetY() * inBoxSize.GetZ() * inBoxSize.GetW() * inDensity;
+
+	// For a solid tesseract with edges S_i and uniform density the second moment tensor is diagonal:
+	//   M_ii = m * S_i^2 / 12
+	Vec4 size_sq = inBoxSize * inBoxSize;
+	Vec4 diag = size_sq * (mMass / 12.0f);
+
+	mInertia = Mat44::sZero();
+	mInertia(0, 0) = diag.GetX();
+	mInertia(1, 1) = diag.GetY();
+	mInertia(2, 2) = diag.GetZ();
+	mInertia(3, 3) = diag.GetW();
 }
 
 void MassProperties::ScaleToMass(float inMass)
 {
 	if (mMass > 0.0f)
 	{
-		// Calculate how much we have to scale the inertia tensor
+		// Inertia scales linearly with mass
 		float mass_scale = inMass / mMass;
-
-		// Update mass
 		mMass = inMass;
-
-		// Update inertia tensor
-		for (int i = 0; i < 3; ++i)
-			mInertia.SetColumn4(i, mInertia.GetColumn4(i) * mass_scale);
+		mInertia *= mass_scale;
 	}
 	else
 	{
-		// Just set the mass
+		// No prior inertia to scale — just set the mass
 		mMass = inMass;
 	}
 }
 
-Vec3 MassProperties::sGetEquivalentSolidBoxSize(float inMass, Vec3Arg inInertiaDiagonal)
+Vec4 MassProperties::sGetEquivalentSolidBoxSize(float inMass, Vec4Arg inInertiaDiagonal)
 {
-	// Moment of inertia of a solid box has diagonal:
-	// mass / 12 * [size_y^2 + size_z^2, size_x^2 + size_z^2, size_x^2 + size_y^2]
-	// Solving for size_x, size_y and size_y (diagonal and mass are known):
-	Vec3 diagonal = inInertiaDiagonal * (12.0f / inMass);
-	return Vec3(sqrt(0.5f * (-diagonal[0] + diagonal[1] + diagonal[2])), sqrt(0.5f * (diagonal[0] - diagonal[1] + diagonal[2])), sqrt(0.5f * (diagonal[0] + diagonal[1] - diagonal[2])));
-}
-
-void MassProperties::Scale(Vec3Arg inScale)
-{
-	// See: https://en.wikipedia.org/wiki/Moment_of_inertia#Inertia_tensor
-	// The diagonal of the inertia tensor can be calculated like this:
-	// Ixx = sum_{k = 1 to n}(m_k * (y_k^2 + z_k^2))
-	// Iyy = sum_{k = 1 to n}(m_k * (x_k^2 + z_k^2))
-	// Izz = sum_{k = 1 to n}(m_k * (x_k^2 + y_k^2))
-	//
-	// We want to isolate the terms x_k, y_k and z_k:
-	// d = [0.5, 0.5, 0.5].[Ixx, Iyy, Izz]
-	// [sum_{k = 1 to n}(m_k * x_k^2), sum_{k = 1 to n}(m_k * y_k^2), sum_{k = 1 to n}(m_k * z_k^2)] = [d, d, d] - [Ixx, Iyy, Izz]
-	Vec3 diagonal = mInertia.GetDiagonal3();
-	Vec3 xyz_sq = Vec3::sReplicate(Vec3::sReplicate(0.5f).Dot(diagonal)) - diagonal;
-
-	// When scaling a shape these terms change like this:
-	// sum_{k = 1 to n}(m_k * (scale_x * x_k)^2) = scale_x^2 * sum_{k = 1 to n}(m_k * x_k^2)
-	// Same for y_k and z_k
-	// Using these terms we can calculate the new diagonal of the inertia tensor:
-	Vec3 xyz_scaled_sq = inScale * inScale * xyz_sq;
-	float i_xx = xyz_scaled_sq.GetY() + xyz_scaled_sq.GetZ();
-	float i_yy = xyz_scaled_sq.GetX() + xyz_scaled_sq.GetZ();
-	float i_zz = xyz_scaled_sq.GetX() + xyz_scaled_sq.GetY();
-
-	// The off diagonal elements are calculated like:
-	// Ixy = -sum_{k = 1 to n}(x_k y_k)
-	// Ixz = -sum_{k = 1 to n}(x_k z_k)
-	// Iyz = -sum_{k = 1 to n}(y_k z_k)
-	// Scaling these is simple:
-	float i_xy = inScale.GetX() * inScale.GetY() * mInertia(0, 1);
-	float i_xz = inScale.GetX() * inScale.GetZ() * mInertia(0, 2);
-	float i_yz = inScale.GetY() * inScale.GetZ() * mInertia(1, 2);
-
-	// Update inertia tensor
-	mInertia(0, 0) = i_xx;
-	mInertia(0, 1) = i_xy;
-	mInertia(1, 0) = i_xy;
-	mInertia(1, 1) = i_yy;
-	mInertia(0, 2) = i_xz;
-	mInertia(2, 0) = i_xz;
-	mInertia(1, 2) = i_yz;
-	mInertia(2, 1) = i_yz;
-	mInertia(2, 2) = i_zz;
-
-	// Mass scales linear with volume (note that the scaling can be negative and we don't want the mass to become negative)
-	float mass_scale = abs(inScale.GetX() * inScale.GetY() * inScale.GetZ());
-	mMass *= mass_scale;
-
-	// Inertia scales linear with mass. This updates the m_k terms above.
-	mInertia *= mass_scale;
-
-	// Ensure that the bottom right element is a 1 again
-	mInertia(3, 3) = 1.0f;
+	// Invert M_ii = m * S_i^2 / 12  →  S_i = sqrt(12 * M_i / m)
+	Vec4 s_sq = inInertiaDiagonal * (12.0f / inMass);
+	return Vec4(sqrt(s_sq.GetX()), sqrt(s_sq.GetY()), sqrt(s_sq.GetZ()), sqrt(s_sq.GetW()));
 }
 
 void MassProperties::Rotate(Mat44Arg inRotation)
 {
-	mInertia = inRotation.Multiply3x3(mInertia).Multiply3x3RightTransposed(inRotation);
+	// Similarity transform: M' = R M R^T
+	mInertia = inRotation * mInertia * inRotation.Transposed();
 }
 
-void MassProperties::Translate(Vec3Arg inTranslation)
+void MassProperties::Translate(Vec4Arg inTranslation)
 {
-	// Transform the inertia using the parallel axis theorem: I' = I + m * (translation^2 E - translation translation^T)
-	// Where I is the original body's inertia and E the identity matrix
-	// See: https://en.wikipedia.org/wiki/Parallel_axis_theorem
-	mInertia += mMass * (Mat44::sScale(inTranslation.Dot(inTranslation)) - Mat44::sOuterProduct(inTranslation, inTranslation));
+	// Parallel axis theorem for the second moment tensor (assuming original COM at origin):
+	//   M'_ij = M_ij + m * t_i * t_j
+	// (cross terms involving the first moment vanish because COM is at origin)
+	float t0 = inTranslation.GetX();
+	float t1 = inTranslation.GetY();
+	float t2 = inTranslation.GetZ();
+	float t3 = inTranslation.GetW();
 
-	// Ensure that inertia is a 3x3 matrix, adding inertias causes the bottom right element to change
-	mInertia.SetColumn4(3, Vec4(0, 0, 0, 1));
+	// Add m * t t^T (rank-1 symmetric update)
+	for (int i = 0; i < 4; ++i)
+	{
+		float ti = inTranslation[i];
+		mInertia(i, 0) += mMass * ti * t0;
+		mInertia(i, 1) += mMass * ti * t1;
+		mInertia(i, 2) += mMass * ti * t2;
+		mInertia(i, 3) += mMass * ti * t3;
+	}
+}
+
+void MassProperties::Scale(Vec4Arg inScale)
+{
+	// Mass scales with 4D hypervolume. Negative components flip axes but mass stays positive.
+	float mass_scale = abs(inScale.GetX() * inScale.GetY() * inScale.GetZ() * inScale.GetW());
+
+	// Second moment tensor transforms under anisotropic scaling as:
+	//   M'_ij = (s_i * s_j) * M_ij
+	// plus an extra factor of mass_scale because the density integral scales with hypervolume.
+	for (int i = 0; i < 4; ++i)
+	{
+		float si = inScale[i];
+		for (int j = 0; j < 4; ++j)
+		{
+			float sj = inScale[j];
+			mInertia(i, j) *= mass_scale * si * sj;
+		}
+	}
+
+	mMass *= mass_scale;
 }
 
 void MassProperties::SaveBinaryState(StreamOut &inStream) const

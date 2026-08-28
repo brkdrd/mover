@@ -85,7 +85,9 @@ public:
 	Body *							AllocateBody(const BodyCreationSettings &inBodyCreationSettings) const;
 
 	/// Create a soft body using creation settings. The returned body will not be part of the body manager yet.
-	Body *							AllocateSoftBody(const SoftBodyCreationSettings &inSoftBodyCreationSettings) const;
+#ifdef JPH_ENABLE_SOFT_BODY
+	Body *							AllocateSoftBody(const SoftBodyCreationSettings &inSoftBodyCreationSettings) const; // TODO(4D): SoftBody cut for v1
+#endif // JPH_ENABLE_SOFT_BODY
 
 	/// Free a body that has not been added to the body manager yet (if it has, use DestroyBodies).
 	void							FreeBody(Body *inBody) const;

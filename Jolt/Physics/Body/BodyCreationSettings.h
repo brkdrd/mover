@@ -10,6 +10,8 @@
 #include <Jolt/Physics/Body/MotionType.h>
 #include <Jolt/Physics/Body/MotionQuality.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
+#include <Jolt/Math/Rotor.h>
+#include <Jolt/Math/Bivec.h>
 #include <Jolt/ObjectStream/SerializableObject.h>
 #include <Jolt/Core/ObjectToIDMap.h>
 
@@ -34,8 +36,8 @@ class JPH_EXPORT BodyCreationSettings
 public:
 	/// Constructor
 							BodyCreationSettings() = default;
-							BodyCreationSettings(const ShapeSettings *inShape, RVec3Arg inPosition, QuatArg inRotation, EMotionType inMotionType, ObjectLayer inObjectLayer) : mPosition(inPosition), mRotation(inRotation), mObjectLayer(inObjectLayer), mMotionType(inMotionType), mShape(inShape) { }
-							BodyCreationSettings(const Shape *inShape, RVec3Arg inPosition, QuatArg inRotation, EMotionType inMotionType, ObjectLayer inObjectLayer) : mPosition(inPosition), mRotation(inRotation), mObjectLayer(inObjectLayer), mMotionType(inMotionType), mShapePtr(inShape) { }
+							BodyCreationSettings(const ShapeSettings *inShape, RVec4Arg inPosition, RotorArg inRotation, EMotionType inMotionType, ObjectLayer inObjectLayer) : mPosition(inPosition), mRotation(inRotation), mObjectLayer(inObjectLayer), mMotionType(inMotionType), mShape(inShape) { }
+							BodyCreationSettings(const Shape *inShape, RVec4Arg inPosition, RotorArg inRotation, EMotionType inMotionType, ObjectLayer inObjectLayer) : mPosition(inPosition), mRotation(inRotation), mObjectLayer(inObjectLayer), mMotionType(inMotionType), mShapePtr(inShape) { }
 
 	/// Access to the shape settings object. This contains serializable (non-runtime optimized) information about the Shape.
 	const ShapeSettings *	GetShapeSettings() const										{ return mShape; }
@@ -77,10 +79,10 @@ public:
 	/// Restore body creation settings, its shape, materials and group filter. Pass in an empty map in ioShapeMap / ioMaterialMap / ioGroupFilterMap or reuse the same map while reading multiple shapes from the same stream in order to restore duplicates.
 	static BCSResult		sRestoreWithChildren(StreamIn &inStream, IDToShapeMap &ioShapeMap, IDToMaterialMap &ioMaterialMap, IDToGroupFilterMap &ioGroupFilterMap);
 
-	RVec3					mPosition = RVec3::sZero();										///< Position of the body (not of the center of mass)
-	Quat					mRotation = Quat::sIdentity();									///< Rotation of the body
-	Vec3					mLinearVelocity = Vec3::sZero();								///< World space linear velocity of the center of mass (m/s)
-	Vec3					mAngularVelocity = Vec3::sZero();								///< World space angular velocity (rad/s)
+	RVec4					mPosition = RVec4::sZero();										///< Position of the body (not of the center of mass)
+	Rotor					mRotation = Rotor::sIdentity();									///< Rotation of the body (Cl(4,0) rotor)
+	Vec4					mLinearVelocity = Vec4::sZero();								///< World space linear velocity of the center of mass (m/s)
+	Bivec					mAngularVelocity = Bivec::sZero();								///< World space angular velocity bivector (rad/s, 6 components)
 
 	/// User data value (can be used by application)
 	uint64					mUserData = 0;

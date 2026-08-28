@@ -9,9 +9,15 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
-#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
-#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
-#include <Jolt/Physics/SoftBody/SoftBodyShape.h>
+// TODO(4D): SoftBody is a documented v1 scope cut (CLAUDE.md "Scope cuts for v1"). The SoftBody
+// classes are still 3D and their sources are excluded from Jolt.cmake, so every reference to them
+// from the rigid body core is compiled out behind JPH_ENABLE_SOFT_BODY, which is never defined for
+// v1. The code is left in place verbatim so it can be turned back on once SoftBody is ported.
+#ifdef JPH_ENABLE_SOFT_BODY
+	#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+	#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+	#include <Jolt/Physics/SoftBody/SoftBodyShape.h>
+#endif // JPH_ENABLE_SOFT_BODY
 #include <Jolt/Physics/StateRecorder.h>
 #include <Jolt/Core/StringTools.h>
 #include <Jolt/Core/QuickSort.h>
@@ -58,6 +64,7 @@ public:
 };
 /// @endcond
 
+#ifdef JPH_ENABLE_SOFT_BODY
 /// @cond INTERNAL
 /// Helper class that combines a soft body its motion properties and shape
 class SoftBodyWithMotionPropertiesAndShape : public Body
@@ -72,18 +79,23 @@ public:
 	SoftBodyShape				mShape;
 };
 /// @endcond
+#endif // JPH_ENABLE_SOFT_BODY
 
 inline void BodyManager::sDeleteBody(Body *inBody)
 {
 	if (inBody->mMotionProperties != nullptr)
 	{
 		JPH_IF_ENABLE_ASSERTS(inBody->mMotionProperties = nullptr;)
+#ifdef JPH_ENABLE_SOFT_BODY
 		if (inBody->IsSoftBody())
 		{
 			inBody->mShape = nullptr; // Release the shape to avoid assertion on shape destruction because of embedded object with refcount > 0
 			delete static_cast<SoftBodyWithMotionPropertiesAndShape *>(inBody);
 		}
 		else
+#else
+		JPH_ASSERT(!inBody->IsSoftBody(), "SoftBody is not compiled in for v1, see JPH_ENABLE_SOFT_BODY");
+#endif // JPH_ENABLE_SOFT_BODY
 			delete static_cast<BodyWithMotionProperties *>(inBody);
 	}
 	else
@@ -242,6 +254,7 @@ Body *BodyManager::AllocateBody(const BodyCreationSettings &inBodyCreationSettin
 	return body;
 }
 
+#ifdef JPH_ENABLE_SOFT_BODY
 /// Create a soft body using creation settings. The returned body will not be part of the body manager yet.
 Body *BodyManager::AllocateSoftBody(const SoftBodyCreationSettings &inSoftBodyCreationSettings) const
 {
@@ -265,8 +278,8 @@ Body *BodyManager::AllocateSoftBody(const SoftBodyCreationSettings &inSoftBodyCr
 	mp->SetAngularDamping(0);
 	mp->SetMaxLinearVelocity(inSoftBodyCreationSettings.mMaxLinearVelocity);
 	mp->SetMaxAngularVelocity(FLT_MAX);
-	mp->SetLinearVelocity(Vec3::sZero());
-	mp->SetAngularVelocity(Vec3::sZero());
+	mp->SetLinearVelocity(Vec4::sZero());
+	mp->SetAngularVelocity(Bivec::sZero());
 	mp->SetGravityFactor(inSoftBodyCreationSettings.mGravityFactor);
 	mp->mMotionQuality = EMotionQuality::Discrete;
 	mp->mAllowSleeping = inSoftBodyCreationSettings.mAllowSleeping;
@@ -274,10 +287,13 @@ Body *BodyManager::AllocateSoftBody(const SoftBodyCreationSettings &inSoftBodyCr
 	JPH_IF_ENABLE_ASSERTS(mp->mCachedMotionType = body->mMotionType;)
 	mp->Initialize(inSoftBodyCreationSettings);
 
-	body->SetPositionAndRotationInternal(inSoftBodyCreationSettings.mPosition, inSoftBodyCreationSettings.mMakeRotationIdentity? Quat::sIdentity() : inSoftBodyCreationSettings.mRotation);
+	// TODO(4D): SoftBodyCreationSettings still stores 3D position/rotation. Promote position to 4D;
+	// rotation is forced to identity until the soft-body subsystem is migrated to Rotor.
+	body->SetPositionAndRotationInternal(RVec4(inSoftBodyCreationSettings.mPosition), Rotor::sIdentity());
 
 	return body;
 }
+#endif // JPH_ENABLE_SOFT_BODY
 
 void BodyManager::FreeBody(Body *inBody) const
 {
@@ -616,8 +632,8 @@ void BodyManager::DeactivateBodies(const BodyID *inBodyIDs, int inNumber)
 			#endif
 
 				// Reset velocity
-				body.mMotionProperties->mLinearVelocity = Vec3::sZero();
-				body.mMotionProperties->mAngularVelocity = Vec3::sZero();
+				body.mMotionProperties->mLinearVelocity = Vec4::sZero();
+				body.mMotionProperties->mAngularVelocity = Bivec::sZero();
 
 				// Call activation listener
 				if (mActivationListener != nullptr)
@@ -1048,32 +1064,21 @@ void BodyManager::Draw(const DrawSettings &inDrawSettings, const PhysicsSettings
 			// Draw world space linear and angular velocity
 			if (inDrawSettings.mDrawVelocity)
 			{
-				RVec3 pos = body->GetCenterOfMassPosition();
+				RVec4 pos = body->GetCenterOfMassPosition();
 				inRenderer->DrawArrow(pos, pos + body->GetLinearVelocity(), Color::sGreen, 0.1f);
-				inRenderer->DrawArrow(pos, pos + body->GetAngularVelocity(), Color::sRed, 0.1f);
+				// TODO(4D): angular velocity is a bivector, not a vector — a proper visualization
+				// (plane arc per non-zero component) is pending. Skip the arrow for now.
 			}
 
 			if (inDrawSettings.mDrawMassAndInertia && body->IsDynamic())
 			{
 				const MotionProperties *mp = body->GetMotionProperties();
-				if (mp->GetInverseMass() > 0.0f
-					&& !Vec3::sEquals(mp->GetInverseInertiaDiagonal(), Vec3::sZero()).TestAnyXYZTrue())
-				{
-					// Invert mass again
-					float mass = 1.0f / mp->GetInverseMass();
-
-					// Invert diagonal again
-					Vec3 diagonal = mp->GetInverseInertiaDiagonal().Reciprocal();
-
-					// Determine how big of a box has the equivalent inertia
-					Vec3 box_size = MassProperties::sGetEquivalentSolidBoxSize(mass, diagonal);
-
-					// Draw box with equivalent inertia
-					inRenderer->DrawWireBox(body->GetCenterOfMassTransform() * Mat44::sRotation(mp->GetInertiaRotation()), AABox(-0.5f * box_size, 0.5f * box_size), Color::sOrange);
-
-					// Draw mass
-					inRenderer->DrawText3D(body->GetCenterOfMassPosition(), StringFormat("%.2f", (double)mass), Color::sOrange, 0.2f);
-				}
+				// TODO(4D): inverse inertia is stored as a bivector (6 components, one per rotation
+				// plane), while the equivalent-solid-box visualization expects the 4 diagonal
+				// second-moments M_ii. Mapping bivector moments I_ij = M_ii + M_jj back to a 4D
+				// diagonal requires solving a linear system; skip the visualization until the
+				// diagonal is also exposed directly.
+				(void)mp;
 			}
 
 			if (inDrawSettings.mDrawSleepStats && body->IsDynamic() && body->IsActive())

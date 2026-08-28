@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <Jolt/Math/Bivec.h>
 #include <Jolt/Geometry/Sphere.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Body/MotionQuality.h>
@@ -39,26 +40,26 @@ public:
 	/// If this body can go to sleep.
 	inline bool				GetAllowSleeping() const										{ return mAllowSleeping; }
 
-	/// Get world space linear velocity of the center of mass
-	inline Vec3				GetLinearVelocity() const										{ JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::Read)); return mLinearVelocity; }
+	/// Get world space linear velocity of the center of mass (4D vector)
+	inline Vec4				GetLinearVelocity() const										{ JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::Read)); return mLinearVelocity; }
 
 	/// Set world space linear velocity of the center of mass
-	void					SetLinearVelocity(Vec3Arg inLinearVelocity)						{ JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); JPH_ASSERT(inLinearVelocity.Length() <= mMaxLinearVelocity); mLinearVelocity = LockTranslation(inLinearVelocity); }
+	void					SetLinearVelocity(Vec4Arg inLinearVelocity)						{ JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); JPH_ASSERT(inLinearVelocity.Length() <= mMaxLinearVelocity); mLinearVelocity = LockTranslation(inLinearVelocity); }
 
 	/// Set world space linear velocity of the center of mass, will make sure the value is clamped against the maximum linear velocity
-	void					SetLinearVelocityClamped(Vec3Arg inLinearVelocity)				{ mLinearVelocity = LockTranslation(inLinearVelocity); ClampLinearVelocity(); }
+	void					SetLinearVelocityClamped(Vec4Arg inLinearVelocity)				{ mLinearVelocity = LockTranslation(inLinearVelocity); ClampLinearVelocity(); }
 
-	/// Get world space angular velocity of the center of mass
-	inline Vec3				GetAngularVelocity() const										{ JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::Read)); return mAngularVelocity; }
+	/// Get world space angular velocity (bivector with 6 components for the 6 rotation planes)
+	inline Bivec			GetAngularVelocity() const										{ JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::Read)); return mAngularVelocity; }
 
-	/// Set world space angular velocity of the center of mass
-	void					SetAngularVelocity(Vec3Arg inAngularVelocity)					{ JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); JPH_ASSERT(inAngularVelocity.Length() <= mMaxAngularVelocity); mAngularVelocity = LockAngular(inAngularVelocity); }
+	/// Set world space angular velocity (bivector)
+	void					SetAngularVelocity(BivecArg inAngularVelocity)					{ JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); JPH_ASSERT(inAngularVelocity.Length() <= mMaxAngularVelocity); mAngularVelocity = LockAngular(inAngularVelocity); }
 
-	/// Set world space angular velocity of the center of mass, will make sure the value is clamped against the maximum angular velocity
-	void					SetAngularVelocityClamped(Vec3Arg inAngularVelocity)			{ mAngularVelocity = LockAngular(inAngularVelocity); ClampAngularVelocity(); }
+	/// Set world space angular velocity, will make sure the value is clamped against the maximum angular velocity
+	void					SetAngularVelocityClamped(BivecArg inAngularVelocity)			{ mAngularVelocity = LockAngular(inAngularVelocity); ClampAngularVelocity(); }
 
 	/// Set velocity of body such that it will be rotate/translate by inDeltaPosition/Rotation in inDeltaTime seconds.
-	inline void				MoveKinematic(Vec3Arg inDeltaPosition, QuatArg inDeltaRotation, float inDeltaTime);
+	inline void				MoveKinematic(Vec4Arg inDeltaPosition, RotorArg inDeltaRotation, float inDeltaTime);
 
 	///@name Velocity limits
 	///@{
@@ -96,86 +97,87 @@ public:
 	inline float			GetInverseMassUnchecked() const									{ return mInvMass; }
 
 	/// Set the inverse mass (1 / mass).
-	/// Note that mass and inertia are linearly related (e.g. inertia of a sphere with mass m and radius r is \f$2/5 \: m \: r^2\f$).
-	/// If you change mass, inertia should probably change as well. You can use ScaleToMass to update mass and inertia at the same time.
-	/// If all your translation degrees of freedom are restricted, make sure this is zero (see EAllowedDOFs).
 	void					SetInverseMass(float inInverseMass)								{ mInvMass = inInverseMass; }
 
-	/// Diagonal of inverse inertia matrix: D. Should only be called on a dynamic object (static or kinematic bodies have infinite mass so should be treated as D = 0)
-	inline Vec3				GetInverseInertiaDiagonal() const								{ JPH_ASSERT(mCachedMotionType == EMotionType::Dynamic); return mInvInertiaDiagonal; }
+	/// Diagonal of inverse inertia (6 values for the 6 rotation planes). Should only be called on a dynamic object.
+	inline Bivec			GetInverseInertiaDiagonal() const								{ JPH_ASSERT(mCachedMotionType == EMotionType::Dynamic); return mInvInertiaDiagonal; }
 
-	/// Rotation (R) that takes inverse inertia diagonal to local space: \f$I_{body}^{-1} = R \: D \: R^{-1}\f$
-	inline Quat				GetInertiaRotation() const										{ return mInertiaRotation; }
+	/// Rotation (R) that takes inverse inertia diagonal to local space: \f$I_{body}^{-1} = Ad(R) \: D \: Ad(R)^{-1}\f$
+	inline Rotor			GetInertiaRotation() const										{ return mInertiaRotation; }
 
-	/// Set the inverse inertia tensor in local space by setting the diagonal and the rotation: \f$I_{body}^{-1} = R \: D \: R^{-1}\f$.
-	/// Note that mass and inertia are linearly related (e.g. inertia of a sphere with mass m and radius r is \f$2/5 \: m \: r^2\f$).
-	/// If you change inertia, mass should probably change as well. You can use ScaleToMass to update mass and inertia at the same time.
-	/// If all your rotation degrees of freedom are restricted, make sure this is zero (see EAllowedDOFs).
-	void					SetInverseInertia(Vec3Arg inDiagonal, QuatArg inRot)			{ mInvInertiaDiagonal = inDiagonal; mInertiaRotation = inRot; }
+	/// Set the inverse inertia tensor in local space by setting the diagonal and the rotation.
+	void					SetInverseInertia(BivecArg inDiagonal, RotorArg inRot)			{ mInvInertiaDiagonal = inDiagonal; mInertiaRotation = inRot; }
 
 	/// Sets the mass to inMass and scale the inertia tensor based on the ratio between the old and new mass.
-	/// Note that this only works when the current mass is finite (i.e. the body is dynamic and translational degrees of freedom are not restricted).
 	void					ScaleToMass(float inMass);
 
-	/// Get inverse inertia matrix (\f$I_{body}^{-1}\f$). Will be a matrix of zeros for a static or kinematic object.
-	inline Mat44			GetLocalSpaceInverseInertia() const;
+	/// Multiply a bivector with the inverse world space inertia tensor (\f$I_{world}^{-1}\f$). Zero if object is static or kinematic.
+	JPH_INLINE Bivec		MultiplyWorldSpaceInverseInertiaByVector(RotorArg inBodyRotation, BivecArg inV) const;
 
-	/// Same as GetLocalSpaceInverseInertia() but doesn't check if the body is dynamic
-	inline Mat44			GetLocalSpaceInverseInertiaUnchecked() const;
+	/// Velocity of point inPoint (in center of mass space) of the body (unit: m/s)
+	/// In 4D: v = v_linear + Omega._|_r (contraction of angular velocity bivector with position)
+	JPH_INLINE Vec4			GetPointVelocityCOM(Vec4Arg inPointRelativeToCOM) const			{ return mLinearVelocity + mAngularVelocity.Contract(inPointRelativeToCOM); }
 
-	/// Get inverse inertia matrix (\f$I^{-1}\f$) for a given object rotation (translation will be ignored). Zero if object is static or kinematic.
-	inline Mat44			GetInverseInertiaForRotation(Mat44Arg inRotation) const;
+	// Get the total amount of force applied to the center of mass this time step. Note that it will reset to zero after PhysicsSystem::Update.
+	JPH_INLINE Vec4			GetAccumulatedForce() const										{ return Vec4(mForce); }
 
-	/// Multiply a vector with the inverse world space inertia tensor (\f$I_{world}^{-1}\f$). Zero if object is static or kinematic.
-	JPH_INLINE Vec3			MultiplyWorldSpaceInverseInertiaByVector(QuatArg inBodyRotation, Vec3Arg inV) const;
-
-	/// Velocity of point inPoint (in center of mass space, e.g. on the surface of the body) of the body (unit: m/s)
-	JPH_INLINE Vec3			GetPointVelocityCOM(Vec3Arg inPointRelativeToCOM) const			{ return mLinearVelocity + mAngularVelocity.Cross(inPointRelativeToCOM); }
-
-	// Get the total amount of force applied to the center of mass this time step (through Body::AddForce calls). Note that it will reset to zero after PhysicsSystem::Update.
-	JPH_INLINE Vec3			GetAccumulatedForce() const										{ return Vec3::sLoadFloat3Unsafe(mForce); }
-
-	// Get the total amount of torque applied to the center of mass this time step (through Body::AddForce/Body::AddTorque calls). Note that it will reset to zero after PhysicsSystem::Update.
-	JPH_INLINE Vec3			GetAccumulatedTorque() const									{ return Vec3::sLoadFloat3Unsafe(mTorque); }
+	// Get the total amount of torque applied to the center of mass this time step (bivector). Note that it will reset to zero after PhysicsSystem::Update.
+	JPH_INLINE Bivec		GetAccumulatedTorque() const									{ return Bivec(mTorque); }
 
 	// Reset the total accumulated force, note that this will be done automatically after every time step.
-	JPH_INLINE void			ResetForce()													{ mForce = Float3(0, 0, 0); }
+	JPH_INLINE void			ResetForce()													{ mForce = Float4(0, 0, 0, 0); }
 
 	// Reset the total accumulated torque, note that this will be done automatically after every time step.
-	JPH_INLINE void			ResetTorque()													{ mTorque = Float3(0, 0, 0); }
+	JPH_INLINE void			ResetTorque()													{ mTorque = Float8(0, 0, 0, 0, 0, 0, 0, 0); }
 
 	// Reset the current velocity and accumulated force and torque.
 	JPH_INLINE void			ResetMotion()
 	{
 		JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite));
-		mLinearVelocity = mAngularVelocity = Vec3::sZero();
-		mForce = mTorque = Float3(0, 0, 0);
+		mLinearVelocity = Vec4::sZero();
+		mAngularVelocity = Bivec::sZero();
+		mForce = Float4(0, 0, 0, 0);
+		mTorque = Float8(0, 0, 0, 0, 0, 0, 0, 0);
 	}
 
-	/// Returns a vector where the linear components that are not allowed by mAllowedDOFs are set to 0 and the rest to 0xffffffff
+	/// Returns a UVec4 mask where the linear components allowed by mAllowedDOFs are 0xffffffff and the rest are 0
 	JPH_INLINE UVec4		GetLinearDOFsMask() const
 	{
-		UVec4 mask(uint32(EAllowedDOFs::TranslationX), uint32(EAllowedDOFs::TranslationY), uint32(EAllowedDOFs::TranslationZ), 0);
+		UVec4 mask(uint32(EAllowedDOFs::TranslationX), uint32(EAllowedDOFs::TranslationY), uint32(EAllowedDOFs::TranslationZ), uint32(EAllowedDOFs::TranslationW));
 		return UVec4::sEquals(UVec4::sAnd(UVec4::sReplicate(uint32(mAllowedDOFs)), mask), mask);
 	}
 
 	/// Takes a translation vector inV and returns a vector where the components that are not allowed by mAllowedDOFs are set to 0
-	JPH_INLINE Vec3			LockTranslation(Vec3Arg inV) const
+	JPH_INLINE Vec4			LockTranslation(Vec4Arg inV) const
 	{
-		return Vec3::sAnd(inV, Vec3(GetLinearDOFsMask().ReinterpretAsFloat()));
+		return Vec4::sAnd(inV, Vec4(GetLinearDOFsMask().ReinterpretAsFloat()));
 	}
 
-	/// Returns a vector where the angular components that are not allowed by mAllowedDOFs are set to 0 and the rest to 0xffffffff
-	JPH_INLINE UVec4		GetAngularDOFsMask() const
+	/// Returns a Bivec mask where the angular components allowed by mAllowedDOFs are all-bits-set and the rest are 0.
+	/// Component order: [e12(XY), e13(XZ), e14(XW), e23(YZ), e24(YW), e34(ZW)]
+	JPH_INLINE Bivec		GetAngularDOFsBivecMask() const
 	{
-		UVec4 mask(uint32(EAllowedDOFs::RotationX), uint32(EAllowedDOFs::RotationY), uint32(EAllowedDOFs::RotationZ), 0);
-		return UVec4::sEquals(UVec4::sAnd(UVec4::sReplicate(uint32(mAllowedDOFs)), mask), mask);
+		uint16 dofs = uint16(mAllowedDOFs);
+		auto bit_to_mask = [](uint16 val, uint16 bit) -> float {
+			uint32 m = (val & bit) ? 0xffffffffu : 0u;
+			float f;
+			memcpy(&f, &m, sizeof(f));
+			return f;
+		};
+		return Bivec(Vec8(
+			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationXY)),
+			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationXZ)),
+			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationXW)),
+			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationYZ)),
+			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationYW)),
+			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationZW)),
+			0.0f, 0.0f));
 	}
 
-	/// Takes an angular velocity / torque vector inV and returns a vector where the components that are not allowed by mAllowedDOFs are set to 0
-	JPH_INLINE Vec3			LockAngular(Vec3Arg inV) const
+	/// Takes an angular velocity / torque bivector inV and returns one where the components that are not allowed by mAllowedDOFs are set to 0
+	JPH_INLINE Bivec		LockAngular(BivecArg inV) const
 	{
-		return Vec3::sAnd(inV, Vec3(GetAngularDOFsMask().ReinterpretAsFloat()));
+		return Bivec::sAnd(inV, GetAngularDOFsBivecMask());
 	}
 
 	/// Used only when this body is dynamic and colliding. Override for the number of solver velocity iterations to run, 0 means use the default in PhysicsSettings::mNumVelocitySteps. The number of iterations to use is the max of all contacts and constraints in the island.
@@ -214,17 +216,17 @@ public:
 
 	///@name Update linear and angular velocity (used during constraint solving)
 	///@{
-	inline void				AddLinearVelocityStep(Vec3Arg inLinearVelocityChange)			{ JPH_DET_LOG("AddLinearVelocityStep: " << inLinearVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mLinearVelocity = LockTranslation(mLinearVelocity + inLinearVelocityChange); JPH_ASSERT(!mLinearVelocity.IsNaN()); }
-	inline void				SubLinearVelocityStep(Vec3Arg inLinearVelocityChange)			{ JPH_DET_LOG("SubLinearVelocityStep: " << inLinearVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mLinearVelocity = LockTranslation(mLinearVelocity - inLinearVelocityChange); JPH_ASSERT(!mLinearVelocity.IsNaN()); }
-	inline void				AddAngularVelocityStep(Vec3Arg inAngularVelocityChange)			{ JPH_DET_LOG("AddAngularVelocityStep: " << inAngularVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mAngularVelocity += inAngularVelocityChange; JPH_ASSERT(!mAngularVelocity.IsNaN()); }
-	inline void				SubAngularVelocityStep(Vec3Arg inAngularVelocityChange)			{ JPH_DET_LOG("SubAngularVelocityStep: " << inAngularVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mAngularVelocity -= inAngularVelocityChange; JPH_ASSERT(!mAngularVelocity.IsNaN()); }
+	inline void				AddLinearVelocityStep(Vec4Arg inLinearVelocityChange)			{ JPH_DET_LOG("AddLinearVelocityStep: " << inLinearVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mLinearVelocity = LockTranslation(mLinearVelocity + inLinearVelocityChange); JPH_ASSERT(!mLinearVelocity.IsNaN()); }
+	inline void				SubLinearVelocityStep(Vec4Arg inLinearVelocityChange)			{ JPH_DET_LOG("SubLinearVelocityStep: " << inLinearVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mLinearVelocity = LockTranslation(mLinearVelocity - inLinearVelocityChange); JPH_ASSERT(!mLinearVelocity.IsNaN()); }
+	inline void				AddAngularVelocityStep(BivecArg inAngularVelocityChange)		{ JPH_DET_LOG("AddAngularVelocityStep: " << inAngularVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mAngularVelocity += inAngularVelocityChange; JPH_ASSERT(!mAngularVelocity.IsNaN()); }
+	inline void				SubAngularVelocityStep(BivecArg inAngularVelocityChange)		{ JPH_DET_LOG("SubAngularVelocityStep: " << inAngularVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mAngularVelocity -= inAngularVelocityChange; JPH_ASSERT(!mAngularVelocity.IsNaN()); }
 	///@}
 
 	/// Apply the gyroscopic force (aka Dzhanibekov effect, see https://en.wikipedia.org/wiki/Tennis_racket_theorem)
-	inline void				ApplyGyroscopicForceInternal(QuatArg inBodyRotation, float inDeltaTime);
+	inline void				ApplyGyroscopicForceInternal(RotorArg inBodyRotation, float inDeltaTime);
 
 	/// Apply all accumulated forces, torques and drag (should only be called by the PhysicsSystem)
-	inline void				ApplyForceTorqueAndDragInternal(QuatArg inBodyRotation, Vec3Arg inGravity, float inDeltaTime);
+	inline void				ApplyForceTorqueAndDragInternal(RotorArg inBodyRotation, Vec4Arg inGravity, float inDeltaTime);
 
 	/// Access to the island index
 	uint32					GetIslandIndexInternal() const									{ return mIslandIndex; }
@@ -238,7 +240,7 @@ public:
 #endif // JPH_DOUBLE_PRECISION
 
 	/// Reset spheres to center around inPoints with radius 0
-	inline void				ResetSleepTestSpheres(const RVec3 *inPoints);
+	inline void				ResetSleepTestSpheres(const RVec4 *inPoints);
 
 	/// Reset the sleep test timer without resetting the sleep test spheres
 	inline void				ResetSleepTestTimer()											{ mSleepTestTimer = 0.0f; }
@@ -258,39 +260,37 @@ private:
 	friend class BodyManager;
 	friend class Body;
 
-	// 1st cache line
 	// 16 byte aligned
-	Vec3					mLinearVelocity { Vec3::sZero() };								///< World space linear velocity of the center of mass (m/s)
-	Vec3					mAngularVelocity { Vec3::sZero() };								///< World space angular velocity (rad/s)
-	Vec3					mInvInertiaDiagonal;											///< Diagonal of inverse inertia matrix: D
-	Quat					mInertiaRotation;												///< Rotation (R) that takes inverse inertia diagonal to local space: Ibody^-1 = R * D * R^-1
+	Vec4					mLinearVelocity { Vec4::sZero() };								///< World space linear velocity of the center of mass (m/s)
+	// 32 byte aligned
+	Bivec					mAngularVelocity { Bivec::sZero() };							///< World space angular velocity (bivector, rad/s in each rotation plane)
+	Bivec					mInvInertiaDiagonal { Bivec::sZero() };							///< Diagonal of inverse inertia: 6 values for the 6 rotation planes
+	Rotor					mInertiaRotation { Rotor::sIdentity() };						///< Rotation (R) that takes inverse inertia diagonal to local space via adjoint action
 
-	// 2nd cache line
 	// 4 byte aligned
-	Float3					mForce { 0, 0, 0 };												///< Accumulated world space force (N). Note loaded through intrinsics so ensure that the 4 bytes after this are readable!
-	Float3					mTorque { 0, 0, 0 };											///< Accumulated world space torque (N m). Note loaded through intrinsics so ensure that the 4 bytes after this are readable!
+	Float4					mForce { 0, 0, 0, 0 };											///< Accumulated world space force (N)
+	Float8					mTorque { 0, 0, 0, 0, 0, 0, 0, 0 };							///< Accumulated world space torque bivector (N m)
 	float					mInvMass;														///< Inverse mass of the object (1/kg)
 	float					mLinearDamping;													///< Linear damping: dv/dt = -c * v. Value should be zero or positive and is usually close to 0.
 	float					mAngularDamping;												///< Angular damping: dw/dt = -c * w. Value should be zero or positive and is usually close to 0.
 	float					mMaxLinearVelocity;												///< Maximum linear velocity that this body can reach (m/s)
 	float					mMaxAngularVelocity;											///< Maximum angular velocity that this body can reach (rad/s)
 	float					mGravityFactor;													///< Factor to multiply gravity with
-	uint32					mIndexInActiveBodies = cInactiveIndex;							///< If the body is active, this is the index in the active body list or cInactiveIndex if it is not active (note that there are 2 lists, one for rigid and one for soft bodies)
-	uint32					mIslandIndex = cInactiveIndex;									///< Index of the island that this body is part of, when the body has not yet been updated or is not active this is cInactiveIndex
+	uint32					mIndexInActiveBodies = cInactiveIndex;							///< If the body is active, this is the index in the active body list or cInactiveIndex if it is not active
+	uint32					mIslandIndex = cInactiveIndex;									///< Index of the island that this body is part of
 
 	// 1 byte aligned
 	EMotionQuality			mMotionQuality;													///< Motion quality, or how well it detects collisions when it has a high velocity
 	bool					mAllowSleeping;													///< If this body can go to sleep
-	EAllowedDOFs			mAllowedDOFs = EAllowedDOFs::All;								///< Allowed degrees of freedom for this body
-	uint8					mNumVelocityStepsOverride = 0;									///< Used only when this body is dynamic and colliding. Override for the number of solver velocity iterations to run, 0 means use the default in PhysicsSettings::mNumVelocitySteps. The number of iterations to use is the max of all contacts and constraints in the island.
-	uint8					mNumPositionStepsOverride = 0;									///< Used only when this body is dynamic and colliding. Override for the number of solver position iterations to run, 0 means use the default in PhysicsSettings::mNumPositionSteps. The number of iterations to use is the max of all contacts and constraints in the island.
+	EAllowedDOFs			mAllowedDOFs = EAllowedDOFs::All;								///< Allowed degrees of freedom for this body (uint16)
+	uint8					mNumVelocityStepsOverride = 0;									///< Override for the number of solver velocity iterations
+	uint8					mNumPositionStepsOverride = 0;									///< Override for the number of solver position iterations
 
-	// 3rd cache line (least frequently used)
-	// 4 byte aligned (or 8 byte if running in double precision)
+	// Sleep test data
 #ifdef JPH_DOUBLE_PRECISION
-	Double3					mSleepTestOffset;												///< mSleepTestSpheres are relative to this offset to prevent floating point inaccuracies. Warning: Loaded using sLoadDouble3Unsafe which will read 8 extra bytes.
+	Double3					mSleepTestOffset;												///< mSleepTestSpheres are relative to this offset to prevent floating point inaccuracies
 #endif // JPH_DOUBLE_PRECISION
-	Sphere					mSleepTestSpheres[3];											///< Measure motion for 3 points on the body to see if it is resting: COM, COM + largest bounding box axis, COM + second largest bounding box axis
+	Sphere					mSleepTestSpheres[3];											///< Measure motion for 3 points on the body to see if it is resting
 	float					mSleepTestTimer;												///< How long this body has been within the movement tolerance
 
 #ifdef JPH_ENABLE_ASSERTS

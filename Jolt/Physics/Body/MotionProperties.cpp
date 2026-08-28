@@ -14,9 +14,9 @@ void MotionProperties::SetMassProperties(EAllowedDOFs inAllowedDOFs, const MassP
 	// Store allowed DOFs
 	mAllowedDOFs = inAllowedDOFs;
 
-	// Decompose DOFs
-	uint allowed_translation_axis = uint(inAllowedDOFs) & 0b111;
-	uint allowed_rotation_axis = (uint(inAllowedDOFs) >> 3) & 0b111;
+	// Decompose DOFs: 4 translation bits (0-3), 6 rotation bits (4-9)
+	uint allowed_translation_axis = uint(inAllowedDOFs) & 0b1111;
+	uint allowed_rotation_axis = (uint(inAllowedDOFs) >> 4) & 0b111111;
 
 	// Set inverse mass
 	if (allowed_translation_axis == 0)
@@ -35,29 +35,47 @@ void MotionProperties::SetMassProperties(EAllowedDOFs inAllowedDOFs, const MassP
 	if (allowed_rotation_axis == 0)
 	{
 		// No rotation possible
-		mInvInertiaDiagonal = Vec3::sZero();
-		mInertiaRotation = Quat::sIdentity();
+		mInvInertiaDiagonal = Bivec::sZero();
+		mInertiaRotation = Rotor::sIdentity();
 	}
 	else
 	{
-		// Set inverse inertia
-		Mat44 rotation;
-		Vec3 diagonal;
-		if (inMassProperties.DecomposePrincipalMomentsOfInertia(rotation, diagonal)
+		// In 4D the inertia tensor is a 6x6 map bivector->bivector.
+		// We store it as: principal bivector diagonal I_ij = M_ii + M_jj (6 values)
+		// plus a Rotor aligning the body frame to the principal axes of the 4x4 second moment tensor M.
+		Mat44 principal_rotation;
+		Vec4 diagonal;
+		if (inMassProperties.DecomposePrincipalMomentsOfInertia(principal_rotation, diagonal)
 			&& !diagonal.IsNearZero())
 		{
-			mInvInertiaDiagonal = diagonal.Reciprocal();
-			mInertiaRotation = rotation.GetQuaternion();
+			// Derive the 6 bivector principal moments from the 4 second-moment eigenvalues
+			Bivec bivec_inertia = MassProperties::sBivecInertiaFromSecondMomentDiagonal(diagonal);
+
+			// Invert component-wise (guard against zero components)
+			auto safe_inv = [](float v) { return v > 0.0f ? 1.0f / v : 0.0f; };
+			mInvInertiaDiagonal = Bivec(
+				safe_inv(bivec_inertia.GetE12()),
+				safe_inv(bivec_inertia.GetE13()),
+				safe_inv(bivec_inertia.GetE14()),
+				safe_inv(bivec_inertia.GetE23()),
+				safe_inv(bivec_inertia.GetE24()),
+				safe_inv(bivec_inertia.GetE34()));
+
+			// Convert 4x4 orthogonal rotation to Rotor
+			mInertiaRotation = principal_rotation.GetRotor();
 		}
 		else
 		{
-			// Failed! Fall back to inertia tensor of sphere with radius 1.
-			mInvInertiaDiagonal = Vec3::sReplicate(2.5f * mInvMass);
-			mInertiaRotation = Quat::sIdentity();
+			// Failed to decompose. Fall back to a uniform 4D hypersphere of radius 1.
+			// Solid 4D unit hypersphere second moment tensor is diagonal M_ii = m / 6,
+			// so bivector inertia is I_ij = m / 3.
+			float fallback_inv = 3.0f * mInvMass;
+			mInvInertiaDiagonal = Bivec(fallback_inv, fallback_inv, fallback_inv, fallback_inv, fallback_inv, fallback_inv);
+			mInertiaRotation = Rotor::sIdentity();
 		}
 	}
 
-	JPH_ASSERT(mInvMass != 0.0f || mInvInertiaDiagonal != Vec3::sZero(), "Can't lock all axes, use a static body for this. This will crash with a division by zero later!");
+	JPH_ASSERT(mInvMass != 0.0f || mInvInertiaDiagonal != Bivec::sZero(), "Can't lock all axes, use a static body for this.");
 }
 
 void MotionProperties::SaveState(StateRecorder &inStream) const

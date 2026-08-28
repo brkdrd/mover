@@ -44,7 +44,9 @@ public:
 
 	/// Create a soft body
 	/// @return Created body or null when out of bodies
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 	Body *						CreateSoftBody(const SoftBodyCreationSettings &inSettings);
+#endif // JPH_ENABLE_SOFT_BODY
 
 	/// Create a rigid body with specified ID. This function can be used if a simulation is to run in sync between clients or if a simulation needs to be restored exactly.
 	/// The ID created on the server can be replicated to the client and used to create a deterministic simulation.
@@ -52,7 +54,9 @@ public:
 	Body *						CreateBodyWithID(const BodyID &inBodyID, const BodyCreationSettings &inSettings);
 
 	/// Create a soft body with specified ID. See comments at CreateBodyWithID.
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 	Body *						CreateSoftBodyWithID(const BodyID &inBodyID, const SoftBodyCreationSettings &inSettings);
+#endif // JPH_ENABLE_SOFT_BODY
 
 	/// Advanced use only. Creates a rigid body without specifying an ID. This body cannot be added to the physics system until it has been assigned a body ID.
 	/// This can be used to decouple allocation from registering the body. A call to CreateBodyWithoutID followed by AssignBodyID is equivalent to calling CreateBodyWithID.
@@ -60,7 +64,9 @@ public:
 	Body *						CreateBodyWithoutID(const BodyCreationSettings &inSettings) const;
 
 	/// Advanced use only. Creates a body without specifying an ID. See comments at CreateBodyWithoutID.
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 	Body *						CreateSoftBodyWithoutID(const SoftBodyCreationSettings &inSettings) const;
+#endif // JPH_ENABLE_SOFT_BODY
 
 	/// Advanced use only. Destroy a body previously created with CreateBodyWithoutID that hasn't gotten an ID yet through the AssignBodyID function,
 	/// or a body that has had its body ID unassigned through UnassignBodyIDs. Bodies that have an ID should be destroyed through DestroyBody.
@@ -110,7 +116,9 @@ public:
 
 	/// Combines CreateSoftBody and AddBody
 	/// @return Created body ID or an invalid ID when out of bodies
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
 	BodyID						CreateAndAddSoftBody(const SoftBodyCreationSettings &inSettings, EActivation inActivationMode);
+#endif // JPH_ENABLE_SOFT_BODY
 
 	/// Add state handle, used to keep track of a batch of bodies while adding them to the PhysicsSystem.
 	using AddState = void *;
@@ -173,7 +181,7 @@ public:
 	/// @param inPreviousCenterOfMass Center of mass of the shape before the alterations
 	/// @param inUpdateMassProperties When true, the mass and inertia tensor is recalculated
 	/// @param inActivationMode Whether or not to activate the body
-	void						NotifyShapeChanged(const BodyID &inBodyID, Vec3Arg inPreviousCenterOfMass, bool inUpdateMassProperties, EActivation inActivationMode) const;
+	void						NotifyShapeChanged(const BodyID &inBodyID, Vec4Arg inPreviousCenterOfMass, bool inUpdateMassProperties, EActivation inActivationMode) const;
 	///@}
 
 	///@name Object layer of a body
@@ -184,51 +192,51 @@ public:
 
 	///@name Position and rotation of a body
 	///@{
-	void						SetPositionAndRotation(const BodyID &inBodyID, RVec3Arg inPosition, QuatArg inRotation, EActivation inActivationMode);
-	void						SetPositionAndRotationWhenChanged(const BodyID &inBodyID, RVec3Arg inPosition, QuatArg inRotation, EActivation inActivationMode); ///< Will only update the position/rotation and activate the body when the difference is larger than a very small number. This avoids updating the broadphase/waking up a body when the resulting position/orientation doesn't really change.
-	void						GetPositionAndRotation(const BodyID &inBodyID, RVec3 &outPosition, Quat &outRotation) const;
-	void						SetPosition(const BodyID &inBodyID, RVec3Arg inPosition, EActivation inActivationMode);
-	RVec3						GetPosition(const BodyID &inBodyID) const;
-	RVec3						GetCenterOfMassPosition(const BodyID &inBodyID) const; ///< @see Body::GetCenterOfMassPosition
-	void						SetRotation(const BodyID &inBodyID, QuatArg inRotation, EActivation inActivationMode);
-	Quat						GetRotation(const BodyID &inBodyID) const;
+	void						SetPositionAndRotation(const BodyID &inBodyID, RVec4Arg inPosition, RotorArg inRotation, EActivation inActivationMode);
+	void						SetPositionAndRotationWhenChanged(const BodyID &inBodyID, RVec4Arg inPosition, RotorArg inRotation, EActivation inActivationMode); ///< Will only update the position/rotation and activate the body when the difference is larger than a very small number. This avoids updating the broadphase/waking up a body when the resulting position/orientation doesn't really change.
+	void						GetPositionAndRotation(const BodyID &inBodyID, RVec4 &outPosition, Rotor &outRotation) const;
+	void						SetPosition(const BodyID &inBodyID, RVec4Arg inPosition, EActivation inActivationMode);
+	RVec4						GetPosition(const BodyID &inBodyID) const;
+	RVec4						GetCenterOfMassPosition(const BodyID &inBodyID) const; ///< @see Body::GetCenterOfMassPosition
+	void						SetRotation(const BodyID &inBodyID, RotorArg inRotation, EActivation inActivationMode);
+	Rotor						GetRotation(const BodyID &inBodyID) const;
 	RMat44						GetWorldTransform(const BodyID &inBodyID) const; ///< @see Body::GetWorldTransform
 	RMat44						GetCenterOfMassTransform(const BodyID &inBodyID) const; ///< @see Body::GetCenterOfMassTransform
 	///@}
 
 	/// Set velocity of body such that it will be positioned at inTargetPosition/Rotation in inDeltaTime seconds (will activate body if needed)
-	void						MoveKinematic(const BodyID &inBodyID, RVec3Arg inTargetPosition, QuatArg inTargetRotation, float inDeltaTime);
+	void						MoveKinematic(const BodyID &inBodyID, RVec4Arg inTargetPosition, RotorArg inTargetRotation, float inDeltaTime);
 
 	/// Linear or angular velocity (functions will activate body if needed).
-	/// Note that the linear velocity is the velocity of the center of mass, which may not coincide with the position of your object, to correct for this: \f$VelocityCOM = Velocity - AngularVelocity \times ShapeCOM\f$
-	void						SetLinearAndAngularVelocity(const BodyID &inBodyID, Vec3Arg inLinearVelocity, Vec3Arg inAngularVelocity);
-	void						GetLinearAndAngularVelocity(const BodyID &inBodyID, Vec3 &outLinearVelocity, Vec3 &outAngularVelocity) const;
-	void						SetLinearVelocity(const BodyID &inBodyID, Vec3Arg inLinearVelocity); ///< @see Body::SetLinearVelocity
-	Vec3						GetLinearVelocity(const BodyID &inBodyID) const; ///< @see Body::GetLinearVelocity
-	void						AddLinearVelocity(const BodyID &inBodyID, Vec3Arg inLinearVelocity); ///< Add velocity to current velocity
-	void						AddLinearAndAngularVelocity(const BodyID &inBodyID, Vec3Arg inLinearVelocity, Vec3Arg inAngularVelocity); ///< Add linear and angular to current velocities
-	void						SetAngularVelocity(const BodyID &inBodyID, Vec3Arg inAngularVelocity); ///< @see Body::SetAngularVelocity
-	Vec3						GetAngularVelocity(const BodyID &inBodyID) const; ///< @see Body::GetAngularVelocity
-	Vec3						GetPointVelocity(const BodyID &inBodyID, RVec3Arg inPoint) const; ///< Velocity of point inPoint (in world space, e.g. on the surface of the body) of the body. @see Body::GetPointVelocity
+	/// In 4D, linear velocity is a 4-vector and angular velocity is a 6-component bivector (rotation plane).
+	void						SetLinearAndAngularVelocity(const BodyID &inBodyID, Vec4Arg inLinearVelocity, BivecArg inAngularVelocity);
+	void						GetLinearAndAngularVelocity(const BodyID &inBodyID, Vec4 &outLinearVelocity, Bivec &outAngularVelocity) const;
+	void						SetLinearVelocity(const BodyID &inBodyID, Vec4Arg inLinearVelocity); ///< @see Body::SetLinearVelocity
+	Vec4						GetLinearVelocity(const BodyID &inBodyID) const; ///< @see Body::GetLinearVelocity
+	void						AddLinearVelocity(const BodyID &inBodyID, Vec4Arg inLinearVelocity); ///< Add velocity to current velocity
+	void						AddLinearAndAngularVelocity(const BodyID &inBodyID, Vec4Arg inLinearVelocity, BivecArg inAngularVelocity); ///< Add linear and angular to current velocities
+	void						SetAngularVelocity(const BodyID &inBodyID, BivecArg inAngularVelocity); ///< @see Body::SetAngularVelocity
+	Bivec						GetAngularVelocity(const BodyID &inBodyID) const; ///< @see Body::GetAngularVelocity
+	Vec4						GetPointVelocity(const BodyID &inBodyID, RVec4Arg inPoint) const; ///< Velocity of point inPoint (in world space, e.g. on the surface of the body) of the body. @see Body::GetPointVelocity
 
 	/// Set the complete motion state of a body.
-	/// Note that the linear velocity is the velocity of the center of mass, which may not coincide with the position of your object, to correct for this: \f$VelocityCOM = Velocity - AngularVelocity \times ShapeCOM\f$
-	void						SetPositionRotationAndVelocity(const BodyID &inBodyID, RVec3Arg inPosition, QuatArg inRotation, Vec3Arg inLinearVelocity, Vec3Arg inAngularVelocity);
+	void						SetPositionRotationAndVelocity(const BodyID &inBodyID, RVec4Arg inPosition, RotorArg inRotation, Vec4Arg inLinearVelocity, BivecArg inAngularVelocity);
 
 	///@name Add forces to the body. Note that you should add a body to the physics system before applying forces or torques.
+	/// In 4D, forces are 4-vectors and torques are 6-component bivectors.
 	///@{
-	void						AddForce(const BodyID &inBodyID, Vec3Arg inForce, EActivation inActivationMode = EActivation::Activate); ///< @see Body::AddForce
-	void						AddForce(const BodyID &inBodyID, Vec3Arg inForce, RVec3Arg inPoint, EActivation inActivationMode = EActivation::Activate); ///< Applied at world space position inPoint. @see Body::AddForce
-	void						AddTorque(const BodyID &inBodyID, Vec3Arg inTorque, EActivation inActivationMode = EActivation::Activate); ///< @see Body::AddTorque
-	void						AddForceAndTorque(const BodyID &inBodyID, Vec3Arg inForce, Vec3Arg inTorque, EActivation inActivationMode = EActivation::Activate); ///< A combination of Body::AddForce and Body::AddTorque
+	void						AddForce(const BodyID &inBodyID, Vec4Arg inForce, EActivation inActivationMode = EActivation::Activate); ///< @see Body::AddForce
+	void						AddForce(const BodyID &inBodyID, Vec4Arg inForce, RVec4Arg inPoint, EActivation inActivationMode = EActivation::Activate); ///< Applied at world space position inPoint. @see Body::AddForce
+	void						AddTorque(const BodyID &inBodyID, BivecArg inTorque, EActivation inActivationMode = EActivation::Activate); ///< @see Body::AddTorque
+	void						AddForceAndTorque(const BodyID &inBodyID, Vec4Arg inForce, BivecArg inTorque, EActivation inActivationMode = EActivation::Activate); ///< A combination of Body::AddForce and Body::AddTorque
 	///@}
 
 	///@name Add an impulse to the body. Note that you should add a body to the physics system before applying impulses.
 	///@{
-	void						AddImpulse(const BodyID &inBodyID, Vec3Arg inImpulse); ///< Applied at center of mass. @see Body::AddImpulse
-	void						AddImpulse(const BodyID &inBodyID, Vec3Arg inImpulse, RVec3Arg inPoint); ///< Applied at world space position inPoint. @see Body::AddImpulse
-	void						AddAngularImpulse(const BodyID &inBodyID, Vec3Arg inAngularImpulse); ///< @see Body::AddAngularImpulse
-	bool						ApplyBuoyancyImpulse(const BodyID &inBodyID, RVec3Arg inSurfacePosition, Vec3Arg inSurfaceNormal, float inBuoyancy, float inLinearDrag, float inAngularDrag, Vec3Arg inFluidVelocity, Vec3Arg inGravity, float inDeltaTime); ///< @see Body::ApplyBuoyancyImpulse
+	void						AddImpulse(const BodyID &inBodyID, Vec4Arg inImpulse); ///< Applied at center of mass. @see Body::AddImpulse
+	void						AddImpulse(const BodyID &inBodyID, Vec4Arg inImpulse, RVec4Arg inPoint); ///< Applied at world space position inPoint. @see Body::AddImpulse
+	void						AddAngularImpulse(const BodyID &inBodyID, BivecArg inAngularImpulse); ///< @see Body::AddAngularImpulse
+	bool						ApplyBuoyancyImpulse(const BodyID &inBodyID, RVec4Arg inSurfacePosition, Vec4Arg inSurfaceNormal, float inBuoyancy, float inLinearDrag, float inAngularDrag, Vec4Arg inFluidVelocity, Vec4Arg inGravity, float inDeltaTime); ///< @see Body::ApplyBuoyancyImpulse
 	///@}
 
 	///@name Body type
@@ -248,8 +256,10 @@ public:
 	EMotionQuality				GetMotionQuality(const BodyID &inBodyID) const; ///< @see MotionProperties::GetMotionQuality
 	///@}
 
-	/// Get inverse inertia tensor in world space
-	Mat44						GetInverseInertia(const BodyID &inBodyID) const; ///< @see Body::GetInverseInertia
+	/// Get inverse inertia diagonal (in body-local principal frame). In 4D the inverse inertia is a 6x6 map
+	/// from bivectors to bivectors; when diagonalized it reduces to a 6-component bivector.
+	/// Use MotionProperties::MultiplyWorldSpaceInverseInertiaByVector for world-space application.
+	Bivec						GetInverseInertiaDiagonal(const BodyID &inBodyID) const;
 
 	///@name Restitution
 	///@{

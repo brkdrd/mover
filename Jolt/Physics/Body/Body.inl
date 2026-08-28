@@ -95,8 +95,10 @@ Vec4 Body::GetWorldSpaceSurfaceNormal(const SubShapeID &inSubShapeID, RVec4Arg i
 void Body::AddForce(Vec4Arg inForce, RVec4Arg inPosition)
 {
 	AddForce(inForce);
-	// Torque = r ^ F (wedge product of position relative to COM with force)
-	AddTorque(Bivec::sWedge(Vec4(inPosition - mPosition), inForce));
+	// Torque = F ^ r, the bivector conjugate to the angular velocity. NOT r ^ F: in 4D the point
+	// velocity operator Bivec::Contract is the *negative* adjoint of the wedge, so the 4D analog of
+	// the 3D torque r x F has its operands swapped. See UnitTests/Physics/DynamicsConventionsTest.
+	AddTorque(Bivec::sWedge(inForce, Vec4(inPosition - mPosition)));
 }
 
 void Body::AddImpulse(Vec4Arg inImpulse)
@@ -112,8 +114,8 @@ void Body::AddImpulse(Vec4Arg inImpulse, RVec4Arg inPosition)
 
 	SetLinearVelocityClamped(mMotionProperties->GetLinearVelocity() + inImpulse * mMotionProperties->GetInverseMass());
 
-	// Angular impulse = r ^ impulse (wedge product)
-	Bivec angular_impulse = Bivec::sWedge(Vec4(inPosition - mPosition), inImpulse);
+	// Angular impulse = impulse ^ r (see the operand order note in AddForce above)
+	Bivec angular_impulse = Bivec::sWedge(inImpulse, Vec4(inPosition - mPosition));
 	SetAngularVelocityClamped(mMotionProperties->GetAngularVelocity() + mMotionProperties->MultiplyWorldSpaceInverseInertiaByVector(mRotation, angular_impulse));
 }
 

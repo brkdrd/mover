@@ -607,13 +607,6 @@ bool ObjectStreamIn::SkipAttributeData(int inArrayDepth, EOSDataType inDataType,
 						break;
 					}
 
-				case EOSDataType::T_DMat44:
-					{
-						DMat44 temporary;
-						continue_reading = ReadPrimitiveData(temporary);
-						break;
-					}
-
 				case EOSDataType::Array:
 				case EOSDataType::Object:
 				case EOSDataType::Declare:

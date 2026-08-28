@@ -64,7 +64,7 @@ public:
 	uint32						GetMaxConstraints() const											{ return mMaxConstraints; }
 
 	/// Check with the listener if inBody1 and inBody2 could collide, returns false if not
-	inline ValidateResult		ValidateContactPoint(const Body &inBody1, const Body &inBody2, RVec3Arg inBaseOffset, const CollideShapeResult &inCollisionResult) const
+	inline ValidateResult		ValidateContactPoint(const Body &inBody1, const Body &inBody2, RVec4Arg inBaseOffset, const CollideShapeResult &inCollisionResult) const
 	{
 		if (mContactListener == nullptr)
 			return ValidateResult::AcceptAllContactsForThisBodyPair;
@@ -75,8 +75,8 @@ public:
 	/// Sets up the constraint buffer. Should be called before starting collision detection.
 	void						PrepareConstraintBuffer(PhysicsUpdateContext *inContext);
 
-	/// Max 4 contact points are needed for a stable manifold
-	static const int			MaxContactPoints = 4;
+	/// Max contact points needed for a stable manifold
+	static const int			MaxContactPoints = 6;					///< TODO(4D): a 4D contact patch is a 3D polyhedron, so a spanning reduced set needs up to 6 points (was 4), see cMaxManifoldPoints
 
 	/// Contacts are allocated in a lock free hash map
 	class ContactAllocator : public LFHMAllocatorContext
@@ -266,16 +266,16 @@ private:
 		void					RestoreState(StateRecorder &inStream);
 
 		/// Local space positions on body 1 and 2.
-		/// Note: these values are read through sLoadFloat3Unsafe.
-		Float3					mPosition1;
-		Float3					mPosition2;
+		Float4					mPosition1;
+		Float4					mPosition2;
 
-		/// Total applied impulse during the last update that it was used
+		/// Total applied impulse during the last update that it was used.
+		/// TODO(4D): 3 friction components, not 2 -- the tangent space of a 4D contact is 3D.
 		float					mNonPenetrationLambda;
-		Vector<2>				mFrictionLambda;
+		Vector<3>				mFrictionLambda;
 	};
 
-	static_assert(sizeof(CachedContactPoint) == 36, "Unexpected size");
+	static_assert(sizeof(CachedContactPoint) == 48, "Unexpected size");
 	static_assert(alignof(CachedContactPoint) == 4, "Assuming 4 byte aligned");
 
 	/// A single cached manifold
@@ -296,8 +296,7 @@ private:
 		uint32					mNextWithSameBodyPair;
 
 		/// Contact normal in the space of 2.
-		/// Note: this value is read through sLoadFloat3Unsafe.
-		Float3					mContactNormal;
+		Float4					mContactNormal;
 
 		/// Flags for this cached manifold
 		enum class EFlags : uint16
@@ -316,7 +315,7 @@ private:
 		CachedContactPoint		mContactPoints[1];
 	};
 
-	static_assert(sizeof(CachedManifold) == 56, "This structure is expect to not contain any waste due to alignment");
+	static_assert(sizeof(CachedManifold) == 72, "This structure is expect to not contain any waste due to alignment");
 	static_assert(alignof(CachedManifold) == 4, "Assuming 4 byte aligned");
 
 	/// Define a map that maps SubShapeIDPair -> manifold
@@ -333,18 +332,19 @@ private:
 		void					RestoreState(StateRecorder &inStream);
 
 		/// Local space position difference from Body A to Body B.
-		/// Note: this value is read through sLoadFloat3Unsafe
-		Float3					mDeltaPosition;
+		Float4					mDeltaPosition;
 
-		/// Local space rotation difference from Body A to Body B, fourth component of quaternion is not stored but is guaranteed >= 0.
-		/// Note: this value is read through sLoadFloat3Unsafe
-		Float3					mDeltaRotation;
+		/// Local space rotation difference from Body A to Body B.
+		/// TODO(4D): stored uncompressed. The 3-of-4 quaternion trick (drop one component, recover it
+		/// from the unit norm with a known sign) does not generalize to a rotor: Spin(4) is 6
+		/// dimensional inside 8 floats, and the two SU(2) factors each need their own sign convention.
+		Float8					mDeltaRotation;
 
 		/// Handle to first manifold in ManifoldCache::mCachedManifolds
 		uint32					mFirstCachedManifold;
 	};
 
-	static_assert(sizeof(CachedBodyPair) == 28, "Unexpected size");
+	static_assert(sizeof(CachedBodyPair) == 52, "Unexpected size");
 	static_assert(alignof(CachedBodyPair) == 4, "Assuming 4 byte aligned");
 
 	/// Define a map that maps BodyPair -> CachedBodyPair
@@ -424,15 +424,16 @@ private:
 	{
 	public:
 		/// Calculate constraint properties below
-		void					CalculateNonPenetrationConstraintProperties(const Body &inBody1, float inInvMass1, float inInvInertiaScale1, const Body &inBody2, float inInvMass2, float inInvInertiaScale2, RVec3Arg inWorldSpacePosition1, RVec3Arg inWorldSpacePosition2, Vec3Arg inWorldSpaceNormal);
+		void					CalculateNonPenetrationConstraintProperties(const Body &inBody1, float inInvMass1, float inInvInertiaScale1, const Body &inBody2, float inInvMass2, float inInvInertiaScale2, RVec4Arg inWorldSpacePosition1, RVec4Arg inWorldSpacePosition2, Vec4Arg inWorldSpaceNormal);
 
 		template <EMotionType Type1, EMotionType Type2>
-		JPH_INLINE void			TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(float inDeltaTime, Vec3Arg inGravity, const Body &inBody1, const Body &inBody2, float inInvM1, float inInvM2, Mat44Arg inInvI1, Mat44Arg inInvI2, RVec3Arg inWorldSpacePosition1, RVec3Arg inWorldSpacePosition2, Vec3Arg inWorldSpaceNormal, Vec3Arg inWorldSpaceTangent1, Vec3Arg inWorldSpaceTangent2, const ContactSettings &inSettings, float inMinVelocityForRestitution);
+		JPH_INLINE void			TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(float inDeltaTime, Vec4Arg inGravity, const Body &inBody1, const Body &inBody2, float inInvM1, float inInvM2, RotorArg inRotation1, float inInvInertiaScale1, RotorArg inRotation2, float inInvInertiaScale2, RVec4Arg inWorldSpacePosition1, RVec4Arg inWorldSpacePosition2, Vec4Arg inWorldSpaceNormal, Vec4Arg inWorldSpaceTangent1, Vec4Arg inWorldSpaceTangent2, Vec4Arg inWorldSpaceTangent3, const ContactSettings &inSettings, float inMinVelocityForRestitution);
 
 		/// The constraint parts
 		AxisConstraintPart		mNonPenetrationConstraint;
 		AxisConstraintPart		mFrictionConstraint1;
 		AxisConstraintPart		mFrictionConstraint2;
+		AxisConstraintPart		mFrictionConstraint3;			///< TODO(4D): 4D contacts have a 3D tangent space
 
 		/// Contact cache
 		CachedContactPoint *	mContactPoint;
@@ -449,24 +450,24 @@ private:
 		void					Draw(DebugRenderer *inRenderer, ColorArg inManifoldColor) const;
 	#endif // JPH_DEBUG_RENDERER
 
-		/// Convert the world space normal to a Vec3
-		JPH_INLINE Vec3			GetWorldSpaceNormal() const
+		/// Convert the world space normal to a Vec4
+		JPH_INLINE Vec4			GetWorldSpaceNormal() const
 		{
-			return Vec3::sLoadFloat3Unsafe(mWorldSpaceNormal);
+			return Vec4::sLoadFloat4(&mWorldSpaceNormal);
 		}
 
-		/// Get the tangents for this contact constraint
-		JPH_INLINE void			GetTangents(Vec3 &outTangent1, Vec3 &outTangent2) const
+		/// Get the tangents for this contact constraint.
+		/// TODO(4D): there are 3 of them -- the space perpendicular to a 4D contact normal is a
+		/// hyperplane, so Coulomb friction acts in a 3D tangent space instead of a 2D one.
+		JPH_INLINE void			GetTangents(Vec4 &outTangent1, Vec4 &outTangent2, Vec4 &outTangent3) const
 		{
-			Vec3 ws_normal = GetWorldSpaceNormal();
-			outTangent1 = ws_normal.GetNormalizedPerpendicular();
-			outTangent2 = ws_normal.Cross(outTangent1);
+			GetWorldSpaceNormal().GetNormalizedPerpendicularBasis(outTangent1, outTangent2, outTangent3);
 		}
 
 		Body *					mBody1;
 		Body *					mBody2;
 		uint64					mSortKey;
-		Float3					mWorldSpaceNormal;
+		Float4					mWorldSpaceNormal;
 		float					mCombinedFriction;
 		float					mInvMass1;
 		float					mInvInertiaScale1;
@@ -485,10 +486,10 @@ public:
 private:
 	/// Internal helper function to calculate the friction and non-penetration constraint properties. Templated to the motion type to reduce the amount of branches and calculations.
 	template <EMotionType Type1, EMotionType Type2>
-	JPH_INLINE void				TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(ContactConstraint &ioConstraint, const ContactSettings &inSettings, float inDeltaTime, Vec3Arg inGravity, RMat44Arg inTransformBody1, RMat44Arg inTransformBody2, const Body &inBody1, const Body &inBody2);
+	JPH_INLINE void				TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(ContactConstraint &ioConstraint, const ContactSettings &inSettings, float inDeltaTime, Vec4Arg inGravity, RMat44Arg inTransformBody1, RMat44Arg inTransformBody2, const Body &inBody1, const Body &inBody2);
 
 	/// Internal helper function to calculate the friction and non-penetration constraint properties.
-	inline void					CalculateFrictionAndNonPenetrationConstraintProperties(ContactConstraint &ioConstraint, const ContactSettings &inSettings, float inDeltaTime, Vec3Arg inGravity, RMat44Arg inTransformBody1, RMat44Arg inTransformBody2, const Body &inBody1, const Body &inBody2);
+	inline void					CalculateFrictionAndNonPenetrationConstraintProperties(ContactConstraint &ioConstraint, const ContactSettings &inSettings, float inDeltaTime, Vec4Arg inGravity, RMat44Arg inTransformBody1, RMat44Arg inTransformBody2, const Body &inBody1, const Body &inBody2);
 
 	/// Internal helper function to add a contact constraint. Templated to the motion type to reduce the amount of branches and calculations.
 	template <EMotionType Type1, EMotionType Type2>

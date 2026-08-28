@@ -21,31 +21,51 @@ got stuck.
 cmake -S Build -B build -DCMAKE_BUILD_TYPE=Release -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
 cmake --build build --target Jolt -j$(nproc)           # BUILDS CLEAN (headless v1)
 cmake --build build --target UnitTests -j$(nproc)      # builds and links
-./build/UnitTests                                     # runs: 364 cases, 349 pass, 15 fail (see below)
+./build/UnitTests                                     # runs: 364 cases, 357 pass, 7 fail (see below)
 ```
 
 **Current build status (verified 2026-08-08): the headless v1 library BUILDS CLEAN** — `libJolt.a`,
 0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 364
-cases, 349 pass, 15 fail.** Build with the debug renderer OFF
+cases, 357 pass, 7 fail.** Build with the debug renderer OFF
 (`-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF`); v1 is headless.
 
 This replaces the old standalone Math-only runner — **run the real `./build/UnitTests` from now on.**
 (The recipe for the standalone runner is kept below only as a fallback.)
 
-### The 15 remaining test failures — all in Geometry, all real 4D bugs
-These are the top of the queue. Geometry was previously described as "the strongest part of the
-project"; that assessment was based on reading the code, and the first real test run disagrees:
-- **ClosestPointTests (4)** — `TestGetClosestPointOnTetrahedron`, `...Tetrahedron4D`,
-  `TestLongTriangle`, `TestOriginOutsideOfTetrahedronPlanes`. The Gram-matrix barycentric code is
-  the foundation GJK stands on, so fix this first.
-- **EPATests (5)** — `TestEPASphereSphere4D`, `...Overlapping`, `...NearOverlapping`, `TestEPASphereBox`,
-  `TestEPACastSphereSphereInitialOverlap`. Likely downstream of ClosestPoint and/or the known
-  uninitialized-`mNormal` degenerate-cell path (bug #7).
-- **GJKTests (4)** — `TestGJKRaySphere`, `TestGJKRayBox`, `TestGJKRayTetrahedron`,
-  `TestGJKSphereVsBoxIntersect`.
-- **RaySphereTests (1)** — `TestRaySphereInsideOrigin` (a ray starting inside the sphere returns 0
-  rather than a negative t).
-- **RayTriangleTests (1)** — `TestRayTriangle4DSOA` (the SOA path disagrees with the scalar one by 1.5).
+### The 7 remaining test failures — all one root cause in GJK
+`UnitTests` is at **357/364**. Everything left is EPA (5 cases) and GJK (2), and the evidence points
+at a single mechanism: **GJK does not reliably grow its simplex to 5 points in 4D.**
+
+Measured on `TestGJKSphereVsBoxIntersect` (10,000 random sphere/box pairs): **24 disagreements, all
+false negatives** — GJK reports MISS for pairs that genuinely overlap by up to 0.071, far beyond the
+2e-4 test tolerance. A traced run of the first failure shows |v|² descending 15 → 3 → 0.25 → … →
+5.0e-6, then *rising* to 5.1e-6, which trips the `prev_v_len_sq - v_len_sq <= FLT_EPSILON *
+prev_v_len_sq` "converged, therefore separated" early-out. The true distance is 0 (the shapes
+overlap), so the loop converged to the wrong answer rather than to a separating axis.
+
+Across the whole trace the simplex point count goes 1,2,3,4,3,2,3,4,3,4,3,4,2 — the tetrahedron
+reduction **never once returns the full set 0x0f**, so the pentachoron case (and its `set == 0x1f`
+"origin enclosed, therefore hit" test) is never reached.
+
+What has already been ruled out:
+- `GetClosestPointOnTetrahedron` is correct, including the 4D projection fix: given a tetrahedron
+  whose 3-flat the origin projects strictly inside, it returns set `0xF` and the right projection.
+- `GetClosestPointOnPentachoron` is correct: for a pentachoron strictly containing the origin it
+  returns set `0b11111` and a zero closest point.
+- `Sphere::GetSupport` / `AABox::GetSupport` are correct 4D support functions.
+- `GJKClosestPoint::Intersects` and `GetClosest` are structurally right for 4D (they already switch
+  on 5 points and test `set == 0x1f`).
+
+Prime suspect: the `LastPointPartOfClosestFeature` / `MustIncludeD` path. In
+`GetClosestPointOnTetrahedron`, when face ABC is flagged and D must be included, the code returns
+`set = 0b0001, closest = A` (inherited verbatim from 3D Jolt, whose comment argues the closest point
+"cannot be an interior point either"). In 3D four points are a full simplex so that reasoning holds;
+in 4D four points are only a 3-flat and the origin is essentially never on it, so returning vertex A
+can be far worse than the true closest point and destroys the monotonic decrease of |v| that GJK's
+convergence test depends on. **The 4D question to answer is what the `MustInclude` shortcut should
+be when the simplex is one dimension short of enclosing the origin.**
+
+Reproduce with the probes in the scratchpad, or just run `./build/UnitTests -ts=GJKTests`.
 
 **v1 scope cuts applied at the source level (2026-08-08).** Commented out of `Jolt.cmake` with
 `TODO(4D)` markers, with matching RTTI declarations / `Factory` registrations removed from
@@ -317,17 +337,18 @@ P1 — determinism / hygiene:
 
 ## Roadmap to a shippable v1
 
-**⏸ RESUME HERE (2026-08-08):** **The headless v1 library builds and `UnitTests` runs (349/364).**
-Next, in priority order: (1) **fix the 15 failing Geometry tests** — start with `ClosestPointTests`,
-since GJK and EPA both stand on the Gram-matrix barycentrics and their failures are probably
-downstream; the list and analysis are in the build-status section at the top. (2) Write the **4D
-HelloWorld** (tesseract onto a hyperplane floor) — the whole stepping loop now compiles, so this is
-the first chance to see the engine actually simulate, and it will flush out runtime bugs the unit
-tests cannot. (3) The **contact manifold pipeline** (`ManifoldBetweenTwoFaces` is currently a reduced
-single-point fallback — see the TODO in that file; resting boxes get one contact point instead of a
-patch, so stacks will be less stable than 3D Jolt). (4) Re-enable de-registered unit tests as each
-area is ported. **Read the 🔑 torque-convention box below before touching any dynamics code** — the
-naive `r ∧ F` transliteration is wrong and an effective-mass test cannot detect it.
+**⏸ RESUME HERE (2026-08-08):** The headless v1 library builds and `UnitTests` runs at **357/364**.
+Next, in priority order: (1) **the GJK simplex-growth bug** — all 7 remaining failures (5 EPA, 2 GJK)
+trace to it, and the diagnosis with trace evidence and everything already ruled out is in the
+build-status section at the top; start from the `MustIncludeD` shortcut in
+`GetClosestPointOnTetrahedron`. (2) Write the **4D HelloWorld** (tesseract onto a hyperplane floor) —
+the whole stepping loop compiles now, so this is the first chance to see the engine simulate, and it
+will flush out runtime bugs the unit tests cannot. (3) The **contact manifold pipeline**
+(`ManifoldBetweenTwoFaces` is a reduced single-point fallback — see the TODO in that file; resting
+boxes get one contact instead of a patch, so stacks will be less stable than 3D Jolt). (4) Re-enable
+de-registered unit tests as each area is ported. **Read the 🔑 torque-convention box below before
+touching any dynamics code** — the naive `r ∧ F` transliteration is wrong and an effective-mass test
+cannot detect it.
 
 **Phase B step 6(b) is COMPLETE — the v1 shape layer compiles clean at the per-TU level (15/15 TUs).**
 Verified via a per-TU `-fsyntax-only` check with the Jolt build flags (helper `cc.sh`; recreate from

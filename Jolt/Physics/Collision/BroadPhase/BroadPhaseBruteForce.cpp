@@ -90,7 +90,7 @@ void BroadPhaseBruteForce::CastRay(const RayCast &inRay, RayCastBodyCollector &i
 	shared_lock lock(mMutex);
 
 	// Load ray
-	Vec3 origin(inRay.mOrigin);
+	Vec4 origin(inRay.mOrigin);
 	RayInvDirection inv_direction(inRay.mDirection);
 
 	// For all bodies
@@ -143,7 +143,7 @@ void BroadPhaseBruteForce::CollideAABox(const AABox &inBox, CollideShapeBodyColl
 	}
 }
 
-void BroadPhaseBruteForce::CollideSphere(Vec3Arg inCenter, float inRadius, CollideShapeBodyCollector &ioCollector, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter) const
+void BroadPhaseBruteForce::CollideSphere(Vec4Arg inCenter, float inRadius, CollideShapeBodyCollector &ioCollector, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter) const
 {
 	shared_lock lock(mMutex);
 
@@ -170,7 +170,7 @@ void BroadPhaseBruteForce::CollideSphere(Vec3Arg inCenter, float inRadius, Colli
 	}
 }
 
-void BroadPhaseBruteForce::CollidePoint(Vec3Arg inPoint, CollideShapeBodyCollector &ioCollector, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter) const
+void BroadPhaseBruteForce::CollidePoint(Vec4Arg inPoint, CollideShapeBodyCollector &ioCollector, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter) const
 {
 	shared_lock lock(mMutex);
 
@@ -225,8 +225,8 @@ void BroadPhaseBruteForce::CastAABoxNoLock(const AABoxCast &inBox, CastShapeBody
 	shared_lock lock(mMutex);
 
 	// Load box
-	Vec3 origin(inBox.mBox.GetCenter());
-	Vec3 extent(inBox.mBox.GetExtent());
+	Vec4 origin(inBox.mBox.GetCenter());
+	Vec4 extent(inBox.mBox.GetExtent());
 	RayInvDirection inv_direction(inBox.mDirection);
 
 	// For all bodies
@@ -273,7 +273,7 @@ void BroadPhaseBruteForce::FindCollidingPairs(BodyID *ioActiveBodies, int inNumA
 
 		// Expand the bounding box by the speculative contact distance
 		AABox bounds1 = body1.GetWorldSpaceBounds();
-		bounds1.ExpandBy(Vec3::sReplicate(inSpeculativeContactDistance));
+		bounds1.ExpandBy(Vec4::sReplicate(inSpeculativeContactDistance));
 
 		// For all other bodies
 		for (size_t b2 = 0; b2 < num_bodies; ++b2)

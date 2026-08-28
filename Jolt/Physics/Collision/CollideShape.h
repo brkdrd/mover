@@ -24,7 +24,7 @@ public:
 								CollideShapeResult() = default;
 
 	/// Constructor
-								CollideShapeResult(Vec3Arg inContactPointOn1, Vec3Arg inContactPointOn2, Vec3Arg inPenetrationAxis, float inPenetrationDepth, const SubShapeID &inSubShapeID1, const SubShapeID &inSubShapeID2, const BodyID &inBodyID2) :
+								CollideShapeResult(Vec4Arg inContactPointOn1, Vec4Arg inContactPointOn2, Vec4Arg inPenetrationAxis, float inPenetrationDepth, const SubShapeID &inSubShapeID1, const SubShapeID &inSubShapeID2, const BodyID &inBodyID2) :
 		mContactPointOn1(inContactPointOn1),
 		mContactPointOn2(inContactPointOn2),
 		mPenetrationAxis(inPenetrationAxis),
@@ -54,17 +54,19 @@ public:
 		return result;
 	}
 
-	using Face = StaticArray<Vec3, 32>;
+	/// In 4D, a contact "face" is a 3-cell (3-polytope) rather than a 2D polygon; the vertex count may
+	/// need to grow for non-trivial shapes but the capacity is kept at 32 for now.
+	using Face = StaticArray<Vec4, 32>;
 
-	Vec3						mContactPointOn1;			///< Contact point on the surface of shape 1 (in world space or relative to base offset)
-	Vec3						mContactPointOn2;			///< Contact point on the surface of shape 2 (in world space or relative to base offset). If the penetration depth is 0, this will be the same as mContactPointOn1.
-	Vec3						mPenetrationAxis;			///< Direction to move shape 2 out of collision along the shortest path (magnitude is meaningless, in world space). You can use -mPenetrationAxis.Normalized() as contact normal.
+	Vec4						mContactPointOn1;			///< Contact point on the surface of shape 1 (in world space or relative to base offset, 4D)
+	Vec4						mContactPointOn2;			///< Contact point on the surface of shape 2 (in world space or relative to base offset, 4D). If the penetration depth is 0, this will be the same as mContactPointOn1.
+	Vec4						mPenetrationAxis;			///< Direction to move shape 2 out of collision along the shortest path (magnitude is meaningless, in world space, 4D). You can use -mPenetrationAxis.Normalized() as contact normal.
 	float						mPenetrationDepth;			///< Penetration depth (move shape 2 by this distance to resolve the collision). If CollideShapeSettings::mMaxSeparationDistance > 0 this number can be negative to indicate that the objects are separated by -mPenetrationDepth. The contact points are the closest points in that case.
 	SubShapeID					mSubShapeID1;				///< Sub shape ID that identifies the face on shape 1
 	SubShapeID					mSubShapeID2;				///< Sub shape ID that identifies the face on shape 2
 	BodyID						mBodyID2;					///< BodyID to which shape 2 belongs to
-	Face						mShape1Face;				///< Colliding face on shape 1 (optional result, in world space or relative to base offset)
-	Face						mShape2Face;				///< Colliding face on shape 2 (optional result, in world space or relative to base offset)
+	Face						mShape1Face;				///< Colliding face on shape 1 (optional result, in world space or relative to base offset). In 4D this is a 3-cell of the contact polytope.
+	Face						mShape2Face;				///< Colliding face on shape 2 (optional result, in world space or relative to base offset). In 4D this is a 3-cell of the contact polytope.
 };
 
 /// Settings to be passed with a collision query
@@ -86,7 +88,7 @@ public:
 	float						mPenetrationTolerance		= cDefaultPenetrationTolerance;
 
 	/// When mActiveEdgeMode is CollideOnlyWithActive a movement direction can be provided. When hitting an inactive edge, the system will select the triangle normal as penetration depth only if it impedes the movement less than with the calculated penetration depth.
-	Vec3						mActiveEdgeMovementDirection = Vec3::sZero();
+	Vec4						mActiveEdgeMovementDirection = Vec4::sZero();
 };
 
 /// Settings to be passed with a collision query

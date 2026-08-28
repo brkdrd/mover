@@ -22,7 +22,7 @@ bool TransformedShape::CastRay(const RRayCast &inRay, RayCastResult &ioHit) cons
 		RayCast ray(inRay.Transformed(GetInverseCenterOfMassTransform()));
 
 		// Scale the ray
-		Vec3 inv_scale = GetShapeScale().Reciprocal();
+		Vec4 inv_scale = GetShapeScale().Reciprocal();
 		ray.mOrigin *= inv_scale;
 		ray.mDirection *= inv_scale;
 
@@ -52,7 +52,7 @@ void TransformedShape::CastRay(const RRayCast &inRay, const RayCastSettings &inR
 		RayCast ray(inRay.Transformed(GetInverseCenterOfMassTransform()));
 
 		// Scale the ray
-		Vec3 inv_scale = GetShapeScale().Reciprocal();
+		Vec4 inv_scale = GetShapeScale().Reciprocal();
 		ray.mOrigin *= inv_scale;
 		ray.mDirection *= inv_scale;
 
@@ -62,7 +62,7 @@ void TransformedShape::CastRay(const RRayCast &inRay, const RayCastSettings &inR
 	}
 }
 
-void TransformedShape::CollidePoint(RVec3Arg inPoint, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void TransformedShape::CollidePoint(RVec4Arg inPoint, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	if (mShape != nullptr)
 	{
@@ -71,7 +71,7 @@ void TransformedShape::CollidePoint(RVec3Arg inPoint, CollidePointCollector &ioC
 		inShapeFilter.mBodyID2 = mBodyID;
 
 		// Transform and scale the point to local space
-		Vec3 point = Vec3(GetInverseCenterOfMassTransform() * inPoint) / GetShapeScale();
+		Vec4 point = Vec4(GetInverseCenterOfMassTransform() * inPoint) / GetShapeScale();
 
 		// Do point collide on the shape
 		SubShapeIDCreator sub_shape_id(mSubShapeIDCreator);
@@ -79,7 +79,7 @@ void TransformedShape::CollidePoint(RVec3Arg inPoint, CollidePointCollector &ioC
 	}
 }
 
-void TransformedShape::CollideShape(const Shape *inShape, Vec3Arg inShapeScale, RMat44Arg inCenterOfMassTransform, const CollideShapeSettings &inCollideShapeSettings, RVec3Arg inBaseOffset, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void TransformedShape::CollideShape(const Shape *inShape, Vec4Arg inShapeScale, RMat44Arg inCenterOfMassTransform, const CollideShapeSettings &inCollideShapeSettings, RVec4Arg inBaseOffset, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	if (mShape != nullptr)
 	{
@@ -88,13 +88,13 @@ void TransformedShape::CollideShape(const Shape *inShape, Vec3Arg inShapeScale, 
 		inShapeFilter.mBodyID2 = mBodyID;
 
 		SubShapeIDCreator sub_shape_id1, sub_shape_id2(mSubShapeIDCreator);
-		Mat44 transform1 = inCenterOfMassTransform.PostTranslated(-inBaseOffset).ToMat44();
-		Mat44 transform2 = GetCenterOfMassTransform().PostTranslated(-inBaseOffset).ToMat44();
+		RMat44 transform1 = inCenterOfMassTransform.PostTranslated(-inBaseOffset);
+		RMat44 transform2 = GetCenterOfMassTransform().PostTranslated(-inBaseOffset);
 		CollisionDispatch::sCollideShapeVsShape(inShape, mShape, inShapeScale, GetShapeScale(), transform1, transform2, sub_shape_id1, sub_shape_id2, inCollideShapeSettings, ioCollector, inShapeFilter);
 	}
 }
 
-void TransformedShape::CastShape(const RShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, RVec3Arg inBaseOffset, CastShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void TransformedShape::CastShape(const RShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, RVec4Arg inBaseOffset, CastShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	if (mShape != nullptr)
 	{
@@ -102,11 +102,11 @@ void TransformedShape::CastShape(const RShapeCast &inShapeCast, const ShapeCastS
 		ioCollector.SetContext(this);
 		inShapeFilter.mBodyID2 = mBodyID;
 
-		// Get the shape cast relative to the base offset and convert it to floats
+		// Get the shape cast relative to the base offset and convert it to single precision
 		ShapeCast shape_cast(inShapeCast.PostTranslated(-inBaseOffset));
 
-		// Get center of mass of object we're casting against relative to the base offset and convert it to floats
-		Mat44 center_of_mass_transform2 = GetCenterOfMassTransform().PostTranslated(-inBaseOffset).ToMat44();
+		// Get center of mass of object we're casting against relative to the base offset
+		RMat44 center_of_mass_transform2 = GetCenterOfMassTransform().PostTranslated(-inBaseOffset);
 
 		SubShapeIDCreator sub_shape_id1, sub_shape_id2(mSubShapeIDCreator);
 		CollisionDispatch::sCastShapeVsShapeWorldSpace(shape_cast, inShapeCastSettings, mShape, GetShapeScale(), inShapeFilter, center_of_mass_transform2, sub_shape_id1, sub_shape_id2, ioCollector);
@@ -119,7 +119,7 @@ void TransformedShape::CollectTransformedShapes(const AABox &inBox, TransformedS
 	{
 		struct MyCollector : public TransformedShapeCollector
 		{
-										MyCollector(TransformedShapeCollector &ioCollector, RVec3 inShapePositionCOM) :
+										MyCollector(TransformedShapeCollector &ioCollector, RVec4Arg inShapePositionCOM) :
 				TransformedShapeCollector(ioCollector),
 				mCollector(ioCollector),
 				mShapePositionCOM(inShapePositionCOM)
@@ -140,7 +140,7 @@ void TransformedShape::CollectTransformedShapes(const AABox &inBox, TransformedS
 			}
 
 			TransformedShapeCollector &	mCollector;
-			RVec3						mShapePositionCOM;
+			RVec4						mShapePositionCOM;
 		};
 
 		// Set the context on the collector
@@ -153,11 +153,11 @@ void TransformedShape::CollectTransformedShapes(const AABox &inBox, TransformedS
 		AABox box = inBox;
 		box.Translate(-mShapePositionCOM);
 
-		mShape->CollectTransformedShapes(box, Vec3::sZero(), mShapeRotation, GetShapeScale(), mSubShapeIDCreator, collector, inShapeFilter);
+		mShape->CollectTransformedShapes(box, Vec4::sZero(), mShapeRotation, GetShapeScale(), mSubShapeIDCreator, collector, inShapeFilter);
 	}
 }
 
-void TransformedShape::GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, RVec3Arg inBaseOffset) const
+void TransformedShape::GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, RVec4Arg inBaseOffset) const
 {
 	if (mShape != nullptr)
 	{
@@ -165,11 +165,11 @@ void TransformedShape::GetTrianglesStart(GetTrianglesContext &ioContext, const A
 		AABox box = inBox;
 		box.Translate(-inBaseOffset);
 
-		mShape->GetTrianglesStart(ioContext, box, Vec3(mShapePositionCOM - inBaseOffset), mShapeRotation, GetShapeScale());
+		mShape->GetTrianglesStart(ioContext, box, Vec4(mShapePositionCOM - inBaseOffset), mShapeRotation, GetShapeScale());
 	}
 }
 
-int TransformedShape::GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float3 *outTriangleVertices, const PhysicsMaterial **outMaterials) const
+int TransformedShape::GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float4 *outTriangleVertices, const PhysicsMaterial **outMaterials) const
 {
 	if (mShape != nullptr)
 		return mShape->GetTrianglesNext(ioContext, inMaxTrianglesRequested, outTriangleVertices, outMaterials);

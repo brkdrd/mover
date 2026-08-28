@@ -12,7 +12,6 @@
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/CastResult.h>
-#include <Jolt/Physics/Collision/InternalEdgeRemovingCollector.h>
 
 JPH_NAMESPACE_BEGIN
 
@@ -301,12 +300,10 @@ void NarrowPhaseQuery::CollideShapeWithInternalEdgeRemoval(const Shape *inShape,
 	settings.mActiveEdgeMode = EActiveEdgeMode::CollideWithAll;
 	settings.mCollectFacesMode = ECollectFacesMode::CollectFaces;
 
-	InternalEdgeRemovingCollector wrapper(ioCollector, settings.mInternalEdgeRemovalVertexToleranceSq
-	#ifdef JPH_INTERNAL_EDGE_REMOVING_COLLECTOR_DEBUG
-		, inBaseOffset
-	#endif // JPH_INTERNAL_EDGE_REMOVING_COLLECTOR_DEBUG
-	);
-	CollideShape(inShape, inShapeScale, inCenterOfMassTransform, settings, inBaseOffset, wrapper, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter);
+	// TODO(4D): internal edge removal is a triangle-mesh adjacency concept and is cut for v1 along with
+	// the Mesh/HeightField/Triangle shapes (a 4D "mesh" is a tetrahedral boundary mesh, conceptual
+	// gap 3). Fall through to a plain CollideShape so the entry point keeps working.
+	CollideShape(inShape, inShapeScale, inCenterOfMassTransform, settings, inBaseOffset, ioCollector, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter);
 }
 
 void NarrowPhaseQuery::CastShape(const RShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, RVec3Arg inBaseOffset, CastShapeCollector &ioCollector, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter, const BodyFilter &inBodyFilter, const ShapeFilter &inShapeFilter) const

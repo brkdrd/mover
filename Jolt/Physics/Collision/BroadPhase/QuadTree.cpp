@@ -37,10 +37,12 @@ QuadTree::Node::Node(bool inIsChanged) :
 	val.StoreFloat4((Float4 *)&mBoundsMinX);
 	val.StoreFloat4((Float4 *)&mBoundsMinY);
 	val.StoreFloat4((Float4 *)&mBoundsMinZ);
+	val.StoreFloat4((Float4 *)&mBoundsMinW);
 	val = Vec4::sReplicate(-cLargeFloat);
 	val.StoreFloat4((Float4 *)&mBoundsMaxX);
 	val.StoreFloat4((Float4 *)&mBoundsMaxY);
 	val.StoreFloat4((Float4 *)&mBoundsMaxZ);
+	val.StoreFloat4((Float4 *)&mBoundsMaxW);
 
 	// Reset child node ids
 	mChildNodeID[0] = NodeID::sInvalid();
@@ -52,8 +54,8 @@ QuadTree::Node::Node(bool inIsChanged) :
 void QuadTree::Node::GetChildBounds(int inChildIndex, AABox &outBounds) const
 {
 	// Read bounding box in order min -> max
-	outBounds.mMin = Vec3(mBoundsMinX[inChildIndex], mBoundsMinY[inChildIndex], mBoundsMinZ[inChildIndex]);
-	outBounds.mMax = Vec3(mBoundsMaxX[inChildIndex], mBoundsMaxY[inChildIndex], mBoundsMaxZ[inChildIndex]);
+	outBounds.mMin = Vec4(mBoundsMinX[inChildIndex], mBoundsMinY[inChildIndex], mBoundsMinZ[inChildIndex], mBoundsMinW[inChildIndex]);
+	outBounds.mMax = Vec4(mBoundsMaxX[inChildIndex], mBoundsMaxY[inChildIndex], mBoundsMaxZ[inChildIndex], mBoundsMaxW[inChildIndex]);
 }
 
 void QuadTree::Node::SetChildBounds(int inChildIndex, const AABox &inBounds)
@@ -68,11 +70,13 @@ void QuadTree::Node::SetChildBounds(int inChildIndex, const AABox &inBounds)
 			   && inBounds.mMax.GetZ() >= -cLargeFloat && inBounds.mMax.GetZ() <= cLargeFloat);
 
 	// Set max first (this keeps the bounding box invalid for reading threads)
+	mBoundsMaxW[inChildIndex] = inBounds.mMax.GetW();
 	mBoundsMaxZ[inChildIndex] = inBounds.mMax.GetZ();
 	mBoundsMaxY[inChildIndex] = inBounds.mMax.GetY();
 	mBoundsMaxX[inChildIndex] = inBounds.mMax.GetX();
 
 	// Then set min (and make box valid)
+	mBoundsMinW[inChildIndex] = inBounds.mMin.GetW();
 	mBoundsMinZ[inChildIndex] = inBounds.mMin.GetZ();
 	mBoundsMinY[inChildIndex] = inBounds.mMin.GetY();
 	mBoundsMinX[inChildIndex] = inBounds.mMin.GetX(); // Min X becomes valid last
@@ -84,11 +88,13 @@ void QuadTree::Node::InvalidateChildBounds(int inChildIndex)
 	mBoundsMinX[inChildIndex] = cLargeFloat; // Min X becomes invalid first
 	mBoundsMinY[inChildIndex] = cLargeFloat;
 	mBoundsMinZ[inChildIndex] = cLargeFloat;
+	mBoundsMinW[inChildIndex] = cLargeFloat;
 
 	// Then we reset the max values too
 	mBoundsMaxX[inChildIndex] = -cLargeFloat;
 	mBoundsMaxY[inChildIndex] = -cLargeFloat;
 	mBoundsMaxZ[inChildIndex] = -cLargeFloat;
+	mBoundsMaxW[inChildIndex] = -cLargeFloat;
 }
 
 void QuadTree::Node::GetNodeBounds(AABox &outBounds) const
@@ -110,9 +116,11 @@ bool QuadTree::Node::EncapsulateChildBounds(int inChildIndex, const AABox &inBou
 	bool changed = AtomicMin(mBoundsMinX[inChildIndex], inBounds.mMin.GetX());
 	changed |= AtomicMin(mBoundsMinY[inChildIndex], inBounds.mMin.GetY());
 	changed |= AtomicMin(mBoundsMinZ[inChildIndex], inBounds.mMin.GetZ());
+	changed |= AtomicMin(mBoundsMinW[inChildIndex], inBounds.mMin.GetW());
 	changed |= AtomicMax(mBoundsMaxX[inChildIndex], inBounds.mMax.GetX());
 	changed |= AtomicMax(mBoundsMaxY[inChildIndex], inBounds.mMax.GetY());
 	changed |= AtomicMax(mBoundsMaxZ[inChildIndex], inBounds.mMax.GetZ());
+	changed |= AtomicMax(mBoundsMaxW[inChildIndex], inBounds.mMax.GetW());
 	return changed;
 }
 
@@ -120,7 +128,7 @@ bool QuadTree::Node::EncapsulateChildBounds(int inChildIndex, const AABox &inBou
 // QuadTree
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-const AABox QuadTree::cInvalidBounds(Vec3::sReplicate(cLargeFloat), Vec3::sReplicate(-cLargeFloat));
+const AABox QuadTree::cInvalidBounds(Vec4::sReplicate(cLargeFloat), Vec4::sReplicate(-cLargeFloat));
 
 static inline void sQuadTreePerformanceWarning()
 {
@@ -418,7 +426,7 @@ void QuadTree::UpdateFinalize([[maybe_unused]] const BodyVector &inBodies, [[may
 #endif
 }
 
-void QuadTree::sPartition(NodeID *ioNodeIDs, Vec3 *ioNodeCenters, int inNumber, int &outMidPoint)
+void QuadTree::sPartition(NodeID *ioNodeIDs, Vec4 *ioNodeCenters, int inNumber, int &outMidPoint)
 {
 	// Handle trivial case
 	if (inNumber <= 4)
@@ -428,13 +436,13 @@ void QuadTree::sPartition(NodeID *ioNodeIDs, Vec3 *ioNodeCenters, int inNumber, 
 	}
 
 	// Calculate bounding box of box centers
-	Vec3 center_min = Vec3::sReplicate(cLargeFloat);
-	Vec3 center_max = Vec3::sReplicate(-cLargeFloat);
-	for (const Vec3 *c = ioNodeCenters, *c_end = ioNodeCenters + inNumber; c < c_end; ++c)
+	Vec4 center_min = Vec4::sReplicate(cLargeFloat);
+	Vec4 center_max = Vec4::sReplicate(-cLargeFloat);
+	for (const Vec4 *c = ioNodeCenters, *c_end = ioNodeCenters + inNumber; c < c_end; ++c)
 	{
-		Vec3 center = *c;
-		center_min = Vec3::sMin(center_min, center);
-		center_max = Vec3::sMax(center_max, center);
+		Vec4 center = *c;
+		center_min = Vec4::sMin(center_min, center);
+		center_max = Vec4::sMax(center_max, center);
 	}
 
 	// Calculate split plane
@@ -476,10 +484,10 @@ void QuadTree::sPartition(NodeID *ioNodeIDs, Vec3 *ioNodeCenters, int inNumber, 
 	}
 }
 
-void QuadTree::sPartition4(NodeID *ioNodeIDs, Vec3 *ioNodeCenters, int inBegin, int inEnd, int *outSplit)
+void QuadTree::sPartition4(NodeID *ioNodeIDs, Vec4 *ioNodeCenters, int inBegin, int inEnd, int *outSplit)
 {
 	NodeID *node_ids = ioNodeIDs + inBegin;
-	Vec3 *node_centers = ioNodeCenters + inBegin;
+	Vec4 *node_centers = ioNodeCenters + inBegin;
 	int number = inEnd - inBegin;
 
 	// Partition entire range
@@ -541,9 +549,9 @@ QuadTree::NodeID QuadTree::BuildTree(const BodyVector &inBodies, TrackingVector 
 	}
 
 	// Calculate centers of all bodies that are to be inserted
-	Vec3 *centers = new Vec3 [inNumber];
+	Vec4 *centers = new Vec4 [inNumber];
 	JPH_ASSERT(IsAligned(centers, JPH_VECTOR_ALIGNMENT));
-	Vec3 *c = centers;
+	Vec4 *c = centers;
 	for (const NodeID *n = ioNodeIDs, *n_end = ioNodeIDs + inNumber; n < n_end; ++n, ++c)
 		*c = GetNodeOrBodyBounds(inBodies, *n).GetCenter();
 
@@ -554,8 +562,8 @@ QuadTree::NodeID QuadTree::BuildTree(const BodyVector &inBodies, TrackingVector 
 		int				mChildIdx;					// Index of child that we're currently processing
 		int				mSplit[5];					// Indices where the node ID's have been split to form 4 partitions
 		uint32			mDepth;						// Depth of this node in the tree
-		Vec3			mNodeBoundsMin;				// Bounding box of this node, accumulated while iterating over children
-		Vec3			mNodeBoundsMax;
+		Vec4			mNodeBoundsMin;				// Bounding box of this node, accumulated while iterating over children
+		Vec4			mNodeBoundsMax;
 	};
 	static_assert(sizeof(StackEntry) == 64);
 	StackEntry stack[cStackSize / 4]; // We don't process 4 at a time in this loop but 1, so the stack can be 4x as small
@@ -565,8 +573,8 @@ QuadTree::NodeID QuadTree::BuildTree(const BodyVector &inBodies, TrackingVector 
 	stack[0].mNodeIdx = AllocateNode(inMaxDepthMarkChanged > 0);
 	stack[0].mChildIdx = -1;
 	stack[0].mDepth = 0;
-	stack[0].mNodeBoundsMin = Vec3::sReplicate(cLargeFloat);
-	stack[0].mNodeBoundsMax = Vec3::sReplicate(-cLargeFloat);
+	stack[0].mNodeBoundsMin = Vec4::sReplicate(cLargeFloat);
+	stack[0].mNodeBoundsMax = Vec4::sReplicate(-cLargeFloat);
 	sPartition4(ioNodeIDs, centers, 0, inNumber, stack[0].mSplit);
 
 	for (;;)
@@ -585,8 +593,8 @@ QuadTree::NodeID QuadTree::BuildTree(const BodyVector &inBodies, TrackingVector 
 
 			// Add our bounds to our parents bounds
 			StackEntry &prev_stack = stack[top - 1];
-			prev_stack.mNodeBoundsMin = Vec3::sMin(prev_stack.mNodeBoundsMin, cur_stack.mNodeBoundsMin);
-			prev_stack.mNodeBoundsMax = Vec3::sMax(prev_stack.mNodeBoundsMax, cur_stack.mNodeBoundsMax);
+			prev_stack.mNodeBoundsMin = Vec4::sMin(prev_stack.mNodeBoundsMin, cur_stack.mNodeBoundsMin);
+			prev_stack.mNodeBoundsMax = Vec4::sMax(prev_stack.mNodeBoundsMax, cur_stack.mNodeBoundsMax);
 
 			// Store parent node
 			Node &node = mAllocator->Get(cur_stack.mNodeIdx);
@@ -631,8 +639,8 @@ QuadTree::NodeID QuadTree::BuildTree(const BodyVector &inBodies, TrackingVector 
 				}
 
 				// Encapsulate bounding box in parent
-				cur_stack.mNodeBoundsMin = Vec3::sMin(cur_stack.mNodeBoundsMin, bounds.mMin);
-				cur_stack.mNodeBoundsMax = Vec3::sMax(cur_stack.mNodeBoundsMax, bounds.mMax);
+				cur_stack.mNodeBoundsMin = Vec4::sMin(cur_stack.mNodeBoundsMin, bounds.mMin);
+				cur_stack.mNodeBoundsMax = Vec4::sMax(cur_stack.mNodeBoundsMax, bounds.mMax);
 			}
 			else if (num_bodies > 1)
 			{
@@ -643,8 +651,8 @@ QuadTree::NodeID QuadTree::BuildTree(const BodyVector &inBodies, TrackingVector 
 				new_stack.mNodeIdx = AllocateNode(inMaxDepthMarkChanged > next_depth);
 				new_stack.mChildIdx = -1;
 				new_stack.mDepth = next_depth;
-				new_stack.mNodeBoundsMin = Vec3::sReplicate(cLargeFloat);
-				new_stack.mNodeBoundsMax = Vec3::sReplicate(-cLargeFloat);
+				new_stack.mNodeBoundsMin = Vec4::sReplicate(cLargeFloat);
+				new_stack.mNodeBoundsMax = Vec4::sReplicate(-cLargeFloat);
 				sPartition4(ioNodeIDs, centers, low, high, new_stack.mSplit);
 			}
 		}
@@ -774,7 +782,7 @@ bool QuadTree::TryCreateNewRoot(TrackingVector &ioTracking, atomic<uint32> &ioRo
 
 	// First child is current root, note that since the tree may be modified concurrently we cannot assume that the bounds of our child will be correct so we set a very large bounding box
 	new_root.mChildNodeID[0] = NodeID::sFromNodeIndex(root_idx);
-	new_root.SetChildBounds(0, AABox(Vec3::sReplicate(-cLargeFloat), Vec3::sReplicate(cLargeFloat)));
+	new_root.SetChildBounds(0, AABox(Vec4::sReplicate(-cLargeFloat), Vec4::sReplicate(cLargeFloat)));
 
 	// Second child is new leaf
 	new_root.mChildNodeID[1] = inLeafID;
@@ -1040,15 +1048,17 @@ JPH_INLINE void QuadTree::WalkTree(const ObjectLayerFilter &inObjectLayerFilter,
 			Vec4 bounds_minx = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMinX);
 			Vec4 bounds_miny = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMinY);
 			Vec4 bounds_minz = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMinZ);
+			Vec4 bounds_minw = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMinW);
 			Vec4 bounds_maxx = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMaxX);
 			Vec4 bounds_maxy = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMaxY);
 			Vec4 bounds_maxz = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMaxZ);
+			Vec4 bounds_maxw = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMaxW);
 
 			// Load ids for 4 children
 			UVec4 child_ids = UVec4::sLoadInt4Aligned((const uint32 *)&node.mChildNodeID[0]);
 
 			// Check which sub nodes to visit
-			int num_results = ioVisitor.VisitNodes(bounds_minx, bounds_miny, bounds_minz, bounds_maxx, bounds_maxy, bounds_maxz, child_ids, top);
+			int num_results = ioVisitor.VisitNodes(bounds_minx, bounds_miny, bounds_minz, bounds_minw, bounds_maxx, bounds_maxy, bounds_maxz, bounds_maxw, child_ids, top);
 			child_ids.StoreInt4((uint32 *)&node_stack[top]);
 			top += num_results;
 		}
@@ -1106,10 +1116,10 @@ void QuadTree::CastRay(const RayCast &inRay, RayCastBodyCollector &ioCollector, 
 		}
 
 		/// Visit nodes, returns number of hits found and sorts ioChildNodeIDs so that they are at the beginning of the vector.
-		JPH_INLINE int			VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioChildNodeIDs, int inStackTop)
+		JPH_INLINE int			VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioChildNodeIDs, int inStackTop)
 		{
 			// Test the ray against 4 bounding boxes
-			Vec4 fraction = RayAABox4(mOrigin, mInvDirection, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			Vec4 fraction = RayAABox4(mOrigin, mInvDirection, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 
 			// Sort so that highest values are first (we want to first process closer hits and we process stack top to bottom)
 			return SortReverseAndStore(fraction, mCollector.GetEarlyOutFraction(), ioChildNodeIDs, &mFractionStack[inStackTop]);
@@ -1130,7 +1140,7 @@ void QuadTree::CastRay(const RayCast &inRay, RayCastBodyCollector &ioCollector, 
 		}
 
 	private:
-		Vec3					mOrigin;
+		Vec4					mOrigin;
 		RayInvDirection			mInvDirection;
 		RayCastBodyCollector &	mCollector;
 		Array<float, STLLocalAllocator<float, cStackSize>> mFractionStack;
@@ -1165,10 +1175,10 @@ void QuadTree::CollideAABox(const AABox &inBox, CollideShapeBodyCollector &ioCol
 		}
 
 		/// Visit nodes, returns number of hits found and sorts ioChildNodeIDs so that they are at the beginning of the vector.
-		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioChildNodeIDs, int inStackTop) const
+		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioChildNodeIDs, int inStackTop) const
 		{
 			// Test the box vs 4 boxes
-			UVec4 hitting = AABox4VsBox(mBox, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			UVec4 hitting = AABox4VsBox(mBox, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 			return CountAndSortTrues(hitting, ioChildNodeIDs);
 		}
 
@@ -1194,16 +1204,17 @@ void QuadTree::CollideAABox(const AABox &inBox, CollideShapeBodyCollector &ioCol
 	WalkTree(inObjectLayerFilter, inTracking, visitor JPH_IF_TRACK_BROADPHASE_STATS(, mCollideAABoxStats));
 }
 
-void QuadTree::CollideSphere(Vec3Arg inCenter, float inRadius, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const
+void QuadTree::CollideSphere(Vec4Arg inCenter, float inRadius, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const
 {
 	class Visitor
 	{
 	public:
 		/// Constructor
-		JPH_INLINE					Visitor(Vec3Arg inCenter, float inRadius, CollideShapeBodyCollector &ioCollector) :
+		JPH_INLINE					Visitor(Vec4Arg inCenter, float inRadius, CollideShapeBodyCollector &ioCollector) :
 			mCenterX(inCenter.SplatX()),
 			mCenterY(inCenter.SplatY()),
 			mCenterZ(inCenter.SplatZ()),
+			mCenterW(inCenter.SplatW()),
 			mRadiusSq(Vec4::sReplicate(Square(inRadius))),
 			mCollector(ioCollector)
 		{
@@ -1222,10 +1233,10 @@ void QuadTree::CollideSphere(Vec3Arg inCenter, float inRadius, CollideShapeBodyC
 		}
 
 		/// Visit nodes, returns number of hits found and sorts ioChildNodeIDs so that they are at the beginning of the vector.
-		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioChildNodeIDs, int inStackTop) const
+		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioChildNodeIDs, int inStackTop) const
 		{
 			// Test 4 boxes vs sphere
-			UVec4 hitting = AABox4VsSphere(mCenterX, mCenterY, mCenterZ, mRadiusSq, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			UVec4 hitting = AABox4VsSphere(mCenterX, mCenterY, mCenterZ, mCenterW, mRadiusSq, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 			return CountAndSortTrues(hitting, ioChildNodeIDs);
 		}
 
@@ -1246,6 +1257,7 @@ private:
 		Vec4						mCenterX;
 		Vec4						mCenterY;
 		Vec4						mCenterZ;
+		Vec4						mCenterW;
 		Vec4						mRadiusSq;
 		CollideShapeBodyCollector &	mCollector;
 	};
@@ -1254,13 +1266,13 @@ private:
 	WalkTree(inObjectLayerFilter, inTracking, visitor JPH_IF_TRACK_BROADPHASE_STATS(, mCollideSphereStats));
 }
 
-void QuadTree::CollidePoint(Vec3Arg inPoint, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const
+void QuadTree::CollidePoint(Vec4Arg inPoint, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const
 {
 	class Visitor
 	{
 	public:
 		/// Constructor
-		JPH_INLINE					Visitor(Vec3Arg inPoint, CollideShapeBodyCollector &ioCollector) :
+		JPH_INLINE					Visitor(Vec4Arg inPoint, CollideShapeBodyCollector &ioCollector) :
 			mPoint(inPoint),
 			mCollector(ioCollector)
 		{
@@ -1279,10 +1291,10 @@ void QuadTree::CollidePoint(Vec3Arg inPoint, CollideShapeBodyCollector &ioCollec
 		}
 
 		/// Visit nodes, returns number of hits found and sorts ioChildNodeIDs so that they are at the beginning of the vector.
-		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioChildNodeIDs, int inStackTop) const
+		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioChildNodeIDs, int inStackTop) const
 		{
 			// Test if point overlaps with box
-			UVec4 hitting = AABox4VsPoint(mPoint, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			UVec4 hitting = AABox4VsPoint(mPoint, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 			return CountAndSortTrues(hitting, ioChildNodeIDs);
 		}
 
@@ -1300,7 +1312,7 @@ void QuadTree::CollidePoint(Vec3Arg inPoint, CollideShapeBodyCollector &ioCollec
 		}
 
 	private:
-		Vec3						mPoint;
+		Vec4						mPoint;
 		CollideShapeBodyCollector &	mCollector;
 	};
 
@@ -1333,10 +1345,10 @@ void QuadTree::CollideOrientedBox(const OrientedBox &inBox, CollideShapeBodyColl
 		}
 
 		/// Visit nodes, returns number of hits found and sorts ioChildNodeIDs so that they are at the beginning of the vector.
-		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioChildNodeIDs, int inStackTop) const
+		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioChildNodeIDs, int inStackTop) const
 		{
 			// Test if point overlaps with box
-			UVec4 hitting = AABox4VsBox(mBox, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			UVec4 hitting = AABox4VsBox(mBox, inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 			return CountAndSortTrues(hitting, ioChildNodeIDs);
 		}
 
@@ -1391,14 +1403,14 @@ void QuadTree::CastAABox(const AABoxCast &inBox, CastShapeBodyCollector &ioColle
 		}
 
 		/// Visit nodes, returns number of hits found and sorts ioChildNodeIDs so that they are at the beginning of the vector.
-		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioChildNodeIDs, int inStackTop)
+		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioChildNodeIDs, int inStackTop)
 		{
 			// Enlarge them by the casted aabox extents
-			Vec4 bounds_min_x = inBoundsMinX, bounds_min_y = inBoundsMinY, bounds_min_z = inBoundsMinZ, bounds_max_x = inBoundsMaxX, bounds_max_y = inBoundsMaxY, bounds_max_z = inBoundsMaxZ;
-			AABox4EnlargeWithExtent(mExtent, bounds_min_x, bounds_min_y, bounds_min_z, bounds_max_x, bounds_max_y, bounds_max_z);
+			Vec4 bounds_min_x = inBoundsMinX, bounds_min_y = inBoundsMinY, bounds_min_z = inBoundsMinZ, bounds_min_w = inBoundsMinW, bounds_max_x = inBoundsMaxX, bounds_max_y = inBoundsMaxY, bounds_max_z = inBoundsMaxZ, bounds_max_w = inBoundsMaxW;
+			AABox4EnlargeWithExtent(mExtent, bounds_min_x, bounds_min_y, bounds_min_z, bounds_min_w, bounds_max_x, bounds_max_y, bounds_max_z, bounds_max_w);
 
 			// Test 4 children
-			Vec4 fraction = RayAABox4(mOrigin, mInvDirection, bounds_min_x, bounds_min_y, bounds_min_z, bounds_max_x, bounds_max_y, bounds_max_z);
+			Vec4 fraction = RayAABox4(mOrigin, mInvDirection, bounds_min_x, bounds_min_y, bounds_min_z, bounds_min_w, bounds_max_x, bounds_max_y, bounds_max_z, bounds_max_w);
 
 			// Sort so that highest values are first (we want to first process closer hits and we process stack top to bottom)
 			return SortReverseAndStore(fraction, mCollector.GetPositiveEarlyOutFraction(), ioChildNodeIDs, &mFractionStack[inStackTop]);
@@ -1419,8 +1431,8 @@ void QuadTree::CastAABox(const AABoxCast &inBox, CastShapeBodyCollector &ioColle
 		}
 
 	private:
-		Vec3						mOrigin;
-		Vec3						mExtent;
+		Vec4						mOrigin;
+		Vec4						mExtent;
 		RayInvDirection				mInvDirection;
 		CastShapeBodyCollector &	mCollector;
 		Array<float, STLLocalAllocator<float, cStackSize>> mFractionStack;
@@ -1458,7 +1470,7 @@ void QuadTree::FindCollidingPairs(const BodyVector &inBodies, const BodyID *inAc
 
 		// Expand the bounding box by the speculative contact distance
 		AABox bounds1 = body1.GetWorldSpaceBounds();
-		bounds1.ExpandBy(Vec3::sReplicate(inSpeculativeContactDistance));
+		bounds1.ExpandBy(Vec4::sReplicate(inSpeculativeContactDistance));
 
 		// Test each body with the tree
 		node_stack[0] = root_node.GetNodeID();
@@ -1494,12 +1506,14 @@ void QuadTree::FindCollidingPairs(const BodyVector &inBodies, const BodyID *inAc
 				Vec4 bounds_minx = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMinX);
 				Vec4 bounds_miny = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMinY);
 				Vec4 bounds_minz = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMinZ);
+			Vec4 bounds_minw = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMinW);
 				Vec4 bounds_maxx = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMaxX);
 				Vec4 bounds_maxy = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMaxY);
 				Vec4 bounds_maxz = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMaxZ);
+			Vec4 bounds_maxw = Vec4::sLoadFloat4Aligned((const Float4 *)&node.mBoundsMaxW);
 
 				// Test overlap
-				UVec4 overlap = AABox4VsBox(bounds1, bounds_minx, bounds_miny, bounds_minz, bounds_maxx, bounds_maxy, bounds_maxz);
+				UVec4 overlap = AABox4VsBox(bounds1, bounds_minx, bounds_miny, bounds_minz, bounds_minw, bounds_maxx, bounds_maxy, bounds_maxz, bounds_maxw);
 				int num_results = overlap.CountTrues();
 				if (num_results > 0)
 				{

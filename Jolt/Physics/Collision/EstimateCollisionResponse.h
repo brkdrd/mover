@@ -11,19 +11,22 @@ JPH_NAMESPACE_BEGIN
 /// A structure that contains the estimated contact and friction impulses and the resulting body velocities
 struct CollisionEstimationResult
 {
-	Vec3			mLinearVelocity1;				///< The estimated linear velocity of body 1 after collision
-	Vec3			mAngularVelocity1;				///< The estimated angular velocity of body 1 after collision
-	Vec3			mLinearVelocity2;				///< The estimated linear velocity of body 2 after collision
-	Vec3			mAngularVelocity2;				///< The estimated angular velocity of body 2 after collision
+	Vec4			mLinearVelocity1;				///< The estimated linear velocity of body 1 after collision
+	Bivec			mAngularVelocity1;				///< The estimated angular velocity of body 1 after collision
+	Vec4			mLinearVelocity2;				///< The estimated linear velocity of body 2 after collision
+	Bivec			mAngularVelocity2;				///< The estimated angular velocity of body 2 after collision
 
-	Vec3			mTangent1;						///< Normalized tangent of contact normal
-	Vec3			mTangent2;						///< Second normalized tangent of contact normal (forms a basis with mTangent1 and mWorldSpaceNormal)
+	/// TODO(4D): the tangent space of a 4D contact is 3 dimensional, so there are 3 friction directions
+	Vec4			mTangent1;						///< Normalized tangent of contact normal
+	Vec4			mTangent2;						///< Second normalized tangent of contact normal
+	Vec4			mTangent3;						///< Third normalized tangent (the three tangents plus the normal form a basis of R^4)
 
 	struct Impulse
 	{
 		float		mContactImpulse;				///< Estimated contact impulses (kg m / s)
 		float		mFrictionImpulse1;				///< Estimated friction impulses in the direction of tangent 1 (kg m / s)
 		float		mFrictionImpulse2;				///< Estimated friction impulses in the direction of tangent 2 (kg m / s)
+		float		mFrictionImpulse3;				///< Estimated friction impulses in the direction of tangent 3 (kg m / s)
 	};
 
 	using Impulses = StaticArray<Impulse, ContactPoints::Capacity>;

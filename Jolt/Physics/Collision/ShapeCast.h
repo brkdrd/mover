@@ -10,14 +10,14 @@
 
 JPH_NAMESPACE_BEGIN
 
-/// Structure that holds a single shape cast (a shape moving along a linear path in 3d space with no rotation)
+/// Structure that holds a single shape cast (a shape moving along a linear 4D path with no rotation)
 template <class Vec, class Mat, class ShapeCastType>
 struct ShapeCastT
 {
 	JPH_OVERRIDE_NEW_DELETE
 
 	/// Constructor
-								ShapeCastT(const Shape *inShape, Vec3Arg inScale, typename Mat::ArgType inCenterOfMassStart, Vec3Arg inDirection, const AABox &inWorldSpaceBounds) :
+								ShapeCastT(const Shape *inShape, Vec4Arg inScale, typename Mat::ArgType inCenterOfMassStart, Vec4Arg inDirection, const AABox &inWorldSpaceBounds) :
 		mShape(inShape),
 		mScale(inScale),
 		mCenterOfMassStart(inCenterOfMassStart),
@@ -27,22 +27,22 @@ struct ShapeCastT
 	}
 
 	/// Constructor
-								ShapeCastT(const Shape *inShape, Vec3Arg inScale, typename Mat::ArgType inCenterOfMassStart, Vec3Arg inDirection) :
+								ShapeCastT(const Shape *inShape, Vec4Arg inScale, typename Mat::ArgType inCenterOfMassStart, Vec4Arg inDirection) :
 		ShapeCastT<Vec, Mat, ShapeCastType>(inShape, inScale, inCenterOfMassStart, inDirection, inShape->GetWorldSpaceBounds(inCenterOfMassStart, inScale))
 	{
 	}
 
 	/// Construct a shape cast using a world transform for a shape instead of a center of mass transform
-	static inline ShapeCastType	sFromWorldTransform(const Shape *inShape, Vec3Arg inScale, typename Mat::ArgType inWorldTransform, Vec3Arg inDirection)
+	static inline ShapeCastType	sFromWorldTransform(const Shape *inShape, Vec4Arg inScale, typename Mat::ArgType inWorldTransform, Vec4Arg inDirection)
 	{
 		return ShapeCastType(inShape, inScale, inWorldTransform.PreTranslated(inShape->GetCenterOfMass()), inDirection);
 	}
 
-	/// Transform this shape cast using inTransform. Multiply transform on the left left hand side.
+	/// Transform this shape cast using inTransform. Multiply transform on the left hand side.
 	ShapeCastType				PostTransformed(typename Mat::ArgType inTransform) const
 	{
-		Mat44 start = inTransform * mCenterOfMassStart;
-		Vec3 direction = inTransform.Multiply3x3(mDirection);
+		Mat start = inTransform * mCenterOfMassStart;
+		Vec4 direction = inTransform.Multiply3x3(mDirection);
 		return { mShape, mScale, start, direction };
 	}
 
@@ -59,31 +59,31 @@ struct ShapeCastT
 	}
 
 	const Shape *				mShape;								///< Shape that's being cast (cannot be mesh shape). Note that this structure does not assume ownership over the shape for performance reasons.
-	const Vec3					mScale;								///< Scale in local space of the shape being cast (scales relative to its center of mass)
+	const Vec4					mScale;								///< Scale in local space of the shape being cast (scales relative to its center of mass, 4D)
 	const Mat					mCenterOfMassStart;					///< Start position and orientation of the center of mass of the shape (construct using sFromWorldTransform if you have a world transform for your shape)
-	const Vec3					mDirection;							///< Direction and length of the cast (anything beyond this length will not be reported as a hit)
+	const Vec4					mDirection;							///< Direction and length of the cast (4D, anything beyond this length will not be reported as a hit)
 	const AABox					mShapeWorldBounds;					///< Cached shape's world bounds, calculated in constructor
 };
 
-struct ShapeCast : public ShapeCastT<Vec3, Mat44, ShapeCast>
+struct ShapeCast : public ShapeCastT<Vec4, RMat44, ShapeCast>
 {
-	using ShapeCastT<Vec3, Mat44, ShapeCast>::ShapeCastT;
+	using ShapeCastT<Vec4, RMat44, ShapeCast>::ShapeCastT;
 };
 
-struct RShapeCast : public ShapeCastT<RVec3, RMat44, RShapeCast>
+struct RShapeCast : public ShapeCastT<RVec4, RMat44, RShapeCast>
 {
-	using ShapeCastT<RVec3, RMat44, RShapeCast>::ShapeCastT;
+	using ShapeCastT<RVec4, RMat44, RShapeCast>::ShapeCastT;
 
-	/// Convert from ShapeCast, converts single to double precision
+	/// Convert from ShapeCast, converts single to double precision (no-op in single-precision mode)
 	explicit					RShapeCast(const ShapeCast &inCast) :
-		RShapeCast(inCast.mShape, inCast.mScale, RMat44(inCast.mCenterOfMassStart), inCast.mDirection, inCast.mShapeWorldBounds)
+		RShapeCast(inCast.mShape, inCast.mScale, inCast.mCenterOfMassStart, inCast.mDirection, inCast.mShapeWorldBounds)
 	{
 	}
 
 	/// Convert to ShapeCast, which implies casting from double precision to single precision
 	explicit					operator ShapeCast() const
 	{
-		return ShapeCast(mShape, mScale, mCenterOfMassStart.ToMat44(), mDirection, mShapeWorldBounds);
+		return ShapeCast(mShape, mScale, mCenterOfMassStart, Vec4(mDirection), mShapeWorldBounds);
 	}
 };
 
@@ -127,7 +127,7 @@ public:
 	/// @param inSubShapeID1 Sub shape id for shape 1
 	/// @param inSubShapeID2 Sub shape id for shape 2
 	/// @param inBodyID2 BodyID that was hit
-								ShapeCastResult(float inFraction, Vec3Arg inContactPoint1, Vec3Arg inContactPoint2, Vec3Arg inContactNormalOrPenetrationDepth, bool inBackFaceHit, const SubShapeID &inSubShapeID1, const SubShapeID &inSubShapeID2, const BodyID &inBodyID2) :
+								ShapeCastResult(float inFraction, Vec4Arg inContactPoint1, Vec4Arg inContactPoint2, Vec4Arg inContactNormalOrPenetrationDepth, bool inBackFaceHit, const SubShapeID &inSubShapeID1, const SubShapeID &inSubShapeID2, const BodyID &inBodyID2) :
 		CollideShapeResult(inContactPoint1, inContactPoint2, inContactNormalOrPenetrationDepth, (inContactPoint2 - inContactPoint1).Length(), inSubShapeID1, inSubShapeID2, inBodyID2),
 		mFraction(inFraction),
 		mIsBackFaceHit(inBackFaceHit)
@@ -138,11 +138,11 @@ public:
 	inline float				GetEarlyOutFraction() const			{ return mFraction > 0.0f? mFraction : -mPenetrationDepth; }
 
 	/// Reverses the hit result, swapping contact point 1 with contact point 2 etc.
-	/// @param inWorldSpaceCastDirection Direction of the shape cast in world space
-	ShapeCastResult				Reversed(Vec3Arg inWorldSpaceCastDirection) const
+	/// @param inWorldSpaceCastDirection Direction of the shape cast in world space (4D)
+	ShapeCastResult				Reversed(Vec4Arg inWorldSpaceCastDirection) const
 	{
 		// Calculate by how much to shift the contact points
-		Vec3 delta = mFraction * inWorldSpaceCastDirection;
+		Vec4 delta = mFraction * inWorldSpaceCastDirection;
 
 		ShapeCastResult result;
 		result.mContactPointOn2 = mContactPointOn1 - delta;

@@ -116,12 +116,16 @@ private:
 		bool					EncapsulateChildBounds(int inChildIndex, const AABox &inBounds);
 
 		/// Bounding box for child nodes or bodies (all initially set to invalid so no collision test will ever traverse to the leaf)
+		/// TODO(4D): a W axis is threaded through alongside XYZ (the tree still has 4 children per node
+		/// - that is the branching factor, unrelated to the spatial dimension).
 		atomic<float>			mBoundsMinX[4];
 		atomic<float>			mBoundsMinY[4];
 		atomic<float>			mBoundsMinZ[4];
+		atomic<float>			mBoundsMinW[4];
 		atomic<float>			mBoundsMaxX[4];
 		atomic<float>			mBoundsMaxY[4];
 		atomic<float>			mBoundsMaxZ[4];
+		atomic<float>			mBoundsMaxW[4];
 
 		/// Index of child node or body ID.
 		AtomicNodeID			mChildNodeID[4];
@@ -149,7 +153,8 @@ public:
 	/// Class that allocates tree nodes, can be shared between multiple trees
 	using Allocator = FixedSizeFreeList<Node>;
 
-	static_assert(Allocator::ObjectStorageSize == 128, "Node should be 128 bytes");
+	// TODO(4D): 128 in 3D; the W axis min/max arrays add 32 bytes
+	static_assert(Allocator::ObjectStorageSize == 160, "Node should be 160 bytes");
 
 	/// Data to track location of a Body in the tree
 	struct Tracking
@@ -237,10 +242,10 @@ public:
 	void						CollideAABox(const AABox &inBox, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const;
 
 	/// Get bodies intersecting with a sphere in ioCollector
-	void						CollideSphere(Vec3Arg inCenter, float inRadius, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const;
+	void						CollideSphere(Vec4Arg inCenter, float inRadius, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const;
 
 	/// Get bodies intersecting with a point and any hits to ioCollector
-	void						CollidePoint(Vec3Arg inPoint, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const;
+	void						CollidePoint(Vec4Arg inPoint, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const;
 
 	/// Get bodies intersecting with an oriented box and any hits to ioCollector
 	void						CollideOrientedBox(const OrientedBox &inBox, CollideShapeBodyCollector &ioCollector, const ObjectLayerFilter &inObjectLayerFilter, const TrackingVector &inTracking) const;
@@ -306,12 +311,12 @@ private:
 
 	/// Sorts ioNodeIDs spatially into 2 groups. Second groups starts at ioNodeIDs + outMidPoint.
 	/// After the function returns ioNodeIDs and ioNodeCenters will be shuffled
-	static void					sPartition(NodeID *ioNodeIDs, Vec3 *ioNodeCenters, int inNumber, int &outMidPoint);
+	static void					sPartition(NodeID *ioNodeIDs, Vec4 *ioNodeCenters, int inNumber, int &outMidPoint);
 
 	/// Sorts ioNodeIDs from inBegin to (but excluding) inEnd spatially into 4 groups.
 	/// outSplit needs to be 5 ints long, when the function returns each group runs from outSplit[i] to (but excluding) outSplit[i + 1]
 	/// After the function returns ioNodeIDs and ioNodeCenters will be shuffled
-	static void					sPartition4(NodeID *ioNodeIDs, Vec3 *ioNodeCenters, int inBegin, int inEnd, int *outSplit);
+	static void					sPartition4(NodeID *ioNodeIDs, Vec4 *ioNodeCenters, int inBegin, int inEnd, int *outSplit);
 
 #ifdef JPH_DEBUG
 	/// Validate that the tree is consistent.

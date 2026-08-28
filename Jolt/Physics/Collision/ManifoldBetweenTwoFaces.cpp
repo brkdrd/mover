@@ -6,17 +6,33 @@
 
 #include <Jolt/Physics/Collision/ManifoldBetweenTwoFaces.h>
 #include <Jolt/Physics/Constraints/ContactConstraintManager.h>
-#include <Jolt/Geometry/ClipPoly.h>
-#ifdef JPH_DEBUG_RENDERER
-	#include <Jolt/Renderer/DebugRenderer.h>
-#endif // JPH_DEBUG_RENDERER
 
 JPH_NAMESPACE_BEGIN
 
-void PruneContactPoints(Vec3Arg inPenetrationAxis, ContactPoints &ioContactPointsOn1, ContactPoints &ioContactPointsOn2 JPH_IF_DEBUG_RENDERER(, RVec3Arg inCenterOfMass))
+/// Build an orthonormal basis {outDirA, outDirB} of the 2D subspace that is perpendicular to both the
+/// contact normal and inEdge, i.e. what is left of the 3D contact hyperplane after the dominant axis
+/// of the patch has been taken out. Deterministic for a given input.
+static void sGetRemainingHyperplaneBasis(Vec4Arg inNormal, Vec4Arg inEdge, Vec4 &outDirA, Vec4 &outDirB)
 {
-	// Makes no sense to call this with 4 or less points
-	JPH_ASSERT(ioContactPointsOn1.size() > 4);
+	// Pick the coordinate axis least aligned with the two directions we already have so the
+	// generalized cross product below is well conditioned
+	Vec4 align = inNormal.Abs() + inEdge.Abs();
+	int best = 0;
+	float best_v = align.GetX();
+	if (align.GetY() < best_v) { best = 1; best_v = align.GetY(); }
+	if (align.GetZ() < best_v) { best = 2; best_v = align.GetZ(); }
+	if (align.GetW() < best_v) { best = 3; }
+	Vec4 seed = best == 0? Vec4::sAxisX() : best == 1? Vec4::sAxisY() : best == 2? Vec4::sAxisZ() : Vec4::sAxisW();
+
+	// sCross(a, b, c) is perpendicular to all three of its arguments
+	outDirA = Vec4::sCross(inNormal, inEdge, seed).Normalized();
+	outDirB = Vec4::sCross(inNormal, inEdge, outDirA).Normalized();
+}
+
+void PruneContactPoints(Vec4Arg inPenetrationAxis, ContactPoints &ioContactPointsOn1, ContactPoints &ioContactPointsOn2 JPH_IF_DEBUG_RENDERER(, RVec4Arg inCenterOfMass))
+{
+	// Makes no sense to call this with cMaxManifoldPoints or fewer points
+	JPH_ASSERT(ioContactPointsOn1.size() > cMaxManifoldPoints);
 
 	// Both arrays should have the same size
 	JPH_ASSERT(ioContactPointsOn1.size() == ioContactPointsOn2.size());
@@ -32,13 +48,13 @@ void PruneContactPoints(Vec3Arg inPenetrationAxis, ContactPoints &ioContactPoint
 	StaticArray<float, 64> penetration_depth_sq;
 	for (ContactPoints::size_type i = 0; i < ioContactPointsOn1.size(); ++i)
 	{
-		// Project contact points on the plane through inCenterOfMass with normal inPenetrationAxis and center around the center of mass of body 1
-		// (note that since all points are relative to inCenterOfMass we can project onto the plane through the origin)
-		Vec3 v1 = ioContactPointsOn1[i];
+		// Project the contact points into the hyperplane through inCenterOfMass with normal
+		// inPenetrationAxis (all points are relative to inCenterOfMass, so project through the origin)
+		Vec4 v1 = ioContactPointsOn1[i];
 		projected.push_back(v1 - v1.Dot(inPenetrationAxis) * inPenetrationAxis);
 
 		// Calculate penetration depth^2 of each point and clamp against the minimal distance
-		Vec3 v2 = ioContactPointsOn2[i];
+		Vec4 v2 = ioContactPointsOn2[i];
 		penetration_depth_sq.push_back(max(cMinDistanceSq, (v2 - v1).LengthSq()));
 	}
 
@@ -55,7 +71,7 @@ void PruneContactPoints(Vec3Arg inPenetrationAxis, ContactPoints &ioContactPoint
 			point1 = i;
 		}
 	}
-	Vec3 point1v = projected[point1];
+	Vec4 point1v = projected[point1];
 
 	// Find point furthest from the first point forming a line segment with point1. Again combine this with the heuristic
 	// for deepest point as per above.
@@ -72,193 +88,95 @@ void PruneContactPoints(Vec3Arg inPenetrationAxis, ContactPoints &ioContactPoint
 			}
 		}
 	JPH_ASSERT(point2 != uint(-1));
-	Vec3 point2v = projected[point2];
+	Vec4 point2v = projected[point2];
 
-	// Find furthest points on both sides of the line segment in order to maximize the area
-	uint point3 = uint(-1);
-	uint point4 = uint(-1);
-	float min_val = 0.0f;
-	float max_val = 0.0f;
-	Vec3 perp = (point2v - point1v).Cross(inPenetrationAxis);
-	for (uint i = 0; i < projected.size(); ++i)
-		if (i != point1 && i != point2)
+	// TODO(4D): in 3D what is left of the contact plane after taking out the point1..point2 axis is a
+	// single direction, and upstream picks the extreme point to either side of it. In 4D the patch is
+	// 3 dimensional, so what is left is a 2D subspace of the contact hyperplane: we take the extremes
+	// along both of its basis directions, giving up to 6 points whose hull spans the patch.
+	uint point3 = uint(-1), point4 = uint(-1), point5 = uint(-1), point6 = uint(-1);
+	Vec4 edge = point2v - point1v;
+	float edge_len_sq = edge.LengthSq();
+	if (edge_len_sq > cMinDistanceSq)
+	{
+		Vec4 dir_a, dir_b;
+		sGetRemainingHyperplaneBasis(inPenetrationAxis, edge / sqrt(edge_len_sq), dir_a, dir_b);
+
+		float min_a = 0.0f, max_a = 0.0f, min_b = 0.0f, max_b = 0.0f;
+		for (uint i = 0; i < projected.size(); ++i)
+			if (i != point1 && i != point2)
+			{
+				Vec4 rel = projected[i] - point1v;
+
+				float va = dir_a.Dot(rel);
+				if (va < min_a) { min_a = va; point3 = i; }
+				else if (va > max_a) { max_a = va; point4 = i; }
+
+				float vb = dir_b.Dot(rel);
+				if (vb < min_b) { min_b = vb; point5 = i; }
+				else if (vb > max_b) { max_b = vb; point6 = i; }
+			}
+	}
+
+	// Add points to array. point1 and point2 are the endpoints of the dominant axis, the rest are the
+	// extremes of the two remaining hyperplane directions; duplicates are skipped (a single point can
+	// be the extreme along more than one direction).
+	StaticArray<Vec4, cMaxManifoldPoints> points_to_keep_on_1, points_to_keep_on_2;
+	uint candidates[] = { point1, point2, point3, point4, point5, point6 };
+	for (uint i = 0; i < std::size(candidates); ++i)
+	{
+		uint c = candidates[i];
+		if (c == uint(-1))
+			continue;
+
+		// A single point can be the extreme along more than one direction, so skip indices we already took
+		bool already_added = false;
+		for (uint j = 0; j < i; ++j)
+			if (candidates[j] == c)
+			{
+				already_added = true;
+				break;
+			}
+
+		if (!already_added)
 		{
-			float v = perp.Dot(projected[i] - point1v);
-			if (v < min_val)
-			{
-				min_val = v;
-				point3 = i;
-			}
-			else if (v > max_val)
-			{
-				max_val = v;
-				point4 = i;
-			}
+			points_to_keep_on_1.push_back(ioContactPointsOn1[c]);
+			points_to_keep_on_2.push_back(ioContactPointsOn2[c]);
 		}
-
-	// Add points to array (in order so they form a polygon)
-	StaticArray<Vec3, 4> points_to_keep_on_1, points_to_keep_on_2;
-	points_to_keep_on_1.push_back(ioContactPointsOn1[point1]);
-	points_to_keep_on_2.push_back(ioContactPointsOn2[point1]);
-	if (point3 != uint(-1))
-	{
-		points_to_keep_on_1.push_back(ioContactPointsOn1[point3]);
-		points_to_keep_on_2.push_back(ioContactPointsOn2[point3]);
 	}
-	points_to_keep_on_1.push_back(ioContactPointsOn1[point2]);
-	points_to_keep_on_2.push_back(ioContactPointsOn2[point2]);
-	if (point4 != uint(-1))
-	{
-		JPH_ASSERT(point3 != point4);
-		points_to_keep_on_1.push_back(ioContactPointsOn1[point4]);
-		points_to_keep_on_2.push_back(ioContactPointsOn2[point4]);
-	}
-
-#ifdef JPH_DEBUG_RENDERER
-	if (ContactConstraintManager::sDrawContactPointReduction)
-	{
-		// Draw input polygon
-		DebugRenderer::sInstance->DrawWirePolygon(RMat44::sTranslation(inCenterOfMass), ioContactPointsOn1, Color::sOrange, 0.05f);
-
-		// Draw primary axis
-		DebugRenderer::sInstance->DrawArrow(inCenterOfMass + ioContactPointsOn1[point1], inCenterOfMass + ioContactPointsOn1[point2], Color::sRed, 0.05f);
-
-		// Draw contact points we kept
-		for (Vec3 p : points_to_keep_on_1)
-			DebugRenderer::sInstance->DrawMarker(inCenterOfMass + p, Color::sGreen, 0.1f);
-	}
-#endif // JPH_DEBUG_RENDERER
 
 	// Copy the points back to the input buffer
 	ioContactPointsOn1 = points_to_keep_on_1;
 	ioContactPointsOn2 = points_to_keep_on_2;
 }
 
-void ManifoldBetweenTwoFaces(Vec3Arg inContactPoint1, Vec3Arg inContactPoint2, Vec3Arg inPenetrationAxis, float inMaxContactDistance, const ConvexShape::SupportingFace &inShape1Face, const ConvexShape::SupportingFace &inShape2Face, ContactPoints &outContactPoints1, ContactPoints &outContactPoints2 JPH_IF_DEBUG_RENDERER(, RVec3Arg inCenterOfMass))
+void ManifoldBetweenTwoFaces(Vec4Arg inContactPoint1, Vec4Arg inContactPoint2, Vec4Arg inPenetrationAxis, float inMaxContactDistance, const ConvexShape::SupportingFace &inShape1Face, const ConvexShape::SupportingFace &inShape2Face, ContactPoints &outContactPoints1, ContactPoints &outContactPoints2 JPH_IF_DEBUG_RENDERER(, RVec4Arg inCenterOfMass))
 {
 	JPH_ASSERT(inMaxContactDistance > 0.0f);
-
-#ifdef JPH_DEBUG_RENDERER
-	if (ContactConstraintManager::sDrawContactPoint)
-	{
-		RVec3 cp1 = inCenterOfMass + inContactPoint1;
-		RVec3 cp2 = inCenterOfMass + inContactPoint2;
-
-		// Draw contact points
-		DebugRenderer::sInstance->DrawMarker(cp1, Color::sRed, 0.1f);
-		DebugRenderer::sInstance->DrawMarker(cp2, Color::sGreen, 0.1f);
-
-		// Draw contact normal
-		DebugRenderer::sInstance->DrawArrow(cp1, cp1 + inPenetrationAxis.Normalized(), Color::sRed, 0.05f);
-	}
-#endif // JPH_DEBUG_RENDERER
 
 	// Remember size before adding new points, to check at the end if we added some
 	ContactPoints::size_type old_size = outContactPoints1.size();
 
-	// Both faces need to have at least 2 points or else there can never be more than 1 contact point
-	// At least one face needs to have at least 3 points (in the case that it has 2 points only if the edges match exactly you can have 2 contact points, but this situation is unstable anyhow)
-	if (min(inShape1Face.size(), inShape2Face.size()) >= 2
-		&& max(inShape1Face.size(), inShape2Face.size()) >= 3)
-	{
-		// Swap the shapes if the 2nd face doesn't have enough vertices
-		const ConvexShape::SupportingFace *shape1_face, *shape2_face;
-		ContactPoints *contact_points1, *contact_points2;
-		Vec3 penetration_axis;
-		if (inShape2Face.size() >= 3)
-		{
-			shape1_face = &inShape1Face;
-			shape2_face = &inShape2Face;
-			contact_points1 = &outContactPoints1;
-			contact_points2 = &outContactPoints2;
-			penetration_axis = inPenetrationAxis;
-		}
-		else
-		{
-			shape1_face = &inShape2Face;
-			shape2_face = &inShape1Face;
-			contact_points1 = &outContactPoints2;
-			contact_points2 = &outContactPoints1;
-			penetration_axis = -inPenetrationAxis;
-		}
-
-		// Determine plane origin and first edge direction
-		Vec3 plane_origin = shape1_face->at(0);
-		Vec3 first_edge = shape1_face->at(1) - plane_origin;
-
-		Vec3 plane_normal;
-		ConvexShape::SupportingFace clipped_face;
-		if (shape1_face->size() >= 3)
-		{
-			// Clip the polygon of face 2 against that of 1
-			ClipPolyVsPoly(*shape2_face, *shape1_face, penetration_axis, clipped_face);
-
-			// Three vertices, can just calculate the normal
-			plane_normal = first_edge.Cross(shape1_face->at(2) - plane_origin);
-		}
-		else
-		{
-			// Clip the polygon of face 2 against edge of 1
-			ClipPolyVsEdge(*shape2_face, shape1_face->at(0), shape1_face->at(1), penetration_axis, clipped_face);
-
-			// Two vertices, first find a perpendicular to the edge and penetration axis and then use the perpendicular together with the edge to form a normal
-			plane_normal = first_edge.Cross(penetration_axis).Cross(first_edge);
-		}
-
-		// If penetration axis and plane normal are perpendicular, fall back to the contact points
-		float penetration_axis_dot_plane_normal = penetration_axis.Dot(plane_normal);
-		if (penetration_axis_dot_plane_normal != 0.0f)
-		{
-			float penetration_axis_len = penetration_axis.Length();
-
-			for (Vec3 p2 : clipped_face)
-			{
-				// Project clipped face back onto the plane of face 1, we do this by solving:
-				// p1 = p2 + distance * penetration_axis / |penetration_axis|
-				// (p1 - plane_origin) . plane_normal = 0
-				// This gives us:
-				// distance = -|penetration_axis| * (p2 - plane_origin) . plane_normal / penetration_axis . plane_normal
-				float distance = (p2 - plane_origin).Dot(plane_normal) / penetration_axis_dot_plane_normal; // note left out -|penetration_axis| term
-
-				// If the point is less than inMaxContactDistance in front of the plane of face 2, add it as a contact point
-				if (distance * penetration_axis_len < inMaxContactDistance)
-				{
-					Vec3 p1 = p2 - distance * penetration_axis;
-					contact_points1->push_back(p1);
-					contact_points2->push_back(p2);
-				}
-			}
-		}
-
-	#ifdef JPH_DEBUG_RENDERER
-		if (ContactConstraintManager::sDrawSupportingFaces)
-		{
-			RMat44 com = RMat44::sTranslation(inCenterOfMass);
-
-			// Draw clipped poly
-			DebugRenderer::sInstance->DrawWirePolygon(com, clipped_face, Color::sOrange);
-
-			// Draw supporting faces
-			DebugRenderer::sInstance->DrawWirePolygon(com, inShape1Face, Color::sRed, 0.05f);
-			DebugRenderer::sInstance->DrawWirePolygon(com, inShape2Face, Color::sGreen, 0.05f);
-
-			// Draw normal
-			float plane_normal_len = plane_normal.Length();
-			if (plane_normal_len > 0.0f)
-			{
-				RVec3 plane_origin_ws = inCenterOfMass + plane_origin;
-				DebugRenderer::sInstance->DrawArrow(plane_origin_ws, plane_origin_ws + plane_normal / plane_normal_len, Color::sYellow, 0.05f);
-			}
-
-			// Draw contact points that remain after distance check
-			for (ContactPoints::size_type p = old_size; p < outContactPoints1.size(); ++p)
-			{
-				DebugRenderer::sInstance->DrawMarker(inCenterOfMass + outContactPoints1[p], Color::sYellow, 0.1f);
-				DebugRenderer::sInstance->DrawMarker(inCenterOfMass + outContactPoints2[p], Color::sOrange, 0.1f);
-			}
-		}
-	#endif // JPH_DEBUG_RENDERER
-	}
+	// TODO(4D): THIS IS THE REDUCED v1 PATH -- conceptual gap 1 in CLAUDE.md.
+	//
+	// In 3D a supporting face is a polygon and upstream clips face 2 against face 1 with
+	// Sutherland-Hodgman (ClipPolyVsPoly / ClipPolyVsEdge in Geometry/ClipPoly.h) to produce a contact
+	// patch of up to 32 points, which PruneContactPoints then reduces.
+	//
+	// In 4D a supporting face is a 3D *polyhedron* living in the contact hyperplane (BoxShape returns a
+	// cubic cell, PlaneShape a 3-cube patch), and ConvexShape::SupportingFace is only an unordered
+	// vertex list -- clipping a polyhedron against a polyhedron needs face connectivity, which the
+	// support function does not currently return. Until that plumbing plus a halfspace clip for
+	// polyhedra exists (ClipPoly.h is still 2D), we fall back to the single deepest contact point,
+	// which upstream also does whenever clipping produces nothing.
+	//
+	// Consequence: collisions, restitution and friction are correct, but a resting box gets one contact
+	// point per manifold instead of a patch, so large flat stacks will be less stable than in 3D Jolt.
+	// The reduction step above is already the real 4D algorithm and is ready for the clipped patch.
+	(void)inPenetrationAxis;
+	(void)inMaxContactDistance;
+	(void)inShape1Face;
+	(void)inShape2Face;
 
 	// If the clipping result is empty, use the contact point itself
 	if (outContactPoints1.size() == old_size)

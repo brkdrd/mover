@@ -5,10 +5,11 @@
 #pragma once
 
 #include <Jolt/Physics/Collision/BackFaceMode.h>
+#include <Jolt/Math/RMat44.h> // TODO(4D): RayCastT is instantiated with RMat44, which needs to be complete here
 
 JPH_NAMESPACE_BEGIN
 
-/// Structure that holds a single ray cast
+/// Structure that holds a single ray cast in 4D space (origin + direction, no rotation along path)
 template <class Vec, class Mat, class RayCastType>
 struct RayCastT
 {
@@ -16,14 +17,14 @@ struct RayCastT
 
 	/// Constructors
 								RayCastT() = default; // Allow raycast to be created uninitialized
-								RayCastT(typename Vec::ArgType inOrigin, Vec3Arg inDirection) : mOrigin(inOrigin), mDirection(inDirection) { }
+								RayCastT(typename Vec::ArgType inOrigin, Vec4Arg inDirection) : mOrigin(inOrigin), mDirection(inDirection) { }
 								RayCastT(const RayCastT<Vec, Mat, RayCastType> &) = default;
 
-	/// Transform this ray using inTransform
+	/// Transform this ray using inTransform (rigid transform with translation)
 	RayCastType					Transformed(typename Mat::ArgType inTransform) const
 	{
 		Vec ray_origin = inTransform * mOrigin;
-		Vec3 ray_direction(inTransform * (mOrigin + mDirection) - ray_origin);
+		Vec4 ray_direction(inTransform * (mOrigin + mDirection) - ray_origin);
 		return { ray_origin, ray_direction };
 	}
 
@@ -39,29 +40,29 @@ struct RayCastT
 		return mOrigin + inFraction * mDirection;
 	}
 
-	Vec							mOrigin;					///< Origin of the ray
-	Vec3						mDirection;					///< Direction and length of the ray (anything beyond this length will not be reported as a hit)
+	Vec							mOrigin;					///< Origin of the ray (4D position)
+	Vec4						mDirection;					///< Direction and length of the ray (4D). Anything beyond this length will not be reported as a hit.
 };
 
-struct RayCast : public RayCastT<Vec3, Mat44, RayCast>
+struct RayCast : public RayCastT<Vec4, RMat44, RayCast>
 {
-	using RayCastT<Vec3, Mat44, RayCast>::RayCastT;
+	using RayCastT<Vec4, RMat44, RayCast>::RayCastT;
 };
 
-struct RRayCast : public RayCastT<RVec3, RMat44, RRayCast>
+struct RRayCast : public RayCastT<RVec4, RMat44, RRayCast>
 {
-	using RayCastT<RVec3, RMat44, RRayCast>::RayCastT;
+	using RayCastT<RVec4, RMat44, RRayCast>::RayCastT;
 
-	/// Convert from RayCast, converts single to double precision
+	/// Convert from RayCast, converts single to double precision (no-op in single-precision mode)
 	explicit					RRayCast(const RayCast &inRay) :
-		RRayCast(RVec3(inRay.mOrigin), inRay.mDirection)
+		RRayCast(RVec4(inRay.mOrigin), inRay.mDirection)
 	{
 	}
 
 	/// Convert to RayCast, which implies casting from double precision to single precision
 	explicit					operator RayCast() const
 	{
-		return RayCast(Vec3(mOrigin), mDirection);
+		return RayCast(Vec4(mOrigin), mDirection);
 	}
 };
 

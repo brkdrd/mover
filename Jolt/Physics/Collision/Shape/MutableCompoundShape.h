@@ -46,10 +46,10 @@ public:
 	virtual void					CastRay(const RayCast &inRay, const RayCastSettings &inRayCastSettings, const SubShapeIDCreator &inSubShapeIDCreator, CastRayCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
 
 	// See: Shape::CollidePoint
-	virtual void					CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
+	virtual void					CollidePoint(Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
 
 	// See Shape::CollectTransformedShapes
-	virtual void					CollectTransformedShapes(const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const override;
+	virtual void					CollectTransformedShapes(const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const override;
 
 	// See: CompoundShape::GetIntersectingSubShapes
 	virtual int						GetIntersectingSubShapes(const AABox &inBox, uint *outSubShapeIndices, int inMaxSubShapeIndices) const override;
@@ -74,7 +74,7 @@ public:
 	/// @param inUserData User data that will be stored with the shape and can be retrieved using GetCompoundUserData
 	/// @param inIndex Index where to insert the shape, UINT_MAX to add to the end
 	/// @return The index of the newly added shape
-	uint							AddShape(Vec3Arg inPosition, QuatArg inRotation, const Shape *inShape, uint32 inUserData = 0, uint inIndex = UINT_MAX);
+	uint							AddShape(Vec4Arg inPosition, RotorArg inRotation, const Shape *inShape, uint32 inUserData = 0, uint inIndex = UINT_MAX);
 
 	/// Remove a shape by index.
 	/// Beware this can create a race condition if you're running collision queries in parallel. See class documentation for more information.
@@ -82,11 +82,11 @@ public:
 
 	/// Modify the position / orientation of a shape.
 	/// Beware this can create a race condition if you're running collision queries in parallel. See class documentation for more information.
-	void							ModifyShape(uint inIndex, Vec3Arg inPosition, QuatArg inRotation);
+	void							ModifyShape(uint inIndex, Vec4Arg inPosition, RotorArg inRotation);
 
 	/// Modify the position / orientation and shape at the same time.
 	/// Beware this can create a race condition if you're running collision queries in parallel. See class documentation for more information.
-	void							ModifyShape(uint inIndex, Vec3Arg inPosition, QuatArg inRotation, const Shape *inShape);
+	void							ModifyShape(uint inIndex, Vec4Arg inPosition, RotorArg inRotation, const Shape *inShape);
 
 	/// @brief Batch set positions / orientations, this avoids duplicate work due to bounding box calculation.
 	/// Beware this can create a race condition if you're running collision queries in parallel. See class documentation for more information.
@@ -96,7 +96,7 @@ public:
 	/// @param inRotations A list of orientations with arbitrary stride
 	/// @param inPositionStride The position stride (the number of bytes between the first and second element)
 	/// @param inRotationStride The orientation stride (the number of bytes between the first and second element)
-	void							ModifyShapes(uint inStartIndex, uint inNumber, const Vec3 *inPositions, const Quat *inRotations, uint inPositionStride = sizeof(Vec3), uint inRotationStride = sizeof(Quat));
+	void							ModifyShapes(uint inStartIndex, uint inNumber, const Vec4 *inPositions, const Rotor *inRotations, uint inPositionStride = sizeof(Vec4), uint inRotationStride = sizeof(Rotor));
 
 	/// Recalculate the center of mass and shift all objects so they're centered around it
 	/// (this needs to be done of dynamic bodies and if the center of mass changes significantly due to adding / removing / repositioning sub shapes or else the simulation will look unnatural)
@@ -122,9 +122,9 @@ private:
 
 		using Result = UVec4;
 
-		JPH_INLINE Result			TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ) const
+		JPH_INLINE Result			TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW) const
 		{
-			return GetIntersectingSubShapesVisitor<BoxType>::TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			return GetIntersectingSubShapesVisitor<BoxType>::TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 		}
 
 		JPH_INLINE bool				ShouldVisitBlock(UVec4Arg inResult) const
@@ -156,21 +156,23 @@ private:
 	JPH_INLINE void					WalkSubShapes(Visitor &ioVisitor) const;					///< Walk the sub shapes and call Visitor::VisitShape for each sub shape encountered
 
 	// Helper functions called by CollisionDispatch
-	static void						sCollideCompoundVsShape(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter);
-	static void						sCollideShapeVsCompound(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter);
-	static void						sCastShapeVsCompound(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec3Arg inScale, const ShapeFilter &inShapeFilter, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector);
+	static void						sCollideCompoundVsShape(const Shape *inShape1, const Shape *inShape2, Vec4Arg inScale1, Vec4Arg inScale2, RMat44Arg inCenterOfMassTransform1, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter);
+	static void						sCollideShapeVsCompound(const Shape *inShape1, const Shape *inShape2, Vec4Arg inScale1, Vec4Arg inScale2, RMat44Arg inCenterOfMassTransform1, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter);
+	static void						sCastShapeVsCompound(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec4Arg inScale, const ShapeFilter &inShapeFilter, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector);
 
 	struct Bounds
 	{
 		Vec4						mMinX;
 		Vec4						mMinY;
 		Vec4						mMinZ;
+		Vec4						mMinW;
 		Vec4						mMaxX;
 		Vec4						mMaxY;
 		Vec4						mMaxZ;
+		Vec4						mMaxW;
 	};
 
-	Array<Bounds>					mSubShapeBounds;											///< Bounding boxes of all sub shapes in SOA format (in blocks of 4 boxes), MinX 0..3, MinY 0..3, MinZ 0..3, MaxX 0..3, MaxY 0..3, MaxZ 0..3, MinX 4..7, MinY 4..7, ...
+	Array<Bounds>					mSubShapeBounds;											///< Bounding boxes of all sub shapes in SOA format (in blocks of 4 boxes, 4D), MinX 0..3, MinY 0..3, MinZ 0..3, MinW 0..3, MaxX 0..3, MaxY 0..3, MaxZ 0..3, MaxW 0..3, MinX 4..7, ...
 };
 
 JPH_NAMESPACE_END

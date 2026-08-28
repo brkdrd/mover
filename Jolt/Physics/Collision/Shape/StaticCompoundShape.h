@@ -43,10 +43,10 @@ public:
 	virtual void					CastRay(const RayCast &inRay, const RayCastSettings &inRayCastSettings, const SubShapeIDCreator &inSubShapeIDCreator, CastRayCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
 
 	// See: Shape::CollidePoint
-	virtual void					CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
+	virtual void					CollidePoint(Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
 
 	// See Shape::CollectTransformedShapes
-	virtual void					CollectTransformedShapes(const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const override;
+	virtual void					CollectTransformedShapes(const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const override;
 
 	// See: CompoundShape::GetIntersectingSubShapes
 	virtual int						GetIntersectingSubShapes(const AABox &inBox, uint *outSubShapeIndices, int inMaxSubShapeIndices) const override;
@@ -79,10 +79,10 @@ private:
 			return true;
 		}
 
-		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioProperties, int inStackTop)
+		JPH_INLINE int				VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioProperties, int inStackTop)
 		{
 			// Test if point overlaps with box
-			UVec4 collides = GetIntersectingSubShapesVisitor<BoxType>::TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			UVec4 collides = GetIntersectingSubShapesVisitor<BoxType>::TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 			return CountAndSortTrues(collides, ioProperties);
 		}
 	};
@@ -97,9 +97,9 @@ private:
 	static void						sPartition4(uint *ioBodyIdx, AABox *ioBounds, int inBegin, int inEnd, int *outSplit);
 
 	// Helper functions called by CollisionDispatch
-	static void						sCollideCompoundVsShape(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter);
-	static void						sCollideShapeVsCompound(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter);
-	static void						sCastShapeVsCompound(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec3Arg inScale, const ShapeFilter &inShapeFilter, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector);
+	static void						sCollideCompoundVsShape(const Shape *inShape1, const Shape *inShape2, Vec4Arg inScale1, Vec4Arg inScale2, RMat44Arg inCenterOfMassTransform1, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter);
+	static void						sCollideShapeVsCompound(const Shape *inShape1, const Shape *inShape2, Vec4Arg inScale1, Vec4Arg inScale2, RMat44Arg inCenterOfMassTransform1, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter);
+	static void						sCastShapeVsCompound(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec4Arg inScale, const ShapeFilter &inShapeFilter, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector);
 
 	// Maximum size of the stack during tree walk
 	static constexpr int			cStackSize = 128;
@@ -120,16 +120,18 @@ private:
 		void						SetChildBounds(uint inIndex, const AABox &inBounds);	///< Set bounding box for child inIndex to inBounds
 		void						SetChildInvalid(uint inIndex);							///< Mark the child inIndex as invalid and set its bounding box to invalid
 
-		HalfFloat					mBoundsMinX[4];											///< 4 child bounding boxes
+		HalfFloat					mBoundsMinX[4];											///< 4 child bounding boxes (4D)
 		HalfFloat					mBoundsMinY[4];
 		HalfFloat					mBoundsMinZ[4];
+		HalfFloat					mBoundsMinW[4];
 		HalfFloat					mBoundsMaxX[4];
 		HalfFloat					mBoundsMaxY[4];
 		HalfFloat					mBoundsMaxZ[4];
+		HalfFloat					mBoundsMaxW[4];
 		uint32						mNodeProperties[4];										///< 4 child node properties
 	};
 
-	static_assert(sizeof(Node) == 64, "Node should be 64 bytes");
+	static_assert(sizeof(Node) == 80, "Node should be 80 bytes");
 
 	using Nodes = Array<Node>;
 

@@ -72,7 +72,7 @@ void MutableCompoundShape::AdjustCenterOfMass()
 {
 	// First calculate the delta of the center of mass
 	float mass = 0.0f;
-	Vec3 center_of_mass = Vec3::sZero();
+	Vec4 center_of_mass = Vec4::sZero();
 	for (const CompoundShape::SubShape &sub_shape : mSubShapes)
 	{
 		MassProperties child = sub_shape.mShape->GetMassProperties();
@@ -92,12 +92,15 @@ void MutableCompoundShape::AdjustCenterOfMass()
 		Vec4 xxxx = center_of_mass.SplatX();
 		Vec4 yyyy = center_of_mass.SplatY();
 		Vec4 zzzz = center_of_mass.SplatZ();
+		Vec4 wwww = center_of_mass.SplatW();
 		bounds.mMinX -= xxxx;
 		bounds.mMinY -= yyyy;
 		bounds.mMinZ -= zzzz;
+		bounds.mMinW -= wwww;
 		bounds.mMaxX -= xxxx;
 		bounds.mMaxY -= yyyy;
 		bounds.mMaxZ -= zzzz;
+		bounds.mMaxW -= wwww;
 	}
 	mLocalBounds.Translate(-center_of_mass);
 
@@ -115,9 +118,11 @@ void MutableCompoundShape::CalculateLocalBounds()
 		Vec4 min_x = bounds->mMinX;
 		Vec4 min_y = bounds->mMinY;
 		Vec4 min_z = bounds->mMinZ;
+		Vec4 min_w = bounds->mMinW;
 		Vec4 max_x = bounds->mMaxX;
 		Vec4 max_y = bounds->mMaxY;
 		Vec4 max_z = bounds->mMaxZ;
+		Vec4 max_w = bounds->mMaxW;
 
 		// Accumulate other blocks
 		const Bounds *bounds_end = bounds + num_blocks;
@@ -126,23 +131,27 @@ void MutableCompoundShape::CalculateLocalBounds()
 			min_x = Vec4::sMin(min_x, bounds->mMinX);
 			min_y = Vec4::sMin(min_y, bounds->mMinY);
 			min_z = Vec4::sMin(min_z, bounds->mMinZ);
+			min_w = Vec4::sMin(min_w, bounds->mMinW);
 			max_x = Vec4::sMax(max_x, bounds->mMaxX);
 			max_y = Vec4::sMax(max_y, bounds->mMaxY);
 			max_z = Vec4::sMax(max_z, bounds->mMaxZ);
+			max_w = Vec4::sMax(max_w, bounds->mMaxW);
 		}
 
 		// Calculate resulting bounding box
 		mLocalBounds.mMin.SetX(min_x.ReduceMin());
 		mLocalBounds.mMin.SetY(min_y.ReduceMin());
 		mLocalBounds.mMin.SetZ(min_z.ReduceMin());
+		mLocalBounds.mMin.SetW(min_w.ReduceMin());
 		mLocalBounds.mMax.SetX(max_x.ReduceMax());
 		mLocalBounds.mMax.SetY(max_y.ReduceMax());
 		mLocalBounds.mMax.SetZ(max_z.ReduceMax());
+		mLocalBounds.mMax.SetW(max_w.ReduceMax());
 	}
 	else
 	{
 		// There are no subshapes, make the bounding box empty
-		mLocalBounds.mMin = mLocalBounds.mMax = Vec3::sZero();
+		mLocalBounds.mMin = mLocalBounds.mMax = Vec4::sZero();
 	}
 
 	// Cache the inner radius as it can take a while to recursively iterate over all sub shapes
@@ -177,15 +186,15 @@ void MutableCompoundShape::CalculateSubShapeBounds(uint inStartIdx, uint inNumbe
 				const SubShape &sub_shape = mSubShapes[sub_shape_idx];
 
 				// Transform the shape's bounds into our local space
-				Mat44 transform = Mat44::sRotationTranslation(sub_shape.GetRotation(), sub_shape.GetPositionCOM());
+				RMat44 transform = RMat44::sRotationTranslation(sub_shape.GetRotation(), sub_shape.GetPositionCOM());
 
 				// Get the bounding box
-				sub_shape_bounds = sub_shape.mShape->GetWorldSpaceBounds(transform, Vec3::sOne());
+				sub_shape_bounds = sub_shape.mShape->GetWorldSpaceBounds(transform, Vec4::sOne());
 			}
 
-			// Put the bounds as columns in a matrix
-			bounds_min.SetColumn3(col, sub_shape_bounds.mMin);
-			bounds_max.SetColumn3(col, sub_shape_bounds.mMax);
+			// Put the bounds as columns in a matrix (full 4D min/max)
+			bounds_min.SetColumn4(col, sub_shape_bounds.mMin);
+			bounds_max.SetColumn4(col, sub_shape_bounds.mMax);
 		}
 
 		// Transpose to go to structure of arrays format
@@ -197,15 +206,17 @@ void MutableCompoundShape::CalculateSubShapeBounds(uint inStartIdx, uint inNumbe
 		bounds.mMinX = bounds_min_t.GetColumn4(0);
 		bounds.mMinY = bounds_min_t.GetColumn4(1);
 		bounds.mMinZ = bounds_min_t.GetColumn4(2);
+		bounds.mMinW = bounds_min_t.GetColumn4(3);
 		bounds.mMaxX = bounds_max_t.GetColumn4(0);
 		bounds.mMaxY = bounds_max_t.GetColumn4(1);
 		bounds.mMaxZ = bounds_max_t.GetColumn4(2);
+		bounds.mMaxW = bounds_max_t.GetColumn4(3);
 	}
 
 	CalculateLocalBounds();
 }
 
-uint MutableCompoundShape::AddShape(Vec3Arg inPosition, QuatArg inRotation, const Shape *inShape, uint32 inUserData, uint inIndex)
+uint MutableCompoundShape::AddShape(Vec4Arg inPosition, RotorArg inRotation, const Shape *inShape, uint32 inUserData, uint inIndex)
 {
 	SubShape sub_shape;
 	sub_shape.mShape = inShape;
@@ -238,7 +249,7 @@ void MutableCompoundShape::RemoveShape(uint inIndex)
 	CalculateSubShapeBounds(inIndex, num_bounds);
 }
 
-void MutableCompoundShape::ModifyShape(uint inIndex, Vec3Arg inPosition, QuatArg inRotation)
+void MutableCompoundShape::ModifyShape(uint inIndex, Vec4Arg inPosition, RotorArg inRotation)
 {
 	SubShape &sub_shape = mSubShapes[inIndex];
 	sub_shape.SetTransform(inPosition, inRotation, mCenterOfMass);
@@ -246,7 +257,7 @@ void MutableCompoundShape::ModifyShape(uint inIndex, Vec3Arg inPosition, QuatArg
 	CalculateSubShapeBounds(inIndex, 1);
 }
 
-void MutableCompoundShape::ModifyShape(uint inIndex, Vec3Arg inPosition, QuatArg inRotation, const Shape *inShape)
+void MutableCompoundShape::ModifyShape(uint inIndex, Vec4Arg inPosition, RotorArg inRotation, const Shape *inShape)
 {
 	SubShape &sub_shape = mSubShapes[inIndex];
 	sub_shape.mShape = inShape;
@@ -255,20 +266,20 @@ void MutableCompoundShape::ModifyShape(uint inIndex, Vec3Arg inPosition, QuatArg
 	CalculateSubShapeBounds(inIndex, 1);
 }
 
-void MutableCompoundShape::ModifyShapes(uint inStartIndex, uint inNumber, const Vec3 *inPositions, const Quat *inRotations, uint inPositionStride, uint inRotationStride)
+void MutableCompoundShape::ModifyShapes(uint inStartIndex, uint inNumber, const Vec4 *inPositions, const Rotor *inRotations, uint inPositionStride, uint inRotationStride)
 {
 	JPH_ASSERT(inStartIndex + inNumber <= mSubShapes.size());
 
-	const Vec3 *pos = inPositions;
-	const Quat *rot = inRotations;
+	const Vec4 *pos = inPositions;
+	const Rotor *rot = inRotations;
 	for (SubShape *dest = &mSubShapes[inStartIndex], *dest_end = dest + inNumber; dest < dest_end; ++dest)
 	{
 		// Update transform
 		dest->SetTransform(*pos, *rot, mCenterOfMass);
 
 		// Advance pointer in position / rotation buffer
-		pos = reinterpret_cast<const Vec3 *>(reinterpret_cast<const uint8 *>(pos) + inPositionStride);
-		rot = reinterpret_cast<const Quat *>(reinterpret_cast<const uint8 *>(rot) + inRotationStride);
+		pos = reinterpret_cast<const Vec4 *>(reinterpret_cast<const uint8 *>(pos) + inPositionStride);
+		rot = reinterpret_cast<const Rotor *>(reinterpret_cast<const uint8 *>(rot) + inRotationStride);
 	}
 
 	CalculateSubShapeBounds(inStartIndex, inNumber);
@@ -282,7 +293,7 @@ inline void MutableCompoundShape::WalkSubShapes(Visitor &ioVisitor) const
 	{
 		// Test the bounding boxes
 		const Bounds &bounds = mSubShapeBounds[block];
-		typename Visitor::Result result = ioVisitor.TestBlock(bounds.mMinX, bounds.mMinY, bounds.mMinZ, bounds.mMaxX, bounds.mMaxY, bounds.mMaxZ);
+		typename Visitor::Result result = ioVisitor.TestBlock(bounds.mMinX, bounds.mMinY, bounds.mMinZ, bounds.mMinW, bounds.mMaxX, bounds.mMaxY, bounds.mMaxZ, bounds.mMaxW);
 
 		// Check if any of the bounding boxes collided
 		if (ioVisitor.ShouldVisitBlock(result))
@@ -315,9 +326,9 @@ bool MutableCompoundShape::CastRay(const RayCast &inRay, const SubShapeIDCreator
 
 		using Result = Vec4;
 
-		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ) const
+		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW) const
 		{
-			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 		}
 
 		JPH_INLINE bool		ShouldVisitBlock(Vec4Arg inResult) const
@@ -351,9 +362,9 @@ void MutableCompoundShape::CastRay(const RayCast &inRay, const RayCastSettings &
 
 		using Result = Vec4;
 
-		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ) const
+		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW) const
 		{
-			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 		}
 
 		JPH_INLINE bool		ShouldVisitBlock(Vec4Arg inResult) const
@@ -372,7 +383,7 @@ void MutableCompoundShape::CastRay(const RayCast &inRay, const RayCastSettings &
 	WalkSubShapes(visitor);
 }
 
-void MutableCompoundShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void MutableCompoundShape::CollidePoint(Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -386,9 +397,9 @@ void MutableCompoundShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator
 
 		using Result = UVec4;
 
-		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ) const
+		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW) const
 		{
-			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 		}
 
 		JPH_INLINE bool		ShouldVisitBlock(UVec4Arg inResult) const
@@ -406,7 +417,7 @@ void MutableCompoundShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator
 	WalkSubShapes(visitor);
 }
 
-void MutableCompoundShape::sCastShapeVsCompound(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec3Arg inScale, const ShapeFilter &inShapeFilter, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)
+void MutableCompoundShape::sCastShapeVsCompound(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec4Arg inScale, const ShapeFilter &inShapeFilter, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -416,9 +427,9 @@ void MutableCompoundShape::sCastShapeVsCompound(const ShapeCast &inShapeCast, co
 
 		using Result = Vec4;
 
-		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ) const
+		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW) const
 		{
-			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 		}
 
 		JPH_INLINE bool		ShouldVisitBlock(Vec4Arg inResult) const
@@ -440,7 +451,7 @@ void MutableCompoundShape::sCastShapeVsCompound(const ShapeCast &inShapeCast, co
 	shape->WalkSubShapes(visitor);
 }
 
-void MutableCompoundShape::CollectTransformedShapes(const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void MutableCompoundShape::CollectTransformedShapes(const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -454,9 +465,9 @@ void MutableCompoundShape::CollectTransformedShapes(const AABox &inBox, Vec3Arg 
 
 		using Result = UVec4;
 
-		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ) const
+		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW) const
 		{
-			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 		}
 
 		JPH_INLINE bool		ShouldVisitBlock(UVec4Arg inResult) const
@@ -492,7 +503,7 @@ int MutableCompoundShape::GetIntersectingSubShapes(const OrientedBox &inBox, uin
 	return visitor.GetNumResults();
 }
 
-void MutableCompoundShape::sCollideCompoundVsShape(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
+void MutableCompoundShape::sCollideCompoundVsShape(const Shape *inShape1, const Shape *inShape2, Vec4Arg inScale1, Vec4Arg inScale2, RMat44Arg inCenterOfMassTransform1, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -505,9 +516,9 @@ void MutableCompoundShape::sCollideCompoundVsShape(const Shape *inShape1, const 
 
 		using Result = UVec4;
 
-		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ) const
+		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW) const
 		{
-			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 		}
 
 		JPH_INLINE bool		ShouldVisitBlock(UVec4Arg inResult) const
@@ -525,7 +536,7 @@ void MutableCompoundShape::sCollideCompoundVsShape(const Shape *inShape1, const 
 	shape1->WalkSubShapes(visitor);
 }
 
-void MutableCompoundShape::sCollideShapeVsCompound(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
+void MutableCompoundShape::sCollideShapeVsCompound(const Shape *inShape1, const Shape *inShape2, Vec4Arg inScale1, Vec4Arg inScale2, RMat44Arg inCenterOfMassTransform1, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -538,9 +549,9 @@ void MutableCompoundShape::sCollideShapeVsCompound(const Shape *inShape1, const 
 
 		using Result = UVec4;
 
-		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ) const
+		JPH_INLINE Result	TestBlock(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW) const
 		{
-			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			return TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 		}
 
 		JPH_INLINE bool		ShouldVisitBlock(UVec4Arg inResult) const

@@ -34,8 +34,8 @@ ShapeSettings::ShapeResult StaticCompoundShapeSettings::Create(TempAllocator &in
 		{
 			// If there's only 1 part we don't need a StaticCompoundShape
 			const SubShapeSettings &s = mSubShapes[0];
-			if (s.mPosition == Vec3::sZero()
-				&& s.mRotation == Quat::sIdentity())
+			if (s.mPosition == Vec4::sZero()
+				&& s.mRotation == Rotor::sIdentity())
 			{
 				// No rotation or translation, we can use the shape directly
 				if (s.mShapePtr != nullptr)
@@ -80,9 +80,11 @@ void StaticCompoundShape::Node::SetChildInvalid(uint inIndex)
 	mBoundsMinX[inIndex] = HALF_FLT_MAX;
 	mBoundsMinY[inIndex] = HALF_FLT_MAX;
 	mBoundsMinZ[inIndex] = HALF_FLT_MAX;
+	mBoundsMinW[inIndex] = HALF_FLT_MAX;
 	mBoundsMaxX[inIndex] = HALF_FLT_MAX;
 	mBoundsMaxY[inIndex] = HALF_FLT_MAX;
 	mBoundsMaxZ[inIndex] = HALF_FLT_MAX;
+	mBoundsMaxW[inIndex] = HALF_FLT_MAX;
 }
 
 void StaticCompoundShape::Node::SetChildBounds(uint inIndex, const AABox &inBounds)
@@ -90,9 +92,11 @@ void StaticCompoundShape::Node::SetChildBounds(uint inIndex, const AABox &inBoun
 	mBoundsMinX[inIndex] = HalfFloatConversion::FromFloat<HalfFloatConversion::ROUND_TO_NEG_INF>(inBounds.mMin.GetX());
 	mBoundsMinY[inIndex] = HalfFloatConversion::FromFloat<HalfFloatConversion::ROUND_TO_NEG_INF>(inBounds.mMin.GetY());
 	mBoundsMinZ[inIndex] = HalfFloatConversion::FromFloat<HalfFloatConversion::ROUND_TO_NEG_INF>(inBounds.mMin.GetZ());
+	mBoundsMinW[inIndex] = HalfFloatConversion::FromFloat<HalfFloatConversion::ROUND_TO_NEG_INF>(inBounds.mMin.GetW());
 	mBoundsMaxX[inIndex] = HalfFloatConversion::FromFloat<HalfFloatConversion::ROUND_TO_POS_INF>(inBounds.mMax.GetX());
 	mBoundsMaxY[inIndex] = HalfFloatConversion::FromFloat<HalfFloatConversion::ROUND_TO_POS_INF>(inBounds.mMax.GetY());
 	mBoundsMaxZ[inIndex] = HalfFloatConversion::FromFloat<HalfFloatConversion::ROUND_TO_POS_INF>(inBounds.mMax.GetZ());
+	mBoundsMaxW[inIndex] = HalfFloatConversion::FromFloat<HalfFloatConversion::ROUND_TO_POS_INF>(inBounds.mMax.GetW());
 }
 
 void StaticCompoundShape::sPartition(uint *ioBodyIdx, AABox *ioBounds, int inNumber, int &outMidPoint)
@@ -105,13 +109,13 @@ void StaticCompoundShape::sPartition(uint *ioBodyIdx, AABox *ioBounds, int inNum
 	}
 
 	// Calculate bounding box of box centers
-	Vec3 center_min = Vec3::sReplicate(FLT_MAX);
-	Vec3 center_max = Vec3::sReplicate(-FLT_MAX);
+	Vec4 center_min = Vec4::sReplicate(FLT_MAX);
+	Vec4 center_max = Vec4::sReplicate(-FLT_MAX);
 	for (const AABox *b = ioBounds, *b_end = ioBounds + inNumber; b < b_end; ++b)
 	{
-		Vec3 center = b->GetCenter();
-		center_min = Vec3::sMin(center_min, center);
-		center_max = Vec3::sMax(center_max, center);
+		Vec4 center = b->GetCenter();
+		center_min = Vec4::sMin(center_min, center);
+		center_max = Vec4::sMax(center_max, center);
 	}
 
 	// Calculate split plane
@@ -233,8 +237,8 @@ StaticCompoundShape::StaticCompoundShape(const StaticCompoundShapeSettings &inSe
 		shape.SetPositionCOM(shape.GetPositionCOM() - mCenterOfMass);
 
 		// Transform the shape's bounds into our local space
-		Mat44 transform = Mat44::sRotationTranslation(shape.GetRotation(), shape.GetPositionCOM());
-		AABox shape_bounds = shape.mShape->GetWorldSpaceBounds(transform, Vec3::sOne());
+		RMat44 transform = RMat44::sRotationTranslation(shape.GetRotation(), shape.GetPositionCOM());
+		AABox shape_bounds = shape.mShape->GetWorldSpaceBounds(transform, Vec4::sOne());
 
 		// Store bounds and body index for tree construction
 		bounds[i] = shape_bounds;
@@ -374,24 +378,29 @@ inline void StaticCompoundShape::WalkTree(Visitor &ioVisitor) const
 			{
 				const Node &node = mNodes[node_properties];
 
-				// Unpack bounds
+				// Unpack bounds. Each sLoadInt4 loads 8 HalfFloats (= 2 adjacent HalfFloat[4] arrays, which are
+				// contiguous in memory in the order MinX,MinY,MinZ,MinW,MaxX,MaxY,MaxZ,MaxW).
 				UVec4 bounds_minxy = UVec4::sLoadInt4(reinterpret_cast<const uint32 *>(&node.mBoundsMinX[0]));
 				Vec4 bounds_minx = HalfFloatConversion::ToFloat(bounds_minxy);
 				Vec4 bounds_miny = HalfFloatConversion::ToFloat(bounds_minxy.Swizzle<SWIZZLE_Z, SWIZZLE_W, SWIZZLE_UNUSED, SWIZZLE_UNUSED>());
 
-				UVec4 bounds_minzmaxx = UVec4::sLoadInt4(reinterpret_cast<const uint32 *>(&node.mBoundsMinZ[0]));
-				Vec4 bounds_minz = HalfFloatConversion::ToFloat(bounds_minzmaxx);
-				Vec4 bounds_maxx = HalfFloatConversion::ToFloat(bounds_minzmaxx.Swizzle<SWIZZLE_Z, SWIZZLE_W, SWIZZLE_UNUSED, SWIZZLE_UNUSED>());
+				UVec4 bounds_minzw = UVec4::sLoadInt4(reinterpret_cast<const uint32 *>(&node.mBoundsMinZ[0]));
+				Vec4 bounds_minz = HalfFloatConversion::ToFloat(bounds_minzw);
+				Vec4 bounds_minw = HalfFloatConversion::ToFloat(bounds_minzw.Swizzle<SWIZZLE_Z, SWIZZLE_W, SWIZZLE_UNUSED, SWIZZLE_UNUSED>());
 
-				UVec4 bounds_maxyz = UVec4::sLoadInt4(reinterpret_cast<const uint32 *>(&node.mBoundsMaxY[0]));
-				Vec4 bounds_maxy = HalfFloatConversion::ToFloat(bounds_maxyz);
-				Vec4 bounds_maxz = HalfFloatConversion::ToFloat(bounds_maxyz.Swizzle<SWIZZLE_Z, SWIZZLE_W, SWIZZLE_UNUSED, SWIZZLE_UNUSED>());
+				UVec4 bounds_maxxy = UVec4::sLoadInt4(reinterpret_cast<const uint32 *>(&node.mBoundsMaxX[0]));
+				Vec4 bounds_maxx = HalfFloatConversion::ToFloat(bounds_maxxy);
+				Vec4 bounds_maxy = HalfFloatConversion::ToFloat(bounds_maxxy.Swizzle<SWIZZLE_Z, SWIZZLE_W, SWIZZLE_UNUSED, SWIZZLE_UNUSED>());
+
+				UVec4 bounds_maxzw = UVec4::sLoadInt4(reinterpret_cast<const uint32 *>(&node.mBoundsMaxZ[0]));
+				Vec4 bounds_maxz = HalfFloatConversion::ToFloat(bounds_maxzw);
+				Vec4 bounds_maxw = HalfFloatConversion::ToFloat(bounds_maxzw.Swizzle<SWIZZLE_Z, SWIZZLE_W, SWIZZLE_UNUSED, SWIZZLE_UNUSED>());
 
 				// Load properties for 4 children
 				UVec4 properties = UVec4::sLoadInt4(&node.mNodeProperties[0]);
 
 				// Check which sub nodes to visit
-				int num_results = ioVisitor.VisitNodes(bounds_minx, bounds_miny, bounds_minz, bounds_maxx, bounds_maxy, bounds_maxz, properties, top);
+				int num_results = ioVisitor.VisitNodes(bounds_minx, bounds_miny, bounds_minz, bounds_minw, bounds_maxx, bounds_maxy, bounds_maxz, bounds_maxw, properties, top);
 
 				// Push them onto the stack
 				JPH_ASSERT(top + 4 < cStackSize);
@@ -433,10 +442,10 @@ bool StaticCompoundShape::CastRay(const RayCast &inRay, const SubShapeIDCreator 
 			return mDistanceStack[inStackTop] < mHit.mFraction;
 		}
 
-		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioProperties, int inStackTop)
+		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioProperties, int inStackTop)
 		{
 			// Test bounds of 4 children
-			Vec4 distance = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			Vec4 distance = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 
 			// Sort so that highest values are first (we want to first process closer hits and we process stack top to bottom)
 			return SortReverseAndStore(distance, mHit.mFraction, ioProperties, &mDistanceStack[inStackTop]);
@@ -467,10 +476,10 @@ void StaticCompoundShape::CastRay(const RayCast &inRay, const RayCastSettings &i
 			return mDistanceStack[inStackTop] < mCollector.GetEarlyOutFraction();
 		}
 
-		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioProperties, int inStackTop)
+		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioProperties, int inStackTop)
 		{
 			// Test bounds of 4 children
-			Vec4 distance = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			Vec4 distance = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 
 			// Sort so that highest values are first (we want to first process closer hits and we process stack top to bottom)
 			return SortReverseAndStore(distance, mCollector.GetEarlyOutFraction(), ioProperties, &mDistanceStack[inStackTop]);
@@ -483,7 +492,7 @@ void StaticCompoundShape::CastRay(const RayCast &inRay, const RayCastSettings &i
 	WalkTree(visitor);
 }
 
-void StaticCompoundShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void StaticCompoundShape::CollidePoint(Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -496,10 +505,10 @@ void StaticCompoundShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator 
 			return true;
 		}
 
-		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioProperties, [[maybe_unused]] int inStackTop) const
+		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioProperties, [[maybe_unused]] int inStackTop) const
 		{
 			// Test if point overlaps with box
-			UVec4 collides = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			UVec4 collides = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 			return CountAndSortTrues(collides, ioProperties);
 		}
 	};
@@ -508,7 +517,7 @@ void StaticCompoundShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator 
 	WalkTree(visitor);
 }
 
-void StaticCompoundShape::sCastShapeVsCompound(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec3Arg inScale, const ShapeFilter &inShapeFilter, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)
+void StaticCompoundShape::sCastShapeVsCompound(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec4Arg inScale, const ShapeFilter &inShapeFilter, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -521,10 +530,10 @@ void StaticCompoundShape::sCastShapeVsCompound(const ShapeCast &inShapeCast, con
 			return mDistanceStack[inStackTop] < mCollector.GetPositiveEarlyOutFraction();
 		}
 
-		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioProperties, int inStackTop)
+		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioProperties, int inStackTop)
 		{
 			// Test bounds of 4 children
-			Vec4 distance = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			Vec4 distance = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 
 			// Sort so that highest values are first (we want to first process closer hits and we process stack top to bottom)
 			return SortReverseAndStore(distance, mCollector.GetPositiveEarlyOutFraction(), ioProperties, &mDistanceStack[inStackTop]);
@@ -540,7 +549,7 @@ void StaticCompoundShape::sCastShapeVsCompound(const ShapeCast &inShapeCast, con
 	shape->WalkTree(visitor);
 }
 
-void StaticCompoundShape::CollectTransformedShapes(const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void StaticCompoundShape::CollectTransformedShapes(const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -557,10 +566,10 @@ void StaticCompoundShape::CollectTransformedShapes(const AABox &inBox, Vec3Arg i
 			return true;
 		}
 
-		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioProperties, [[maybe_unused]] int inStackTop) const
+		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioProperties, [[maybe_unused]] int inStackTop) const
 		{
 			// Test which nodes collide
-			UVec4 collides = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			UVec4 collides = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 			return CountAndSortTrues(collides, ioProperties);
 		}
 	};
@@ -587,7 +596,7 @@ int StaticCompoundShape::GetIntersectingSubShapes(const OrientedBox &inBox, uint
 	return visitor.GetNumResults();
 }
 
-void StaticCompoundShape::sCollideCompoundVsShape(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
+void StaticCompoundShape::sCollideCompoundVsShape(const Shape *inShape1, const Shape *inShape2, Vec4Arg inScale1, Vec4Arg inScale2, RMat44Arg inCenterOfMassTransform1, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -603,10 +612,10 @@ void StaticCompoundShape::sCollideCompoundVsShape(const Shape *inShape1, const S
 			return true;
 		}
 
-		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioProperties, [[maybe_unused]] int inStackTop) const
+		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioProperties, [[maybe_unused]] int inStackTop) const
 		{
 			// Test which nodes collide
-			UVec4 collides = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			UVec4 collides = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 			return CountAndSortTrues(collides, ioProperties);
 		}
 	};
@@ -615,7 +624,7 @@ void StaticCompoundShape::sCollideCompoundVsShape(const Shape *inShape1, const S
 	shape1->WalkTree(visitor);
 }
 
-void StaticCompoundShape::sCollideShapeVsCompound(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
+void StaticCompoundShape::sCollideShapeVsCompound(const Shape *inShape1, const Shape *inShape2, Vec4Arg inScale1, Vec4Arg inScale2, RMat44Arg inCenterOfMassTransform1, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -628,10 +637,10 @@ void StaticCompoundShape::sCollideShapeVsCompound(const Shape *inShape1, const S
 			return true;
 		}
 
-		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, UVec4 &ioProperties, [[maybe_unused]] int inStackTop) const
+		JPH_INLINE int		VisitNodes(Vec4Arg inBoundsMinX, Vec4Arg inBoundsMinY, Vec4Arg inBoundsMinZ, Vec4Arg inBoundsMinW, Vec4Arg inBoundsMaxX, Vec4Arg inBoundsMaxY, Vec4Arg inBoundsMaxZ, Vec4Arg inBoundsMaxW, UVec4 &ioProperties, [[maybe_unused]] int inStackTop) const
 		{
 			// Test which nodes collide
-			UVec4 collides = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ);
+			UVec4 collides = TestBounds(inBoundsMinX, inBoundsMinY, inBoundsMinZ, inBoundsMinW, inBoundsMaxX, inBoundsMaxY, inBoundsMaxZ, inBoundsMaxW);
 			return CountAndSortTrues(collides, ioProperties);
 		}
 	};

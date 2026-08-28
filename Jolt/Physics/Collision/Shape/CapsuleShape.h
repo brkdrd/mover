@@ -56,7 +56,7 @@ public:
 	virtual AABox			GetLocalBounds() const override;
 
 	// See Shape::GetWorldSpaceBounds
-	virtual AABox			GetWorldSpaceBounds(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale) const override;
+	virtual AABox			GetWorldSpaceBounds(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale) const override;
 	using Shape::GetWorldSpaceBounds;
 
 	// See Shape::GetInnerRadius
@@ -66,17 +66,17 @@ public:
 	virtual MassProperties	GetMassProperties() const override;
 
 	// See Shape::GetSurfaceNormal
-	virtual Vec3			GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec3Arg inLocalSurfacePosition) const override;
+	virtual Vec4			GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec4Arg inLocalSurfacePosition) const override;
 
 	// See Shape::GetSupportingFace
-	virtual void			GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inDirection, Vec3Arg inScale, Mat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const override;
+	virtual void			GetSupportingFace(const SubShapeID &inSubShapeID, Vec4Arg inDirection, Vec4Arg inScale, RMat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const override;
 
 	// See ConvexShape::GetSupportFunction
-	virtual const Support *	GetSupportFunction(ESupportMode inMode, SupportBuffer &inBuffer, Vec3Arg inScale) const override;
+	virtual const Support *	GetSupportFunction(ESupportMode inMode, SupportBuffer &inBuffer, Vec4Arg inScale) const override;
 
 #ifdef JPH_DEBUG_RENDERER
 	// See Shape::Draw
-	virtual void			Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const override;
+	virtual void			Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const override;
 #endif // JPH_DEBUG_RENDERER
 
 	// See Shape::CastRay
@@ -84,16 +84,16 @@ public:
 	virtual bool			CastRay(const RayCast &inRay, const SubShapeIDCreator &inSubShapeIDCreator, RayCastResult &ioHit) const override;
 
 	// See: Shape::CollidePoint
-	virtual void			CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
+	virtual void			CollidePoint(Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
 
 	// See: Shape::CollideSoftBodyVertices
-	virtual void			CollideSoftBodyVertices(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const override;
+	virtual void			CollideSoftBodyVertices(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const override;
 
 	// See Shape::GetTrianglesStart
-	virtual void			GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale) const override;
+	virtual void			GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale) const override;
 
 	// See Shape::GetTrianglesNext
-	virtual int				GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float3 *outTriangleVertices, const PhysicsMaterial **outMaterials = nullptr) const override;
+	virtual int				GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float4 *outTriangleVertices, const PhysicsMaterial **outMaterials = nullptr) const override;
 
 	// See Shape
 	virtual void			SaveBinaryState(StreamOut &inStream) const override;
@@ -102,13 +102,14 @@ public:
 	virtual Stats			GetStats() const override												{ return Stats(sizeof(*this), 0); }
 
 	// See Shape::GetVolume
-	virtual float			GetVolume() const override												{ return 4.0f / 3.0f * JPH_PI * Cubed(mRadius) + 2.0f * JPH_PI * mHalfHeightOfCylinder * Square(mRadius); }
+	// 4D capsule = 4D cylinder (3-ball cross section swept along Y) + one 4-ball (two half-4-ball caps).
+	virtual float			GetVolume() const override												{ return (8.0f / 3.0f) * JPH_PI * Cubed(mRadius) * mHalfHeightOfCylinder + 0.5f * JPH_PI * JPH_PI * Square(Square(mRadius)); }
 
 	// See Shape::IsValidScale
-	virtual bool			IsValidScale(Vec3Arg inScale) const override;
+	virtual bool			IsValidScale(Vec4Arg inScale) const override;
 
 	// See Shape::MakeScaleValid
-	virtual Vec3			MakeScaleValid(Vec3Arg inScale) const override;
+	virtual Vec4			MakeScaleValid(Vec4Arg inScale) const override;
 
 	// Register shape functions with the registry
 	static void				sRegister();

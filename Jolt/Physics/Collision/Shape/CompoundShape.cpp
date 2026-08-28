@@ -34,7 +34,7 @@ JPH_IMPLEMENT_SERIALIZABLE_NON_VIRTUAL(CompoundShapeSettings::SubShapeSettings)
 	JPH_ADD_ATTRIBUTE(CompoundShapeSettings::SubShapeSettings, mUserData)
 }
 
-void CompoundShapeSettings::AddShape(Vec3Arg inPosition, QuatArg inRotation, const ShapeSettings *inShape, uint32 inUserData)
+void CompoundShapeSettings::AddShape(Vec4Arg inPosition, RotorArg inRotation, const ShapeSettings *inShape, uint32 inUserData)
 {
 	// Add shape
 	SubShapeSettings shape;
@@ -45,7 +45,7 @@ void CompoundShapeSettings::AddShape(Vec3Arg inPosition, QuatArg inRotation, con
 	mSubShapes.push_back(shape);
 }
 
-void CompoundShapeSettings::AddShape(Vec3Arg inPosition, QuatArg inRotation, const Shape *inShape, uint32 inUserData)
+void CompoundShapeSettings::AddShape(Vec4Arg inPosition, RotorArg inRotation, const Shape *inShape, uint32 inUserData)
 {
 	// Add shape
 	SubShapeSettings shape;
@@ -84,25 +84,26 @@ MassProperties CompoundShape::GetMassProperties() const
 		p.mInertia += child.mInertia;
 	}
 
-	// Ensure that inertia is a 3x3 matrix, adding inertias causes the bottom right element to change
-	p.mInertia.SetColumn4(3, Vec4(0, 0, 0, 1));
+	// Note: unlike 3D Jolt, mInertia is a full 4x4 second-moment tensor with no homogeneous
+	// padding element, so there is nothing to reset after accumulating child inertias.
 
 	return p;
 }
 
-AABox CompoundShape::GetWorldSpaceBounds(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale) const
+AABox CompoundShape::GetWorldSpaceBounds(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale) const
 {
 	if (mSubShapes.empty())
 	{
 		// If there are no sub-shapes, we must return an empty box to avoid overflows in the broadphase
-		return AABox(inCenterOfMassTransform.GetTranslation(), inCenterOfMassTransform.GetTranslation());
+		Vec4 t(inCenterOfMassTransform.GetTranslation());
+		return AABox(t, t);
 	}
 	else if (mSubShapes.size() <= 10)
 	{
 		AABox bounds;
 		for (const SubShape &shape : mSubShapes)
 		{
-			Mat44 transform = inCenterOfMassTransform * shape.GetLocalTransformNoScale(inScale);
+			RMat44 transform = inCenterOfMassTransform * shape.GetLocalTransformNoScale(inScale);
 			bounds.Encapsulate(shape.mShape->GetWorldSpaceBounds(transform, shape.TransformScale(inScale)));
 		}
 		return bounds;
@@ -161,23 +162,23 @@ uint64 CompoundShape::GetSubShapeUserData(const SubShapeID &inSubShapeID) const
 	return mSubShapes[index].mShape->GetSubShapeUserData(remainder);
 }
 
-TransformedShape CompoundShape::GetSubShapeTransformedShape(const SubShapeID &inSubShapeID, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale, SubShapeID &outRemainder) const
+TransformedShape CompoundShape::GetSubShapeTransformedShape(const SubShapeID &inSubShapeID, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale, SubShapeID &outRemainder) const
 {
 	// Get the sub shape
 	const SubShape &sub_shape = mSubShapes[GetSubShapeIndexFromID(inSubShapeID, outRemainder)];
 
 	// Calculate transform for sub shape
-	Vec3 position = inPositionCOM + inRotation * (inScale * sub_shape.GetPositionCOM());
-	Quat rotation = inRotation * sub_shape.GetRotation();
-	Vec3 scale = sub_shape.TransformScale(inScale);
+	Vec4 position = inPositionCOM + inRotation * (inScale * sub_shape.GetPositionCOM());
+	Rotor rotation = inRotation * sub_shape.GetRotation();
+	Vec4 scale = sub_shape.TransformScale(inScale);
 
 	// Return transformed shape
-	TransformedShape ts(RVec3(position), rotation, sub_shape.mShape, BodyID());
+	TransformedShape ts(RVec4(position), rotation, sub_shape.mShape, BodyID());
 	ts.SetShapeScale(scale);
 	return ts;
 }
 
-Vec3 CompoundShape::GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec3Arg inLocalSurfacePosition) const
+Vec4 CompoundShape::GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec4Arg inLocalSurfacePosition) const
 {
 	// Decode sub shape index
 	SubShapeID remainder;
@@ -185,14 +186,14 @@ Vec3 CompoundShape::GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec3Arg inL
 
 	// Transform surface position to local space and pass call on
 	const SubShape &shape = mSubShapes[index];
-	Mat44 transform = Mat44::sInverseRotationTranslation(shape.GetRotation(), shape.GetPositionCOM());
-	Vec3 normal = shape.mShape->GetSurfaceNormal(remainder, transform * inLocalSurfacePosition);
+	RMat44 transform = RMat44::sInverseRotationTranslation(shape.GetRotation(), shape.GetPositionCOM());
+	Vec4 normal = shape.mShape->GetSurfaceNormal(remainder, Vec4(transform * inLocalSurfacePosition));
 
 	// Transform normal to this shape's space
 	return transform.Multiply3x3Transposed(normal);
 }
 
-void CompoundShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inDirection, Vec3Arg inScale, Mat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const
+void CompoundShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec4Arg inDirection, Vec4Arg inScale, RMat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const
 {
 	// Decode sub shape index
 	SubShapeID remainder;
@@ -200,25 +201,25 @@ void CompoundShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg in
 
 	// Apply transform and pass on to sub shape
 	const SubShape &shape = mSubShapes[index];
-	Mat44 transform = shape.GetLocalTransformNoScale(inScale);
+	RMat44 transform = shape.GetLocalTransformNoScale(inScale);
 	shape.mShape->GetSupportingFace(remainder, transform.Multiply3x3Transposed(inDirection), shape.TransformScale(inScale), inCenterOfMassTransform * transform, outVertices);
 }
 
-void CompoundShape::GetSubmergedVolume(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec3 &outCenterOfBuoyancy JPH_IF_DEBUG_RENDERER(, RVec3Arg inBaseOffset)) const
+void CompoundShape::GetSubmergedVolume(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec4 &outCenterOfBuoyancy, RVec4Arg inBaseOffset) const
 {
 	outTotalVolume = 0.0f;
 	outSubmergedVolume = 0.0f;
-	outCenterOfBuoyancy = Vec3::sZero();
+	outCenterOfBuoyancy = Vec4::sZero();
 
 	for (const SubShape &shape : mSubShapes)
 	{
 		// Get center of mass transform of child
-		Mat44 transform = inCenterOfMassTransform * shape.GetLocalTransformNoScale(inScale);
+		RMat44 transform = inCenterOfMassTransform * shape.GetLocalTransformNoScale(inScale);
 
 		// Recurse to child
 		float total_volume, submerged_volume;
-		Vec3 center_of_buoyancy;
-		shape.mShape->GetSubmergedVolume(transform, shape.TransformScale(inScale), inSurface, total_volume, submerged_volume, center_of_buoyancy JPH_IF_DEBUG_RENDERER(, inBaseOffset));
+		Vec4 center_of_buoyancy;
+		shape.mShape->GetSubmergedVolume(transform, shape.TransformScale(inScale), inSurface, total_volume, submerged_volume, center_of_buoyancy, inBaseOffset);
 
 		// Accumulate volumes
 		outTotalVolume += total_volume;
@@ -239,50 +240,50 @@ void CompoundShape::GetSubmergedVolume(Mat44Arg inCenterOfMassTransform, Vec3Arg
 }
 
 #ifdef JPH_DEBUG_RENDERER
-void CompoundShape::Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const
+void CompoundShape::Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const
 {
 	for (const SubShape &shape : mSubShapes)
 	{
-		Mat44 transform = shape.GetLocalTransformNoScale(inScale);
+		RMat44 transform = shape.GetLocalTransformNoScale(inScale);
 		shape.mShape->Draw(inRenderer, inCenterOfMassTransform * transform, shape.TransformScale(inScale), inColor, inUseMaterialColors, inDrawWireframe);
 	}
 }
 
-void CompoundShape::DrawGetSupportFunction(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inDrawSupportDirection) const
+void CompoundShape::DrawGetSupportFunction(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, ColorArg inColor, bool inDrawSupportDirection) const
 {
 	for (const SubShape &shape : mSubShapes)
 	{
-		Mat44 transform = shape.GetLocalTransformNoScale(inScale);
+		RMat44 transform = shape.GetLocalTransformNoScale(inScale);
 		shape.mShape->DrawGetSupportFunction(inRenderer, inCenterOfMassTransform * transform, shape.TransformScale(inScale), inColor, inDrawSupportDirection);
 	}
 }
 
-void CompoundShape::DrawGetSupportingFace(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale) const
+void CompoundShape::DrawGetSupportingFace(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale) const
 {
 	for (const SubShape &shape : mSubShapes)
 	{
-		Mat44 transform = shape.GetLocalTransformNoScale(inScale);
+		RMat44 transform = shape.GetLocalTransformNoScale(inScale);
 		shape.mShape->DrawGetSupportingFace(inRenderer, inCenterOfMassTransform * transform, shape.TransformScale(inScale));
 	}
 }
 #endif // JPH_DEBUG_RENDERER
 
-void CompoundShape::CollideSoftBodyVertices(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const
+void CompoundShape::CollideSoftBodyVertices(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const
 {
 	for (const SubShape &shape : mSubShapes)
 	{
-		Mat44 transform = shape.GetLocalTransformNoScale(inScale);
+		RMat44 transform = shape.GetLocalTransformNoScale(inScale);
 		shape.mShape->CollideSoftBodyVertices(inCenterOfMassTransform * transform, shape.TransformScale(inScale), inVertices, inNumVertices, inCollidingShapeIndex);
 	}
 }
 
-void CompoundShape::TransformShape(Mat44Arg inCenterOfMassTransform, TransformedShapeCollector &ioCollector) const
+void CompoundShape::TransformShape(RMat44Arg inCenterOfMassTransform, TransformedShapeCollector &ioCollector) const
 {
 	for (const SubShape &shape : mSubShapes)
-		shape.mShape->TransformShape(inCenterOfMassTransform * Mat44::sRotationTranslation(shape.GetRotation(), shape.GetPositionCOM()), ioCollector);
+		shape.mShape->TransformShape(inCenterOfMassTransform * RMat44::sRotationTranslation(shape.GetRotation(), shape.GetPositionCOM()), ioCollector);
 }
 
-void CompoundShape::sCastCompoundVsShape(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec3Arg inScale, const ShapeFilter &inShapeFilter, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)
+void CompoundShape::sCastCompoundVsShape(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec4Arg inScale, const ShapeFilter &inShapeFilter, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -305,8 +306,8 @@ void CompoundShape::sCastCompoundVsShape(const ShapeCast &inShapeCast, const Sha
 		SubShapeIDCreator shape1_sub_shape_id = inSubShapeIDCreator1.PushID(i, sub_shape_bits);
 
 		// Transform the shape cast and update the shape
-		Mat44 transform = inShapeCast.mCenterOfMassStart * shape.GetLocalTransformNoScale(inShapeCast.mScale);
-		Vec3 scale = shape.TransformScale(inShapeCast.mScale);
+		RMat44 transform = inShapeCast.mCenterOfMassStart * shape.GetLocalTransformNoScale(inShapeCast.mScale);
+		Vec4 scale = shape.TransformScale(inShapeCast.mScale);
 		ShapeCast shape_cast(shape.mShape, scale, transform, inShapeCast.mDirection);
 
 		CollisionDispatch::sCastShapeVsShapeLocalSpace(shape_cast, inShapeCastSettings, inShape, inScale, inShapeFilter, inCenterOfMassTransform2, shape1_sub_shape_id, inSubShapeIDCreator2, ioCollector);
@@ -347,7 +348,7 @@ void CompoundShape::RestoreBinaryState(StreamIn &inStream)
 		inS.Read(outElement.mUserData);
 		inS.Read(outElement.mPositionCOM);
 		inS.Read(outElement.mRotation);
-		outElement.mIsRotationIdentity = outElement.mRotation == Float3(0, 0, 0);
+		outElement.mIsRotationIdentity = Rotor(outElement.mRotation).IsClose(Rotor::sIdentity()) || Rotor(outElement.mRotation).IsClose(-Rotor::sIdentity());
 	});
 }
 
@@ -390,7 +391,7 @@ float CompoundShape::GetVolume() const
 	return volume;
 }
 
-bool CompoundShape::IsValidScale(Vec3Arg inScale) const
+bool CompoundShape::IsValidScale(Vec4Arg inScale) const
 {
 	if (!Shape::IsValidScale(inScale))
 		return false;
@@ -409,14 +410,14 @@ bool CompoundShape::IsValidScale(Vec3Arg inScale) const
 	return true;
 }
 
-Vec3 CompoundShape::MakeScaleValid(Vec3Arg inScale) const
+Vec4 CompoundShape::MakeScaleValid(Vec4Arg inScale) const
 {
-	Vec3 scale = ScaleHelpers::MakeNonZeroScale(inScale);
+	Vec4 scale = ScaleHelpers::MakeNonZeroScale(inScale);
 	if (CompoundShape::IsValidScale(scale))
 		return scale;
 
-	Vec3 abs_uniform_scale = ScaleHelpers::MakeUniformScale(scale.Abs());
-	Vec3 uniform_scale = scale.GetSign() * abs_uniform_scale;
+	Vec4 abs_uniform_scale = ScaleHelpers::MakeUniformScale(scale.Abs());
+	Vec4 uniform_scale = scale.GetSign() * abs_uniform_scale;
 	if (CompoundShape::IsValidScale(uniform_scale))
 		return uniform_scale;
 

@@ -24,13 +24,13 @@ public:
 
 	/// Create a convex hull from inPoints and maximum convex radius inMaxConvexRadius, the radius is automatically lowered if the hull requires it.
 	/// (internally this will be subtracted so the total size will not grow with the convex radius).
-							ConvexHullShapeSettings(const Vec3 *inPoints, int inNumPoints, float inMaxConvexRadius = cDefaultConvexRadius, const PhysicsMaterial *inMaterial = nullptr) : ConvexShapeSettings(inMaterial), mPoints(inPoints, inPoints + inNumPoints), mMaxConvexRadius(inMaxConvexRadius) { }
-	explicit				ConvexHullShapeSettings(const Array<Vec3> &inPoints, float inConvexRadius = cDefaultConvexRadius, const PhysicsMaterial *inMaterial = nullptr) : ConvexShapeSettings(inMaterial), mPoints(inPoints), mMaxConvexRadius(inConvexRadius) { }
+							ConvexHullShapeSettings(const Vec4 *inPoints, int inNumPoints, float inMaxConvexRadius = cDefaultConvexRadius, const PhysicsMaterial *inMaterial = nullptr) : ConvexShapeSettings(inMaterial), mPoints(inPoints, inPoints + inNumPoints), mMaxConvexRadius(inMaxConvexRadius) { }
+	explicit				ConvexHullShapeSettings(const Array<Vec4> &inPoints, float inConvexRadius = cDefaultConvexRadius, const PhysicsMaterial *inMaterial = nullptr) : ConvexShapeSettings(inMaterial), mPoints(inPoints), mMaxConvexRadius(inConvexRadius) { }
 
 	// See: ShapeSettings
 	virtual ShapeResult		Create() const override;
 
-	Array<Vec3>				mPoints;															///< Points to create the hull from. Note that these points don't need to be the vertices of the convex hull, they can contain interior points or points on faces/edges.
+	Array<Vec4>				mPoints;															///< Points to create the hull from. Note that these points don't need to be the vertices of the convex hull, they can contain interior points or points on faces/edges.
 	float					mMaxConvexRadius = 0.0f;											///< Convex radius as supplied by the constructor. Note that during hull creation the convex radius can be made smaller if the value is too big for the hull.
 	float					mMaxErrorConvexRadius = 0.05f;										///< Maximum distance between the shrunk hull + convex radius and the actual hull.
 	float					mHullTolerance = 1.0e-3f;											///< Points are allowed this far outside of the hull (increasing this yields a hull with less vertices). Note that the actual used value can be larger if the points of the hull are far apart.
@@ -51,7 +51,7 @@ public:
 							ConvexHullShape(const ConvexHullShapeSettings &inSettings, ShapeResult &outResult);
 
 	// See Shape::GetCenterOfMass
-	virtual Vec3			GetCenterOfMass() const override									{ return mCenterOfMass; }
+	virtual Vec4			GetCenterOfMass() const override									{ return mCenterOfMass; }
 
 	// See Shape::GetLocalBounds
 	virtual AABox			GetLocalBounds() const override										{ return mLocalBounds; }
@@ -63,23 +63,23 @@ public:
 	virtual MassProperties	GetMassProperties() const override;
 
 	// See Shape::GetSurfaceNormal
-	virtual Vec3			GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec3Arg inLocalSurfacePosition) const override;
+	virtual Vec4			GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec4Arg inLocalSurfacePosition) const override;
 
 	// See Shape::GetSupportingFace
-	virtual void			GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inDirection, Vec3Arg inScale, Mat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const override;
+	virtual void			GetSupportingFace(const SubShapeID &inSubShapeID, Vec4Arg inDirection, Vec4Arg inScale, RMat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const override;
 
 	// See ConvexShape::GetSupportFunction
-	virtual const Support *	GetSupportFunction(ESupportMode inMode, SupportBuffer &inBuffer, Vec3Arg inScale) const override;
+	virtual const Support *	GetSupportFunction(ESupportMode inMode, SupportBuffer &inBuffer, Vec4Arg inScale) const override;
 
 	// See Shape::GetSubmergedVolume
-	virtual void			GetSubmergedVolume(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec3 &outCenterOfBuoyancy JPH_IF_DEBUG_RENDERER(, RVec3Arg inBaseOffset)) const override;
+	virtual void			GetSubmergedVolume(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec4 &outCenterOfBuoyancy, RVec4Arg inBaseOffset) const override;
 
 #ifdef JPH_DEBUG_RENDERER
 	// See Shape::Draw
-	virtual void			Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const override;
+	virtual void			Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const override;
 
 	/// Debugging helper draw function that draws how all points are moved when a shape is shrunk by the convex radius
-	void					DrawShrunkShape(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale) const;
+	void					DrawShrunkShape(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale) const;
 #endif // JPH_DEBUG_RENDERER
 
 	// See Shape::CastRay
@@ -87,16 +87,16 @@ public:
 	virtual void			CastRay(const RayCast &inRay, const RayCastSettings &inRayCastSettings, const SubShapeIDCreator &inSubShapeIDCreator, CastRayCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
 
 	// See: Shape::CollidePoint
-	virtual void			CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
+	virtual void			CollidePoint(Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
 
 	// See: Shape::CollideSoftBodyVertices
-	virtual void			CollideSoftBodyVertices(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const override;
+	virtual void			CollideSoftBodyVertices(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const override;
 
 	// See Shape::GetTrianglesStart
-	virtual void			GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale) const override;
+	virtual void			GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale) const override;
 
 	// See Shape::GetTrianglesNext
-	virtual int				GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float3 *outTriangleVertices, const PhysicsMaterial **outMaterials = nullptr) const override;
+	virtual int				GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float4 *outTriangleVertices, const PhysicsMaterial **outMaterials = nullptr) const override;
 
 	// See Shape
 	virtual void			SaveBinaryState(StreamOut &inStream) const override;
@@ -117,7 +117,7 @@ public:
 	inline uint				GetNumPoints() const												{ return uint(mPoints.size()); }
 
 	/// Get a vertex of this convex hull relative to the center of mass
-	inline Vec3				GetPoint(uint inIndex) const										{ return mPoints[inIndex].mPosition; }
+	inline Vec4				GetPoint(uint inIndex) const										{ return mPoints[inIndex].mPosition; }
 
 	/// Get the number of faces in this convex hull
 	inline uint				GetNumFaces() const													{ return uint(mFaces.size()); }
@@ -175,16 +175,16 @@ private:
 
 	struct Point
 	{
-		Vec3				mPosition;					///< Position of vertex
+		Vec4				mPosition;					///< Position of vertex
 		int					mNumFaces = 0;				///< Number of faces in the face array below
-		int					mFaces[3] = { -1, -1, -1 };	///< Indices of 3 neighboring faces with the biggest difference in normal (used to shift vertices for convex radius)
+		int					mFaces[3] = { -1, -1, -1 };	///< Indices of neighboring faces with the biggest difference in normal (used to shift vertices for convex radius). TODO(4D): a 4D hull vertex meets >=4 facets; 3 is a weaker heuristic here.
 	};
 
 	static_assert(sizeof(Point) == 32, "Unexpected size");
 	static_assert(alignof(Point) == JPH_VECTOR_ALIGNMENT, "Unexpected alignment");
 
-	Vec3					mCenterOfMass;				///< Center of mass of this convex hull
-	Mat44					mInertia;					///< Inertia matrix assuming density is 1 (needs to be multiplied by density)
+	Vec4					mCenterOfMass;				///< Center of mass of this convex hull
+	Mat44					mInertia;					///< Second-moment tensor (M_ij) assuming density is 1 (needs to be multiplied by density)
 	AABox					mLocalBounds;				///< Local bounding box for the convex hull
 	Array<Point>			mPoints;					///< Points on the convex hull surface
 	Array<Face>				mFaces;						///< Faces of the convex hull surface

@@ -23,10 +23,10 @@ public:
 									CompoundShapeSettings() = default;
 
 	/// Add a shape to the compound.
-	void							AddShape(Vec3Arg inPosition, QuatArg inRotation, const ShapeSettings *inShape, uint32 inUserData = 0);
+	void							AddShape(Vec4Arg inPosition, RotorArg inRotation, const ShapeSettings *inShape, uint32 inUserData = 0);
 
 	/// Add a shape to the compound. Variant that uses a concrete shape, which means this object cannot be serialized.
-	void							AddShape(Vec3Arg inPosition, QuatArg inRotation, const Shape *inShape, uint32 inUserData = 0);
+	void							AddShape(Vec4Arg inPosition, RotorArg inRotation, const Shape *inShape, uint32 inUserData = 0);
 
 	struct SubShapeSettings
 	{
@@ -34,8 +34,8 @@ public:
 
 		RefConst<ShapeSettings>		mShape;													///< Sub shape (either this or mShapePtr needs to be filled up)
 		RefConst<Shape>				mShapePtr;												///< Sub shape (either this or mShape needs to be filled up)
-		Vec3						mPosition;												///< Position of the sub shape
-		Quat						mRotation;												///< Rotation of the sub shape
+		Vec4						mPosition;												///< Position of the sub shape
+		Rotor						mRotation;												///< Rotation of the sub shape
 
 		/// User data value (can be used by the application for any purpose).
 		/// Note this value can be retrieved through GetSubShape(...).mUserData, not through GetSubShapeUserData(...) as that returns Shape::GetUserData() of the leaf shape.
@@ -59,7 +59,7 @@ public:
 									CompoundShape(EShapeSubType inSubType, const ShapeSettings &inSettings, ShapeResult &outResult) : Shape(EShapeType::Compound, inSubType, inSettings, outResult) { }
 
 	// See Shape::GetCenterOfMass
-	virtual Vec3					GetCenterOfMass() const override						{ return mCenterOfMass; }
+	virtual Vec4					GetCenterOfMass() const override						{ return mCenterOfMass; }
 
 	// See Shape::MustBeStatic
 	virtual bool					MustBeStatic() const override;
@@ -71,7 +71,7 @@ public:
 	virtual uint					GetSubShapeIDBitsRecursive() const override;
 
 	// See Shape::GetWorldSpaceBounds
-	virtual AABox					GetWorldSpaceBounds(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale) const override;
+	virtual AABox					GetWorldSpaceBounds(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale) const override;
 	using Shape::GetWorldSpaceBounds;
 
 	// See Shape::GetInnerRadius
@@ -90,39 +90,39 @@ public:
 	virtual uint64					GetSubShapeUserData(const SubShapeID &inSubShapeID) const override;
 
 	// See Shape::GetSubShapeTransformedShape
-	virtual TransformedShape		GetSubShapeTransformedShape(const SubShapeID &inSubShapeID, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale, SubShapeID &outRemainder) const override;
+	virtual TransformedShape		GetSubShapeTransformedShape(const SubShapeID &inSubShapeID, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale, SubShapeID &outRemainder) const override;
 
 	// See Shape::GetSurfaceNormal
-	virtual Vec3					GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec3Arg inLocalSurfacePosition) const override;
+	virtual Vec4					GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec4Arg inLocalSurfacePosition) const override;
 
 	// See Shape::GetSupportingFace
-	virtual void					GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inDirection, Vec3Arg inScale, Mat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const override;
+	virtual void					GetSupportingFace(const SubShapeID &inSubShapeID, Vec4Arg inDirection, Vec4Arg inScale, RMat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const override;
 
 	// See Shape::GetSubmergedVolume
-	virtual void					GetSubmergedVolume(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec3 &outCenterOfBuoyancy JPH_IF_DEBUG_RENDERER(, RVec3Arg inBaseOffset)) const override;
+	virtual void					GetSubmergedVolume(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec4 &outCenterOfBuoyancy, RVec4Arg inBaseOffset) const override;
 
 #ifdef JPH_DEBUG_RENDERER
 	// See Shape::Draw
-	virtual void					Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const override;
+	virtual void					Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const override;
 
 	// See Shape::DrawGetSupportFunction
-	virtual void					DrawGetSupportFunction(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inDrawSupportDirection) const override;
+	virtual void					DrawGetSupportFunction(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, ColorArg inColor, bool inDrawSupportDirection) const override;
 
 	// See Shape::DrawGetSupportingFace
-	virtual void					DrawGetSupportingFace(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale) const override;
+	virtual void					DrawGetSupportingFace(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale) const override;
 #endif // JPH_DEBUG_RENDERER
 
 	// See: Shape::CollideSoftBodyVertices
-	virtual void					CollideSoftBodyVertices(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const override;
+	virtual void					CollideSoftBodyVertices(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const override;
 
 	// See Shape::TransformShape
-	virtual void					TransformShape(Mat44Arg inCenterOfMassTransform, TransformedShapeCollector &ioCollector) const override;
+	virtual void					TransformShape(RMat44Arg inCenterOfMassTransform, TransformedShapeCollector &ioCollector) const override;
 
 	// See Shape::GetTrianglesStart
-	virtual void					GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale) const override { JPH_ASSERT(false, "Cannot call on non-leaf shapes, use CollectTransformedShapes to collect the leaves first!"); }
+	virtual void					GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale) const override { JPH_ASSERT(false, "Cannot call on non-leaf shapes, use CollectTransformedShapes to collect the leaves first!"); }
 
 	// See Shape::GetTrianglesNext
-	virtual int						GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float3 *outTriangleVertices, const PhysicsMaterial **outMaterials = nullptr) const override { JPH_ASSERT(false, "Cannot call on non-leaf shapes, use CollectTransformedShapes to collect the leaves first!"); return 0; }
+	virtual int						GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float4 *outTriangleVertices, const PhysicsMaterial **outMaterials = nullptr) const override { JPH_ASSERT(false, "Cannot call on non-leaf shapes, use CollectTransformedShapes to collect the leaves first!"); return 0; }
 
 	/// Get which sub shape's bounding boxes overlap with an axis aligned box
 	/// @param inBox The axis aligned box to test against (relative to the center of mass of this shape)
@@ -166,7 +166,7 @@ public:
 			// Copy user data
 			mUserData = inSettings.mUserData;
 
-			SetTransform(inSettings.mPosition, inSettings.mRotation, Vec3::sZero() /* Center of mass not yet calculated */);
+			SetTransform(inSettings.mPosition, inSettings.mRotation, Vec4::sZero() /* Center of mass not yet calculated */);
 			return true;
 		}
 
@@ -174,25 +174,25 @@ public:
 		/// @param inPosition New position
 		/// @param inRotation New orientation
 		/// @param inCenterOfMass The center of mass of the compound shape
-		JPH_INLINE void				SetTransform(Vec3Arg inPosition, QuatArg inRotation, Vec3Arg inCenterOfMass)
+		JPH_INLINE void				SetTransform(Vec4Arg inPosition, RotorArg inRotation, Vec4Arg inCenterOfMass)
 		{
 			SetPositionCOM(inPosition - inCenterOfMass + inRotation * mShape->GetCenterOfMass());
 
-			mIsRotationIdentity = inRotation.IsClose(Quat::sIdentity()) || inRotation.IsClose(-Quat::sIdentity());
-			SetRotation(mIsRotationIdentity? Quat::sIdentity() : inRotation);
+			mIsRotationIdentity = inRotation.IsClose(Rotor::sIdentity()) || inRotation.IsClose(-Rotor::sIdentity());
+			SetRotation(mIsRotationIdentity? Rotor::sIdentity() : inRotation);
 		}
 
 		/// Get the local transform for this shape given the scale of the child shape
-		/// The total transform of the child shape will be GetLocalTransformNoScale(inScale) * Mat44::sScaling(TransformScale(inScale))
+		/// The total transform of the child shape will be GetLocalTransformNoScale(inScale) * RMat44::sScale(TransformScale(inScale))
 		/// @param inScale The scale of the child shape (in local space of this shape)
-		JPH_INLINE Mat44			GetLocalTransformNoScale(Vec3Arg inScale) const
+		JPH_INLINE RMat44			GetLocalTransformNoScale(Vec4Arg inScale) const
 		{
 			JPH_ASSERT(IsValidScale(inScale));
-			return Mat44::sRotationTranslation(GetRotation(), inScale * GetPositionCOM());
+			return RMat44::sRotationTranslation(GetRotation(), inScale * GetPositionCOM());
 		}
 
 		/// Test if inScale is valid for this sub shape
-		inline bool					IsValidScale(Vec3Arg inScale) const
+		inline bool					IsValidScale(Vec4Arg inScale) const
 		{
 			// We can always handle uniform scale or identity rotations
 			if (mIsRotationIdentity || ScaleHelpers::IsUniformScale(inScale))
@@ -202,7 +202,7 @@ public:
 		}
 
 		/// Transform the scale to the local space of the child shape
-		inline Vec3					TransformScale(Vec3Arg inScale) const
+		inline Vec4					TransformScale(Vec4Arg inScale) const
 		{
 			// We don't need to transform uniform scale or if the rotation is identity
 			if (mIsRotationIdentity || ScaleHelpers::IsUniformScale(inScale))
@@ -211,39 +211,36 @@ public:
 			return ScaleHelpers::RotateScale(GetRotation(), inScale);
 		}
 
-		/// Compress the center of mass position
-		JPH_INLINE void				SetPositionCOM(Vec3Arg inPositionCOM)
+		/// Store the center of mass position
+		JPH_INLINE void				SetPositionCOM(Vec4Arg inPositionCOM)
 		{
-			inPositionCOM.StoreFloat3(&mPositionCOM);
+			mPositionCOM = Float4(inPositionCOM.GetX(), inPositionCOM.GetY(), inPositionCOM.GetZ(), inPositionCOM.GetW());
 		}
 
-		/// Uncompress the center of mass position
-		JPH_INLINE Vec3				GetPositionCOM() const
+		/// Load the center of mass position
+		JPH_INLINE Vec4				GetPositionCOM() const
 		{
-			return Vec3::sLoadFloat3Unsafe(mPositionCOM);
+			return Vec4(mPositionCOM);
 		}
 
-		/// Compress the rotation
-		JPH_INLINE void				SetRotation(QuatArg inRotation)
+		/// Store the rotation
+		JPH_INLINE void				SetRotation(RotorArg inRotation)
 		{
-			inRotation.StoreFloat3(&mRotation);
+			inRotation.StoreFloat8(&mRotation);
 		}
 
-		/// Uncompress the rotation
-		JPH_INLINE Quat				GetRotation() const
+		/// Load the rotation
+		JPH_INLINE Rotor			GetRotation() const
 		{
-			return mIsRotationIdentity? Quat::sIdentity() : Quat::sLoadFloat3Unsafe(mRotation);
+			return mIsRotationIdentity? Rotor::sIdentity() : Rotor(mRotation);
 		}
 
 		RefConst<Shape>				mShape;
-		Float3						mPositionCOM;											///< Note: Position of center of mass of sub shape!
-		Float3						mRotation;												///< Note: X, Y, Z of rotation quaternion - note we read 4 bytes beyond this so make sure there's something there
-		uint32						mUserData;												///< User data value (put here because it falls in padding bytes)
-		bool						mIsRotationIdentity;									///< If mRotation is close to identity (put here because it falls in padding bytes)
-		// 3 padding bytes left
+		Float4						mPositionCOM;											///< Note: Position of center of mass of sub shape!
+		Float8						mRotation;												///< Full Cl(4,0) rotor (8 floats). TODO(4D): Spin(4) has only 6 DOF; a compressed encoding is a v1.1 memory optimization.
+		uint32						mUserData;												///< User data value (can be used by the application for any purpose)
+		bool						mIsRotationIdentity;									///< If mRotation is close to identity
 	};
-
-	static_assert(sizeof(SubShape) == (sizeof(void *) == 8? 40 : 36), "Compiler added unexpected padding");
 
 	using SubShapes = Array<SubShape>;
 
@@ -303,10 +300,10 @@ public:
 	virtual float					GetVolume() const override;
 
 	// See Shape::IsValidScale
-	virtual bool					IsValidScale(Vec3Arg inScale) const override;
+	virtual bool					IsValidScale(Vec4Arg inScale) const override;
 
 	// See Shape::MakeScaleValid
-	virtual Vec3					MakeScaleValid(Vec3Arg inScale) const override;
+	virtual Vec4					MakeScaleValid(Vec4Arg inScale) const override;
 
 	// Register shape functions with the registry
 	static void						sRegister();
@@ -341,14 +338,14 @@ protected:
 			mInnerRadius = min(mInnerRadius, s.mShape->GetInnerRadius());
 	}
 
-	Vec3							mCenterOfMass { Vec3::sZero() };						///< Center of mass of the compound
-	AABox							mLocalBounds { Vec3::sZero(), Vec3::sZero() };
+	Vec4							mCenterOfMass { Vec4::sZero() };						///< Center of mass of the compound
+	AABox							mLocalBounds { Vec4::sZero(), Vec4::sZero() };
 	SubShapes						mSubShapes;
 	float							mInnerRadius = FLT_MAX;									///< Smallest radius of GetInnerRadius() of child shapes
 
 private:
 	// Helper functions called by CollisionDispatch
-	static void						sCastCompoundVsShape(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec3Arg inScale, const ShapeFilter &inShapeFilter, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector);
+	static void						sCastCompoundVsShape(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec4Arg inScale, const ShapeFilter &inShapeFilter, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector);
 };
 
 JPH_NAMESPACE_END

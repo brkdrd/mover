@@ -49,7 +49,7 @@ const PhysicsMaterial *DecoratedShape::GetMaterial(const SubShapeID &inSubShapeI
 	return mInnerShape->GetMaterial(inSubShapeID);
 }
 
-void DecoratedShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inDirection, Vec3Arg inScale, Mat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const
+void DecoratedShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec4Arg inDirection, Vec4Arg inScale, RMat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const
 {
 	mInnerShape->GetSupportingFace(inSubShapeID, inDirection, inScale, inCenterOfMassTransform, outVertices);
 }

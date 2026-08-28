@@ -37,33 +37,34 @@ const Shape *Shape::GetLeafShape([[maybe_unused]] const SubShapeID &inSubShapeID
 	return this;
 }
 
-TransformedShape Shape::GetSubShapeTransformedShape(const SubShapeID &inSubShapeID, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale, SubShapeID &outRemainder) const
+TransformedShape Shape::GetSubShapeTransformedShape(const SubShapeID &inSubShapeID, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale, SubShapeID &outRemainder) const
 {
 	// We have reached the leaf shape so there is no remainder
 	outRemainder = SubShapeID();
 
 	// Just return the transformed shape for this shape
-	TransformedShape ts(RVec3(inPositionCOM), inRotation, this, BodyID());
+	TransformedShape ts(RVec4(inPositionCOM), inRotation, this, BodyID());
 	ts.SetShapeScale(inScale);
 	return ts;
 }
 
-void Shape::CollectTransformedShapes(const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void Shape::CollectTransformedShapes(const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale, const SubShapeIDCreator &inSubShapeIDCreator, TransformedShapeCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	// Test shape filter
 	if (!inShapeFilter.ShouldCollide(this, inSubShapeIDCreator.GetID()))
 		return;
 
-	TransformedShape ts(RVec3(inPositionCOM), inRotation, this, TransformedShape::sGetBodyID(ioCollector.GetContext()), inSubShapeIDCreator);
+	TransformedShape ts(RVec4(inPositionCOM), inRotation, this, TransformedShape::sGetBodyID(ioCollector.GetContext()), inSubShapeIDCreator);
 	ts.SetShapeScale(inScale);
 	ioCollector.AddHit(ts);
 }
 
-void Shape::TransformShape(Mat44Arg inCenterOfMassTransform, TransformedShapeCollector &ioCollector) const
+void Shape::TransformShape(RMat44Arg inCenterOfMassTransform, TransformedShapeCollector &ioCollector) const
 {
-	Vec3 scale;
-	Mat44 transform = inCenterOfMassTransform.Decompose(scale);
-	TransformedShape ts(RVec3(transform.GetTranslation()), transform.GetQuaternion(), this, BodyID(), SubShapeIDCreator());
+	// Decompose transform into rotation-translation and per-axis scale
+	Vec4 scale;
+	RMat44 rt = inCenterOfMassTransform.Decompose(scale);
+	TransformedShape ts(rt.GetTranslation(), rt.GetRotation().GetRotor(), this, BodyID(), SubShapeIDCreator());
 	ts.SetShapeScale(MakeScaleValid(scale));
 	ioCollector.AddHit(ts);
 }
@@ -220,19 +221,19 @@ Shape::Stats Shape::GetStatsRecursive(VisitedShapes &ioVisitedShapes) const
 	return stats;
 }
 
-bool Shape::IsValidScale(Vec3Arg inScale) const
+bool Shape::IsValidScale(Vec4Arg inScale) const
 {
 	return !ScaleHelpers::IsZeroScale(inScale);
 }
 
-Vec3 Shape::MakeScaleValid(Vec3Arg inScale) const
+Vec4 Shape::MakeScaleValid(Vec4Arg inScale) const
 {
 	return ScaleHelpers::MakeNonZeroScale(inScale);
 }
 
-Shape::ShapeResult Shape::ScaleShape(Vec3Arg inScale) const
+Shape::ShapeResult Shape::ScaleShape(Vec4Arg inScale) const
 {
-	const Vec3 unit_scale = Vec3::sOne();
+	const Vec4 unit_scale = Vec4::sOne();
 
 	if (inScale.IsNearZero())
 	{
@@ -253,7 +254,9 @@ Shape::ShapeResult Shape::ScaleShape(Vec3Arg inScale) const
 		return result;
 	}
 
-	// Collect the leaf shapes and their transforms
+	// Collect the leaf shapes and their transforms.
+	// The transform applies scale about the center of mass: p -> scale * (p + COM)
+	// which decomposes as a linear part diag(scale) with translation diag(scale) * COM.
 	struct Collector : TransformedShapeCollector
 	{
 		virtual void				AddHit(const ResultType &inResult) override
@@ -264,7 +267,7 @@ Shape::ShapeResult Shape::ScaleShape(Vec3Arg inScale) const
 		Array<TransformedShape>		mShapes;
 	};
 	Collector collector;
-	TransformShape(Mat44::sScale(inScale) * Mat44::sTranslation(GetCenterOfMass()), collector);
+	TransformShape(RMat44::sScale(inScale).PreTranslated(GetCenterOfMass()), collector);
 
 	// Construct a compound shape
 	StaticCompoundShapeSettings compound;
@@ -274,18 +277,18 @@ Shape::ShapeResult Shape::ScaleShape(Vec3Arg inScale) const
 		const Shape *shape = ts.mShape;
 
 		// Construct a scaled shape if scale is not unit
-		Vec3 scale = ts.GetShapeScale();
+		Vec4 scale = ts.GetShapeScale();
 		if (!scale.IsClose(unit_scale))
 			shape = new ScaledShape(shape, scale);
 
 		// Add the shape
-		compound.AddShape(Vec3(ts.mShapePositionCOM) - ts.mShapeRotation * shape->GetCenterOfMass(), ts.mShapeRotation, shape);
+		compound.AddShape(Vec4(ts.mShapePositionCOM) - ts.mShapeRotation * shape->GetCenterOfMass(), ts.mShapeRotation, shape);
 	}
 
 	return compound.Create();
 }
 
-void Shape::sCollidePointUsingRayCast(const Shape &inShape, Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter)
+void Shape::sCollidePointUsingRayCast(const Shape &inShape, Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter)
 {
 	// First test if we're inside our bounding box
 	AABox bounds = inShape.GetLocalBounds();
@@ -312,8 +315,11 @@ void Shape::sCollidePointUsingRayCast(const Shape &inShape, Vec3Arg inPoint, con
 		RayCastSettings settings;
 		settings.SetBackFaceMode(EBackFaceMode::CollideWithBackFaces);
 
-		// Cast a ray that's 10% longer than the height of our bounding box
-		inShape.CastRay(RayCast { inPoint, 1.1f * bounds.GetSize().GetY() * Vec3::sAxisY() }, settings, inSubShapeIDCreator, collector, inShapeFilter);
+		// Cast a ray that's 10% longer than the Y-extent of our bounding box.
+		// TODO(4D): In 4D, an odd-intersection test along a single axis is not in general a reliable
+		// point-in-polytope test without additional considerations. Revisit this heuristic once 4D
+		// ray-vs-shape casts are fully validated.
+		inShape.CastRay(RayCast { inPoint, 1.1f * bounds.GetSize().GetY() * Vec4::sAxisY() }, settings, inSubShapeIDCreator, collector, inShapeFilter);
 
 		// Odd amount of hits means inside
 		if ((collector.mHitCount & 1) == 1)

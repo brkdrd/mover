@@ -43,7 +43,7 @@ public:
 	virtual bool					MustBeStatic() const override							{ return mInnerShape->MustBeStatic(); }
 
 	// See Shape::GetCenterOfMass
-	virtual Vec3					GetCenterOfMass() const override						{ return mInnerShape->GetCenterOfMass(); }
+	virtual Vec4					GetCenterOfMass() const override						{ return mInnerShape->GetCenterOfMass(); }
 
 	// See Shape::GetSubShapeIDBitsRecursive
 	virtual uint					GetSubShapeIDBitsRecursive() const override				{ return mInnerShape->GetSubShapeIDBitsRecursive(); }
@@ -55,7 +55,7 @@ public:
 	virtual const PhysicsMaterial *	GetMaterial(const SubShapeID &inSubShapeID) const override;
 
 	// See Shape::GetSupportingFace
-	virtual void					GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inDirection, Vec3Arg inScale, Mat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const override;
+	virtual void					GetSupportingFace(const SubShapeID &inSubShapeID, Vec4Arg inDirection, Vec4Arg inScale, RMat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const override;
 
 	// See Shape::GetSubShapeUserData
 	virtual uint64					GetSubShapeUserData(const SubShapeID &inSubShapeID) const override;
@@ -68,10 +68,10 @@ public:
 	virtual Stats					GetStatsRecursive(VisitedShapes &ioVisitedShapes) const override;
 
 	// See Shape::IsValidScale
-	virtual bool					IsValidScale(Vec3Arg inScale) const override			{ return mInnerShape->IsValidScale(inScale); }
+	virtual bool					IsValidScale(Vec4Arg inScale) const override			{ return mInnerShape->IsValidScale(inScale); }
 
 	// See Shape::MakeScaleValid
-	virtual Vec3					MakeScaleValid(Vec3Arg inScale) const override			{ return mInnerShape->MakeScaleValid(inScale); }
+	virtual Vec4					MakeScaleValid(Vec4Arg inScale) const override			{ return mInnerShape->MakeScaleValid(inScale); }
 
 protected:
 	RefConst<Shape>					mInnerShape;

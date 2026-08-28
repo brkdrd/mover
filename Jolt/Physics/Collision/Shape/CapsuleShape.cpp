@@ -7,7 +7,6 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/ScaleHelpers.h>
-#include <Jolt/Physics/Collision/Shape/GetTrianglesContext.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollidePointResult.h>
@@ -30,26 +29,6 @@ JPH_IMPLEMENT_SERIALIZABLE_VIRTUAL(CapsuleShapeSettings)
 	JPH_ADD_ATTRIBUTE(CapsuleShapeSettings, mRadius)
 	JPH_ADD_ATTRIBUTE(CapsuleShapeSettings, mHalfHeightOfCylinder)
 }
-
-static const int cCapsuleDetailLevel = 2;
-
-static const StaticArray<Vec3, 192> sCapsuleTopTriangles = []() {
-	StaticArray<Vec3, 192> verts;
-	GetTrianglesContextVertexList::sCreateHalfUnitSphereTop(verts, cCapsuleDetailLevel);
-	return verts;
-}();
-
-static const StaticArray<Vec3, 96> sCapsuleMiddleTriangles = []() {
-	StaticArray<Vec3, 96> verts;
-	GetTrianglesContextVertexList::sCreateUnitOpenCylinder(verts, cCapsuleDetailLevel);
-	return verts;
-}();
-
-static const StaticArray<Vec3, 192> sCapsuleBottomTriangles = []() {
-	StaticArray<Vec3, 192> verts;
-	GetTrianglesContextVertexList::sCreateHalfUnitSphereBottom(verts, cCapsuleDetailLevel);
-	return verts;
-}();
 
 ShapeSettings::ShapeResult CapsuleShapeSettings::Create() const
 {
@@ -91,7 +70,7 @@ CapsuleShape::CapsuleShape(const CapsuleShapeSettings &inSettings, ShapeResult &
 class CapsuleShape::CapsuleNoConvex final : public Support
 {
 public:
-					CapsuleNoConvex(Vec3Arg inHalfHeightOfCylinder, float inConvexRadius) :
+					CapsuleNoConvex(Vec4Arg inHalfHeightOfCylinder, float inConvexRadius) :
 		mHalfHeightOfCylinder(inHalfHeightOfCylinder),
 		mConvexRadius(inConvexRadius)
 	{
@@ -99,7 +78,7 @@ public:
 		JPH_ASSERT(IsAligned(this, alignof(CapsuleNoConvex)));
 	}
 
-	virtual Vec3	GetSupport(Vec3Arg inDirection) const override
+	virtual Vec4	GetSupport(Vec4Arg inDirection) const override
 	{
 		if (inDirection.GetY() > 0)
 			return mHalfHeightOfCylinder;
@@ -113,14 +92,14 @@ public:
 	}
 
 private:
-	Vec3			mHalfHeightOfCylinder;
+	Vec4			mHalfHeightOfCylinder;
 	float			mConvexRadius;
 };
 
 class CapsuleShape::CapsuleWithConvex final : public Support
 {
 public:
-					CapsuleWithConvex(Vec3Arg inHalfHeightOfCylinder, float inRadius) :
+					CapsuleWithConvex(Vec4Arg inHalfHeightOfCylinder, float inRadius) :
 		mHalfHeightOfCylinder(inHalfHeightOfCylinder),
 		mRadius(inRadius)
 	{
@@ -128,10 +107,10 @@ public:
 		JPH_ASSERT(IsAligned(this, alignof(CapsuleWithConvex)));
 	}
 
-	virtual Vec3	GetSupport(Vec3Arg inDirection) const override
+	virtual Vec4	GetSupport(Vec4Arg inDirection) const override
 	{
 		float len = inDirection.Length();
-		Vec3 radius = len > 0.0f? inDirection * (mRadius / len) : Vec3::sZero();
+		Vec4 radius = len > 0.0f? Vec4(inDirection * (mRadius / len)) : Vec4::sZero();
 
 		if (inDirection.GetY() > 0)
 			return radius + mHalfHeightOfCylinder;
@@ -145,18 +124,18 @@ public:
 	}
 
 private:
-	Vec3			mHalfHeightOfCylinder;
+	Vec4			mHalfHeightOfCylinder;
 	float			mRadius;
 };
 
-const ConvexShape::Support *CapsuleShape::GetSupportFunction(ESupportMode inMode, SupportBuffer &inBuffer, Vec3Arg inScale) const
+const ConvexShape::Support *CapsuleShape::GetSupportFunction(ESupportMode inMode, SupportBuffer &inBuffer, Vec4Arg inScale) const
 {
 	JPH_ASSERT(IsValidScale(inScale));
 
 	// Get scaled capsule
-	Vec3 abs_scale = inScale.Abs();
+	Vec4 abs_scale = inScale.Abs();
 	float scale = abs_scale.GetX();
-	Vec3 scaled_half_height_of_cylinder = Vec3(0, scale * mHalfHeightOfCylinder, 0);
+	Vec4 scaled_half_height_of_cylinder = Vec4(0, scale * mHalfHeightOfCylinder, 0, 0);
 	float scaled_radius = scale * mRadius;
 
 	switch (inMode)
@@ -173,14 +152,14 @@ const ConvexShape::Support *CapsuleShape::GetSupportFunction(ESupportMode inMode
 	return nullptr;
 }
 
-void CapsuleShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inDirection, Vec3Arg inScale, Mat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const
+void CapsuleShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec4Arg inDirection, Vec4Arg inScale, RMat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const
 {
 	JPH_ASSERT(inSubShapeID.IsEmpty(), "Invalid subshape ID");
 	JPH_ASSERT(IsValidScale(inScale));
 
-	// Get direction in horizontal plane
-	Vec3 direction = inDirection;
-	direction.SetComponent(1, 0.0f);
+	// Get direction in the plane perpendicular to the capsule axis (X, Z, W)
+	Vec4 direction = inDirection;
+	direction.SetY(0.0f);
 
 	// Check zero vector, in this case we're hitting from top/bottom so there's no supporting face
 	float len = direction.Length();
@@ -188,15 +167,15 @@ void CapsuleShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inD
 		return;
 
 	// Get scaled capsule
-	Vec3 abs_scale = inScale.Abs();
+	Vec4 abs_scale = inScale.Abs();
 	float scale = abs_scale.GetX();
-	Vec3 scaled_half_height_of_cylinder = Vec3(0, scale * mHalfHeightOfCylinder, 0);
+	Vec4 scaled_half_height_of_cylinder = Vec4(0, scale * mHalfHeightOfCylinder, 0, 0);
 	float scaled_radius = scale * mRadius;
 
 	// Get support point for top and bottom sphere in the opposite of 'direction' (including convex radius)
-	Vec3 support = (scaled_radius / len) * direction;
-	Vec3 support_top = scaled_half_height_of_cylinder - support;
-	Vec3 support_bottom = -scaled_half_height_of_cylinder - support;
+	Vec4 support = Vec4((scaled_radius / len) * direction);
+	Vec4 support_top = scaled_half_height_of_cylinder - support;
+	Vec4 support_bottom = -scaled_half_height_of_cylinder - support;
 
 	// Get projection on inDirection
 	// Note that inDirection is not normalized, so we need to divide by inDirection.Length() to get the actual projection
@@ -207,8 +186,8 @@ void CapsuleShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inD
 	// If projection is roughly equal then return line, otherwise we return nothing as there's only 1 point
 	if (abs(proj_top - proj_bottom) < cCapsuleProjectionSlop * inDirection.Length())
 	{
-		outVertices.push_back(inCenterOfMassTransform * support_top);
-		outVertices.push_back(inCenterOfMassTransform * support_bottom);
+		outVertices.push_back(Vec4(inCenterOfMassTransform * support_top));
+		outVertices.push_back(Vec4(inCenterOfMassTransform * support_bottom));
 	}
 }
 
@@ -217,67 +196,98 @@ MassProperties CapsuleShape::GetMassProperties() const
 	MassProperties p;
 
 	float density = GetDensity();
+	float r = mRadius;
+	float H = mHalfHeightOfCylinder;
+	float r2 = r * r, r3 = r2 * r, r4 = r2 * r2, r5 = r4 * r, r6 = r4 * r2;
+	float H2 = H * H, H3 = H2 * H;
+	const float PI = JPH_PI;
+	const float PI2 = JPH_PI * JPH_PI;
 
-	// Calculate inertia and mass according to:
-	// https://www.gamedev.net/resources/_/technical/math-and-physics/capsule-inertia-tensor-r3856
-	// Note that there is an error in eq 14, H^2/2 should be H^2/4 in Ixx and Izz, eq 12 does contain the correct value
-	float radius_sq = Square(mRadius);
-	float height = 2.0f * mHalfHeightOfCylinder;
-	float cylinder_mass = JPH_PI * height * radius_sq * density;
-	float hemisphere_mass = (2.0f * JPH_PI / 3.0f) * radius_sq * mRadius * density;
+	// A 4D capsule = a 4D cylinder (3-ball cross section of radius r swept along Y over [-H, H])
+	// capped by two half-4-balls of radius r centered at (0, +-H, 0, 0).
+	// mInertia stores the raw second-moment tensor M_ij = integral(rho * x_i * x_j dV), matching BoxShape's convention.
+	// By symmetry M is diagonal with M_xx = M_zz = M_ww (perpendicular) and M_yy (along the axis).
 
-	// From cylinder
-	float height_sq = Square(height);
-	float inertia_y = radius_sq * cylinder_mass * 0.5f;
-	float inertia_xz = inertia_y * 0.5f + cylinder_mass * height_sq / 12.0f;
+	// Cylinder: 3-ball volume = 4/3 pi r^3, swept over length 2H
+	float mass_cyl = density * (8.0f / 3.0f) * PI * r3 * H;
+	// Caps: two hemispheres = one full 4-ball, volume = pi^2/2 r^4
+	float mass_caps = density * 0.5f * PI2 * r4;
+	p.mMass = mass_cyl + mass_caps;
 
-	// From hemispheres
-	float temp = hemisphere_mass * 4.0f * radius_sq / 5.0f;
-	inertia_y += temp;
-	inertia_xz += temp + hemisphere_mass * (0.5f * height_sq + (3.0f / 4.0f) * height * mRadius);
+	// Cylinder second moments:
+	//   M_yy = rho * (integral_{-H}^{H} y^2 dy) * (3-ball area)   = rho * (2H^3/3) * (4/3 pi r^3) = rho * 8 pi/9 r^3 H^3
+	//   M_xx = rho * (integral_{3-ball} x^2 dA) * (2H)            = rho * (4 pi r^5/15) * (2H)     = rho * 8 pi/15 r^5 H
+	float Myy_cyl = density * (8.0f * PI / 9.0f) * r3 * H3;
+	float Mxx_cyl = density * (8.0f * PI / 15.0f) * r5 * H;
 
-	// Mass is cylinder + hemispheres
-	p.mMass = cylinder_mass + hemisphere_mass * 2.0f;
+	// Cap second moments (per hemisphere, in its own centered frame):
+	//   V_h    = pi^2 r^4 / 4                (half of the 4-ball volume)
+	//   S1     = integral y dV = 4 pi/15 r^5 (first moment about the cut plane)
+	//   S2     = integral y^2 dV = pi^2 r^6 / 24
+	//   Sperp  = integral x^2 dV = pi^2 r^6 / 24
+	// Each cap is offset to y = +-H, so by the parallel-axis theorem for second moments:
+	//   M_yy_cap = rho * (H^2 V_h + 2H S1 + S2), and the two caps sum (both give the same value).
+	float V_h = 0.25f * PI2 * r4;
+	float S1 = (4.0f * PI / 15.0f) * r5;
+	float S2 = PI2 * r6 / 24.0f;
+	float Sperp = PI2 * r6 / 24.0f;
+	float Myy_caps = 2.0f * density * (H2 * V_h + 2.0f * H * S1 + S2);
+	float Mxx_caps = 2.0f * density * Sperp;
 
-	// Set inertia
-	p.mInertia = Mat44::sScale(Vec3(inertia_xz, inertia_y, inertia_xz));
+	float Mxx = Mxx_cyl + Mxx_caps; // = M_zz = M_ww
+	float Myy = Myy_cyl + Myy_caps;
+
+	// TODO(4D): validate this second-moment derivation against a brute-force numerical integral
+	// (per the project's "never trust, always test the algebra" rule). It reduces correctly to the
+	// 4-ball second moment (mass * r^2 / 6 per axis) as H -> 0.
+	Mat44 m = Mat44::sZero();
+	m(0, 0) = Mxx;
+	m(1, 1) = Myy;
+	m(2, 2) = Mxx;
+	m(3, 3) = Mxx;
+	p.mInertia = m;
 
 	return p;
 }
 
-Vec3 CapsuleShape::GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec3Arg inLocalSurfacePosition) const
+Vec4 CapsuleShape::GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec4Arg inLocalSurfacePosition) const
 {
 	JPH_ASSERT(inSubShapeID.IsEmpty(), "Invalid subshape ID");
 
 	if (inLocalSurfacePosition.GetY() > mHalfHeightOfCylinder)
-		return (inLocalSurfacePosition - Vec3(0, mHalfHeightOfCylinder, 0)).Normalized();
+		return Vec4((inLocalSurfacePosition - Vec4(0, mHalfHeightOfCylinder, 0, 0)).Normalized());
 	else if (inLocalSurfacePosition.GetY() < -mHalfHeightOfCylinder)
-		return (inLocalSurfacePosition - Vec3(0, -mHalfHeightOfCylinder, 0)).Normalized();
+		return Vec4((inLocalSurfacePosition - Vec4(0, -mHalfHeightOfCylinder, 0, 0)).Normalized());
 	else
-		return Vec3(inLocalSurfacePosition.GetX(), 0, inLocalSurfacePosition.GetZ()).NormalizedOr(Vec3::sAxisX());
+	{
+		// Perpendicular (X, Z, W) part
+		Vec4 horiz(inLocalSurfacePosition.GetX(), 0.0f, inLocalSurfacePosition.GetZ(), inLocalSurfacePosition.GetW());
+		float len = horiz.Length();
+		return len > 0.0f? Vec4(horiz.Normalized()) : Vec4::sAxisX();
+	}
 }
 
 AABox CapsuleShape::GetLocalBounds() const
 {
-	Vec3 extent = Vec3::sReplicate(mRadius) + Vec3(0, mHalfHeightOfCylinder, 0);
+	Vec4 extent = Vec4::sReplicate(mRadius) + Vec4(0, mHalfHeightOfCylinder, 0, 0);
 	return AABox(-extent, extent);
 }
 
-AABox CapsuleShape::GetWorldSpaceBounds(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale) const
+AABox CapsuleShape::GetWorldSpaceBounds(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale) const
 {
 	JPH_ASSERT(IsValidScale(inScale));
 
-	Vec3 abs_scale = inScale.Abs();
+	Vec4 abs_scale = inScale.Abs();
 	float scale = abs_scale.GetX();
-	Vec3 extent = Vec3::sReplicate(scale * mRadius);
-	Vec3 height = Vec3(0, scale * mHalfHeightOfCylinder, 0);
-	Vec3 p1 = inCenterOfMassTransform * -height;
-	Vec3 p2 = inCenterOfMassTransform * height;
-	return AABox(Vec3::sMin(p1, p2) - extent, Vec3::sMax(p1, p2) + extent);
+	Vec4 extent = Vec4::sReplicate(scale * mRadius);
+	Vec4 height = Vec4(0, scale * mHalfHeightOfCylinder, 0, 0);
+	Vec4 p1 = Vec4(inCenterOfMassTransform * -height);
+	Vec4 p2 = Vec4(inCenterOfMassTransform * height);
+	return AABox(Vec4::sMin(p1, p2) - extent, Vec4::sMax(p1, p2) + extent);
 }
 
 #ifdef JPH_DEBUG_RENDERER
-void CapsuleShape::Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const
+void CapsuleShape::Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const
 {
 	DebugRenderer::EDrawMode draw_mode = inDrawWireframe? DebugRenderer::EDrawMode::Wireframe : DebugRenderer::EDrawMode::Solid;
 	inRenderer->DrawCapsule(inCenterOfMassTransform * Mat44::sScale(inScale.Abs().GetX()), mHalfHeightOfCylinder, mRadius, inUseMaterialColors? GetMaterial()->GetDebugColor() : inColor, DebugRenderer::ECastShadow::On, draw_mode);
@@ -297,7 +307,7 @@ bool CapsuleShape::CastRay(const RayCast &inRay, const SubShapeIDCreator &inSubS
 	return false;
 }
 
-void CapsuleShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void CapsuleShape::CollidePoint(Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	// Test shape filter
 	if (!inShapeFilter.ShouldCollide(this, inSubShapeIDCreator.GetID()))
@@ -308,96 +318,38 @@ void CapsuleShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubS
 	// Get vertical distance to the top/bottom sphere centers
 	float delta_y = abs(inPoint.GetY()) - mHalfHeightOfCylinder;
 
-	// Get distance in horizontal plane
-	float xz_sq = Square(inPoint.GetX()) + Square(inPoint.GetZ());
+	// Get squared distance in the plane perpendicular to the capsule axis (X, Z, W)
+	float perp_sq = Square(inPoint.GetX()) + Square(inPoint.GetZ()) + Square(inPoint.GetW());
 
 	// Check if the point is in one of the two spheres
-	bool in_sphere = xz_sq + Square(delta_y) <= radius_sq;
+	bool in_sphere = perp_sq + Square(delta_y) <= radius_sq;
 
 	// Check if the point is in the cylinder in the middle
-	bool in_cylinder = delta_y <= 0.0f && xz_sq <= radius_sq;
+	bool in_cylinder = delta_y <= 0.0f && perp_sq <= radius_sq;
 
 	if (in_sphere || in_cylinder)
 		ioCollector.AddHit({ TransformedShape::sGetBodyID(ioCollector.GetContext()), inSubShapeIDCreator.GetID() });
 }
 
-void CapsuleShape::CollideSoftBodyVertices(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const
+void CapsuleShape::CollideSoftBodyVertices(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const
 {
-	JPH_ASSERT(IsValidScale(inScale));
-
-	Mat44 inverse_transform = inCenterOfMassTransform.InversedRotationTranslation();
-
-	// Get scaled capsule
-	float scale = abs(inScale.GetX());
-	float half_height_of_cylinder = scale * mHalfHeightOfCylinder;
-	float radius = scale * mRadius;
-
-	for (CollideSoftBodyVertexIterator v = inVertices, sbv_end = inVertices + inNumVertices; v != sbv_end; ++v)
-		if (v.GetInvMass() > 0.0f)
-		{
-			// Calculate penetration
-			Vec3 local_pos = inverse_transform * v.GetPosition();
-			if (abs(local_pos.GetY()) <= half_height_of_cylinder)
-			{
-				// Near cylinder
-				Vec3 normal = local_pos;
-				normal.SetY(0.0f);
-				float normal_length = normal.Length();
-				float penetration = radius - normal_length;
-				if (v.UpdatePenetration(penetration))
-				{
-					// Calculate contact point and normal
-					normal = normal_length > 0.0f? normal / normal_length : Vec3::sAxisX();
-					Vec3 point = radius * normal;
-
-					// Store collision
-					v.SetCollision(Plane::sFromPointAndNormal(point, normal).GetTransformed(inCenterOfMassTransform), inCollidingShapeIndex);
-				}
-			}
-			else
-			{
-				// Near cap
-				Vec3 center = Vec3(0, Sign(local_pos.GetY()) * half_height_of_cylinder, 0);
-				Vec3 delta = local_pos - center;
-				float distance = delta.Length();
-				float penetration = radius - distance;
-				if (v.UpdatePenetration(penetration))
-				{
-					// Calculate contact point and normal
-					Vec3 normal = delta / distance;
-					Vec3 point = center + radius * normal;
-
-					// Store collision
-					v.SetCollision(Plane::sFromPointAndNormal(point, normal).GetTransformed(inCenterOfMassTransform), inCollidingShapeIndex);
-				}
-			}
-		}
+	// TODO(4D): CollideSoftBodyVertexIterator still exposes 3D positions. Stubbed until the soft-body
+	// subsystem is migrated to 4D (SoftBody is cut for v1).
+	(void)inCenterOfMassTransform; (void)inScale; (void)inVertices; (void)inNumVertices; (void)inCollidingShapeIndex;
 }
 
-void CapsuleShape::GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale) const
+void CapsuleShape::GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale) const
 {
-	JPH_ASSERT(IsValidScale(inScale));
-
-	Vec3 abs_scale = inScale.Abs();
-	float scale = abs_scale.GetX();
-
-	GetTrianglesContextMultiVertexList *context = new (&ioContext) GetTrianglesContextMultiVertexList(false, GetMaterial());
-
-	Mat44 world_matrix = Mat44::sRotationTranslation(inRotation, inPositionCOM) * Mat44::sScale(scale);
-
-	Mat44 top_matrix = world_matrix * Mat44(Vec4(mRadius, 0, 0, 0), Vec4(0, mRadius, 0, 0), Vec4(0, 0, mRadius, 0), Vec4(0, mHalfHeightOfCylinder, 0, 1));
-	context->AddPart(top_matrix, sCapsuleTopTriangles.data(), sCapsuleTopTriangles.size());
-
-	Mat44 middle_matrix = world_matrix * Mat44::sScale(Vec3(mRadius, mHalfHeightOfCylinder, mRadius));
-	context->AddPart(middle_matrix, sCapsuleMiddleTriangles.data(), sCapsuleMiddleTriangles.size());
-
-	Mat44 bottom_matrix = world_matrix * Mat44(Vec4(mRadius, 0, 0, 0), Vec4(0, mRadius, 0, 0), Vec4(0, 0, mRadius, 0), Vec4(0, -mHalfHeightOfCylinder, 0, 1));
-	context->AddPart(bottom_matrix, sCapsuleBottomTriangles.data(), sCapsuleBottomTriangles.size());
+	// TODO(4D): The GetTriangles vertex pipeline is still 3D. Stubbed until the 4D (tetrahedra-based)
+	// boundary tessellation is defined.
+	(void)ioContext; (void)inBox; (void)inPositionCOM; (void)inRotation; (void)inScale;
 }
 
-int CapsuleShape::GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float3 *outTriangleVertices, const PhysicsMaterial **outMaterials) const
+int CapsuleShape::GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float4 *outTriangleVertices, const PhysicsMaterial **outMaterials) const
 {
-	return ((GetTrianglesContextMultiVertexList &)ioContext).GetTrianglesNext(inMaxTrianglesRequested, outTriangleVertices, outMaterials);
+	// TODO(4D): See GetTrianglesStart. Returns 0 to indicate no tessellation data is currently produced.
+	(void)ioContext; (void)inMaxTrianglesRequested; (void)outTriangleVertices; (void)outMaterials;
+	return 0;
 }
 
 void CapsuleShape::SaveBinaryState(StreamOut &inStream) const
@@ -416,14 +368,14 @@ void CapsuleShape::RestoreBinaryState(StreamIn &inStream)
 	inStream.Read(mHalfHeightOfCylinder);
 }
 
-bool CapsuleShape::IsValidScale(Vec3Arg inScale) const
+bool CapsuleShape::IsValidScale(Vec4Arg inScale) const
 {
 	return ConvexShape::IsValidScale(inScale) && ScaleHelpers::IsUniformScale(inScale.Abs());
 }
 
-Vec3 CapsuleShape::MakeScaleValid(Vec3Arg inScale) const
+Vec4 CapsuleShape::MakeScaleValid(Vec4Arg inScale) const
 {
-	Vec3 scale = ScaleHelpers::MakeNonZeroScale(inScale);
+	Vec4 scale = ScaleHelpers::MakeNonZeroScale(inScale);
 
 	return scale.GetSign() * ScaleHelpers::MakeUniformScale(scale.Abs());
 }

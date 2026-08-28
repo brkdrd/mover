@@ -47,7 +47,7 @@ public:
 	virtual AABox			GetLocalBounds() const override;
 
 	// See Shape::GetWorldSpaceBounds
-	virtual AABox			GetWorldSpaceBounds(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale) const override;
+	virtual AABox			GetWorldSpaceBounds(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale) const override;
 	using Shape::GetWorldSpaceBounds;
 
 	// See Shape::GetInnerRadius
@@ -57,20 +57,20 @@ public:
 	virtual MassProperties	GetMassProperties() const override;
 
 	// See Shape::GetSurfaceNormal
-	virtual Vec3			GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec3Arg inLocalSurfacePosition) const override;
+	virtual Vec4			GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec4Arg inLocalSurfacePosition) const override;
 
 	// See Shape::GetSupportingFace
-	virtual void			GetSupportingFace([[maybe_unused]] const SubShapeID &inSubShapeID, [[maybe_unused]] Vec3Arg inDirection, [[maybe_unused]] Vec3Arg inScale, [[maybe_unused]] Mat44Arg inCenterOfMassTransform, [[maybe_unused]] SupportingFace &outVertices) const override { /* Hit is always a single point, no point in returning anything */ }
+	virtual void			GetSupportingFace([[maybe_unused]] const SubShapeID &inSubShapeID, [[maybe_unused]] Vec4Arg inDirection, [[maybe_unused]] Vec4Arg inScale, [[maybe_unused]] RMat44Arg inCenterOfMassTransform, [[maybe_unused]] SupportingFace &outVertices) const override { /* Hit is always a single point, no point in returning anything */ }
 
 	// See ConvexShape::GetSupportFunction
-	virtual const Support *	GetSupportFunction(ESupportMode inMode, SupportBuffer &inBuffer, Vec3Arg inScale) const override;
+	virtual const Support *	GetSupportFunction(ESupportMode inMode, SupportBuffer &inBuffer, Vec4Arg inScale) const override;
 
 	// See Shape::GetSubmergedVolume
-	virtual void			GetSubmergedVolume(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec3 &outCenterOfBuoyancy JPH_IF_DEBUG_RENDERER(, RVec3Arg inBaseOffset)) const override;
+	virtual void			GetSubmergedVolume(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec4 &outCenterOfBuoyancy, RVec4Arg inBaseOffset) const override;
 
 #ifdef JPH_DEBUG_RENDERER
 	// See Shape::Draw
-	virtual void			Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const override;
+	virtual void			Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const override;
 #endif // JPH_DEBUG_RENDERER
 
 	// See Shape::CastRay
@@ -78,16 +78,16 @@ public:
 	virtual void			CastRay(const RayCast &inRay, const RayCastSettings &inRayCastSettings, const SubShapeIDCreator &inSubShapeIDCreator, CastRayCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
 
 	// See: Shape::CollidePoint
-	virtual void			CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
+	virtual void			CollidePoint(Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
 
 	// See: Shape::CollideSoftBodyVertices
-	virtual void			CollideSoftBodyVertices(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const override;
+	virtual void			CollideSoftBodyVertices(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const override;
 
 	// See Shape::GetTrianglesStart
-	virtual void			GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale) const override;
+	virtual void			GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale) const override;
 
 	// See Shape::GetTrianglesNext
-	virtual int				GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float3 *outTriangleVertices, const PhysicsMaterial **outMaterials = nullptr) const override;
+	virtual int				GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float4 *outTriangleVertices, const PhysicsMaterial **outMaterials = nullptr) const override;
 
 	// See Shape
 	virtual void			SaveBinaryState(StreamOut &inStream) const override;
@@ -96,13 +96,14 @@ public:
 	virtual Stats			GetStats() const override															{ return Stats(sizeof(*this), 0); }
 
 	// See Shape::GetVolume
-	virtual float			GetVolume() const override															{ return 4.0f / 3.0f * JPH_PI * Cubed(mRadius); }
+	// TODO(4D): In 4D the "volume" is hypervolume. A 4-ball of radius r has hypervolume pi^2/2 * r^4.
+	virtual float			GetVolume() const override															{ return 0.5f * JPH_PI * JPH_PI * Square(Square(mRadius)); }
 
 	// See Shape::IsValidScale
-	virtual bool			IsValidScale(Vec3Arg inScale) const override;
+	virtual bool			IsValidScale(Vec4Arg inScale) const override;
 
 	// See Shape::MakeScaleValid
-	virtual Vec3			MakeScaleValid(Vec3Arg inScale) const override;
+	virtual Vec4			MakeScaleValid(Vec4Arg inScale) const override;
 
 	// Register shape functions with the registry
 	static void				sRegister();
@@ -113,7 +114,7 @@ protected:
 
 private:
 	// Get the radius of this sphere scaled by inScale
-	inline float			GetScaledRadius(Vec3Arg inScale) const;
+	inline float			GetScaledRadius(Vec4Arg inScale) const;
 
 	// Classes for GetSupportFunction
 	class					SphereNoConvex;

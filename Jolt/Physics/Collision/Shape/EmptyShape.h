@@ -16,11 +16,11 @@ class JPH_EXPORT EmptyShapeSettings final : public ShapeSettings
 
 public:
 							EmptyShapeSettings() = default;
-	explicit				EmptyShapeSettings(Vec3Arg inCenterOfMass) : mCenterOfMass(inCenterOfMass) { }
+	explicit				EmptyShapeSettings(Vec4Arg inCenterOfMass) : mCenterOfMass(inCenterOfMass) { }
 
 	ShapeResult				Create() const override;
 
-	Vec3					mCenterOfMass = Vec3::sZero();									///< Determines the center of mass for this shape
+	Vec4					mCenterOfMass = Vec4::sZero();									///< Determines the center of mass for this shape
 };
 
 /// An empty shape that has no volume and collides with nothing.
@@ -36,40 +36,36 @@ class JPH_EXPORT EmptyShape final : public Shape
 public:
 	// Constructor
 							EmptyShape() : Shape(EShapeType::Empty, EShapeSubType::Empty) { }
-	explicit				EmptyShape(Vec3Arg inCenterOfMass) : Shape(EShapeType::Empty, EShapeSubType::Empty), mCenterOfMass(inCenterOfMass) { }
+	explicit				EmptyShape(Vec4Arg inCenterOfMass) : Shape(EShapeType::Empty, EShapeSubType::Empty), mCenterOfMass(inCenterOfMass) { }
 							EmptyShape(const EmptyShapeSettings &inSettings, ShapeResult &outResult) : Shape(EShapeType::Empty, EShapeSubType::Empty, inSettings, outResult), mCenterOfMass(inSettings.mCenterOfMass) { outResult.Set(this); }
 
 	// See: Shape
-	Vec3					GetCenterOfMass() const override								{ return mCenterOfMass; }
-	AABox					GetLocalBounds() const override									{ return { Vec3::sZero(), Vec3::sZero() }; }
+	Vec4					GetCenterOfMass() const override								{ return mCenterOfMass; }
+	AABox					GetLocalBounds() const override									{ return { Vec4::sZero(), Vec4::sZero() }; }
 	uint					GetSubShapeIDBitsRecursive() const override						{ return 0; }
 	float					GetInnerRadius() const override									{ return 0.0f; }
 	MassProperties			GetMassProperties() const override;
 	const PhysicsMaterial *	GetMaterial([[maybe_unused]] const SubShapeID &inSubShapeID) const override { return PhysicsMaterial::sDefault; }
-	virtual Vec3			GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec3Arg inLocalSurfacePosition) const override { return Vec3::sZero(); }
-	virtual void			GetSubmergedVolume(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec3 &outCenterOfBuoyancy
-#ifdef JPH_DEBUG_RENDERER // Not using JPH_IF_DEBUG_RENDERER for Doxygen
-		, RVec3Arg inBaseOffset
-#endif
-		) const override																	{ outTotalVolume = 0.0f; outSubmergedVolume = 0.0f; outCenterOfBuoyancy = Vec3::sZero(); }
+	virtual Vec4			GetSurfaceNormal(const SubShapeID &inSubShapeID, Vec4Arg inLocalSurfacePosition) const override { return Vec4::sZero(); }
+	virtual void			GetSubmergedVolume(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec4 &outCenterOfBuoyancy, RVec4Arg inBaseOffset) const override { outTotalVolume = 0.0f; outSubmergedVolume = 0.0f; outCenterOfBuoyancy = Vec4::sZero(); }
 #ifdef JPH_DEBUG_RENDERER
-	virtual void			Draw([[maybe_unused]] DebugRenderer *inRenderer, [[maybe_unused]] RMat44Arg inCenterOfMassTransform, [[maybe_unused]] Vec3Arg inScale, [[maybe_unused]] ColorArg inColor, [[maybe_unused]] bool inUseMaterialColors, [[maybe_unused]] bool inDrawWireframe) const override;
+	virtual void			Draw([[maybe_unused]] DebugRenderer *inRenderer, [[maybe_unused]] RMat44Arg inCenterOfMassTransform, [[maybe_unused]] Vec4Arg inScale, [[maybe_unused]] ColorArg inColor, [[maybe_unused]] bool inUseMaterialColors, [[maybe_unused]] bool inDrawWireframe) const override;
 #endif // JPH_DEBUG_RENDERER
 	virtual bool			CastRay([[maybe_unused]] const RayCast &inRay, [[maybe_unused]] const SubShapeIDCreator &inSubShapeIDCreator, [[maybe_unused]] RayCastResult &ioHit) const override { return false; }
 	virtual void			CastRay([[maybe_unused]] const RayCast &inRay, [[maybe_unused]] const RayCastSettings &inRayCastSettings, [[maybe_unused]] const SubShapeIDCreator &inSubShapeIDCreator, [[maybe_unused]] CastRayCollector &ioCollector, [[maybe_unused]] const ShapeFilter &inShapeFilter = { }) const override { /* Do nothing */ }
-	virtual void			CollidePoint([[maybe_unused]] Vec3Arg inPoint, [[maybe_unused]] const SubShapeIDCreator &inSubShapeIDCreator, [[maybe_unused]] CollidePointCollector &ioCollector, [[maybe_unused]] const ShapeFilter &inShapeFilter = { }) const override { /* Do nothing */ }
-	virtual void			CollideSoftBodyVertices([[maybe_unused]] Mat44Arg inCenterOfMassTransform, [[maybe_unused]] Vec3Arg inScale, [[maybe_unused]] const CollideSoftBodyVertexIterator &inVertices, [[maybe_unused]] uint inNumVertices, [[maybe_unused]] int inCollidingShapeIndex) const override { /* Do nothing */ }
-	virtual void			GetTrianglesStart([[maybe_unused]] GetTrianglesContext &ioContext, [[maybe_unused]] const AABox &inBox, [[maybe_unused]] Vec3Arg inPositionCOM, [[maybe_unused]] QuatArg inRotation, [[maybe_unused]] Vec3Arg inScale) const override { /* Do nothing */ }
-	virtual int				GetTrianglesNext([[maybe_unused]] GetTrianglesContext &ioContext, [[maybe_unused]] int inMaxTrianglesRequested, [[maybe_unused]] Float3 *outTriangleVertices, [[maybe_unused]] const PhysicsMaterial **outMaterials = nullptr) const override { return 0; }
+	virtual void			CollidePoint([[maybe_unused]] Vec4Arg inPoint, [[maybe_unused]] const SubShapeIDCreator &inSubShapeIDCreator, [[maybe_unused]] CollidePointCollector &ioCollector, [[maybe_unused]] const ShapeFilter &inShapeFilter = { }) const override { /* Do nothing */ }
+	virtual void			CollideSoftBodyVertices([[maybe_unused]] RMat44Arg inCenterOfMassTransform, [[maybe_unused]] Vec4Arg inScale, [[maybe_unused]] const CollideSoftBodyVertexIterator &inVertices, [[maybe_unused]] uint inNumVertices, [[maybe_unused]] int inCollidingShapeIndex) const override { /* Do nothing */ }
+	virtual void			GetTrianglesStart([[maybe_unused]] GetTrianglesContext &ioContext, [[maybe_unused]] const AABox &inBox, [[maybe_unused]] Vec4Arg inPositionCOM, [[maybe_unused]] RotorArg inRotation, [[maybe_unused]] Vec4Arg inScale) const override { /* Do nothing */ }
+	virtual int				GetTrianglesNext([[maybe_unused]] GetTrianglesContext &ioContext, [[maybe_unused]] int inMaxTrianglesRequested, [[maybe_unused]] Float4 *outTriangleVertices, [[maybe_unused]] const PhysicsMaterial **outMaterials = nullptr) const override { return 0; }
 	Stats					GetStats() const override										{ return { sizeof(*this), 0 }; }
 	float					GetVolume() const override										{ return 0.0f; }
-	bool					IsValidScale([[maybe_unused]] Vec3Arg inScale) const override	{ return true; }
+	bool					IsValidScale([[maybe_unused]] Vec4Arg inScale) const override	{ return true; }
 
 	// Register shape functions with the registry
 	static void				sRegister();
 
 private:
-	Vec3					mCenterOfMass = Vec3::sZero();
+	Vec4					mCenterOfMass = Vec4::sZero();
 };
 
 JPH_NAMESPACE_END

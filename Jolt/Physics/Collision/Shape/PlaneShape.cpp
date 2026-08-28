@@ -42,42 +42,39 @@ ShapeSettings::ShapeResult PlaneShapeSettings::Create() const
 	return mCachedResult;
 }
 
-inline static void sPlaneGetOrthogonalBasis(Vec3Arg inNormal, Vec3 &outPerp1, Vec3 &outPerp2)
-{
-	outPerp1 = inNormal.Cross(Vec3::sAxisY()).NormalizedOr(Vec3::sAxisX());
-	outPerp2 = outPerp1.Cross(inNormal).Normalized();
-	outPerp1 = inNormal.Cross(outPerp2);
-}
+// Build a right-handed orthonormal basis {outPerp1, outPerp2, outPerp3} spanning the hyperplane
+// perpendicular to inNormal (in 4D the plane's tangent space is 3-dimensional).
+// TODO(4D): the orthonormal 3-frame of a hyperplane normal now lives on Vec4 itself
+// (Vec4::GetNormalizedPerpendicularBasis) because contact friction needs the same 3 tangents.
 
-void PlaneShape::GetVertices(Vec3 *outVertices) const
+void PlaneShape::GetVertices(Vec4 *outVertices) const
 {
-	// Create orthogonal basis
-	Vec3 normal = mPlane.GetNormal();
-	Vec3 perp1, perp2;
-	sPlaneGetOrthogonalBasis(normal, perp1, perp2);
+	// Create orthonormal basis for the plane's 3D tangent space
+	Vec4 normal = mPlane.GetNormal();
+	Vec4 perp1, perp2, perp3;
+	normal.GetNormalizedPerpendicularBasis(perp1, perp2, perp3);
 
 	// Scale basis
 	perp1 *= mHalfExtent;
 	perp2 *= mHalfExtent;
+	perp3 *= mHalfExtent;
 
-	// Calculate corners
-	Vec3 point = -normal * mPlane.GetConstant();
-	outVertices[0] = point + perp1 + perp2;
-	outVertices[1] = point + perp1 - perp2;
-	outVertices[2] = point - perp1 - perp2;
-	outVertices[3] = point - perp1 + perp2;
+	// Calculate the 8 corners of the 3-cube patch
+	Vec4 point = -normal * mPlane.GetConstant();
+	for (int i = 0; i < 8; ++i)
+		outVertices[i] = point + ((i & 1)? perp1 : -perp1) + ((i & 2)? perp2 : -perp2) + ((i & 4)? perp3 : -perp3);
 }
 
 void PlaneShape::CalculateLocalBounds()
 {
 	// Get the vertices of the plane
-	Vec3 vertices[4];
+	Vec4 vertices[8];
 	GetVertices(vertices);
 
 	// Encapsulate the vertices and a point mHalfExtent behind the plane
 	mLocalBounds = AABox();
-	Vec3 normal = mPlane.GetNormal();
-	for (const Vec3 &v : vertices)
+	Vec4 normal = mPlane.GetNormal();
+	for (const Vec4 &v : vertices)
 	{
 		mLocalBounds.Encapsulate(v);
 		mLocalBounds.Encapsulate(v - mHalfExtent * normal);
@@ -107,60 +104,27 @@ MassProperties PlaneShape::GetMassProperties() const
 	return MassProperties();
 }
 
-void PlaneShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec3Arg inDirection, Vec3Arg inScale, Mat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const
+void PlaneShape::GetSupportingFace(const SubShapeID &inSubShapeID, Vec4Arg inDirection, Vec4Arg inScale, RMat44Arg inCenterOfMassTransform, SupportingFace &outVertices) const
 {
-	// Get the vertices of the plane
-	Vec3 vertices[4];
+	// Get the vertices of the plane (a 3-cube patch)
+	Vec4 vertices[8];
 	GetVertices(vertices);
 
-	// Reverse if scale is inside out
-	if (ScaleHelpers::IsInsideOut(inScale))
-	{
-		std::swap(vertices[0], vertices[3]);
-		std::swap(vertices[1], vertices[2]);
-	}
+	// TODO(4D): winding / face ordering for the 3D contact polytope is part of the deferred 4D
+	// contact-manifold pipeline (conceptual gap 1). For now we emit all 8 corners unordered.
 
 	// Transform them to world space
 	outVertices.clear();
-	Mat44 com = inCenterOfMassTransform.PreScaled(inScale);
-	for (const Vec3 &v : vertices)
-		outVertices.push_back(com * v);
+	RMat44 com = inCenterOfMassTransform.PreScaled(inScale);
+	for (const Vec4 &v : vertices)
+		outVertices.push_back(Vec4(com * v));
 }
 
 #ifdef JPH_DEBUG_RENDERER
-void PlaneShape::Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const
+void PlaneShape::Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const
 {
-	// Get the vertices of the plane
-	Vec3 local_vertices[4];
-	GetVertices(local_vertices);
-
-	// Reverse if scale is inside out
-	if (ScaleHelpers::IsInsideOut(inScale))
-	{
-		std::swap(local_vertices[0], local_vertices[3]);
-		std::swap(local_vertices[1], local_vertices[2]);
-	}
-
-	// Transform them to world space
-	RMat44 com = inCenterOfMassTransform.PreScaled(inScale);
-	RVec3 vertices[4];
-	for (uint i = 0; i < 4; ++i)
-		vertices[i] = com * local_vertices[i];
-
-	// Determine the color
-	Color color = inUseMaterialColors? GetMaterial(SubShapeID())->GetDebugColor() : inColor;
-
-	// Draw the plane
-	if (inDrawWireframe)
-	{
-		inRenderer->DrawWireTriangle(vertices[0], vertices[1], vertices[2], color);
-		inRenderer->DrawWireTriangle(vertices[0], vertices[2], vertices[3], color);
-	}
-	else
-	{
-		inRenderer->DrawTriangle(vertices[0], vertices[1], vertices[2], color, DebugRenderer::ECastShadow::On);
-		inRenderer->DrawTriangle(vertices[0], vertices[2], vertices[3], color, DebugRenderer::ECastShadow::On);
-	}
+	// TODO(4D): Debug rendering is deferred (v1 is headless). A 4D plane patch renders as a 3-cube.
+	(void)inRenderer; (void)inCenterOfMassTransform; (void)inScale; (void)inColor; (void)inUseMaterialColors; (void)inDrawWireframe;
 }
 #endif // JPH_DEBUG_RENDERER
 
@@ -233,7 +197,7 @@ void PlaneShape::CastRay(const RayCast &inRay, const RayCastSettings &inRayCastS
 	}
 }
 
-void PlaneShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
+void PlaneShape::CollidePoint(Vec4Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter) const
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -246,49 +210,39 @@ void PlaneShape::CollidePoint(Vec3Arg inPoint, const SubShapeIDCreator &inSubSha
 		ioCollector.AddHit({ TransformedShape::sGetBodyID(ioCollector.GetContext()), inSubShapeIDCreator.GetID() });
 }
 
-void PlaneShape::CollideSoftBodyVertices(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const
+void PlaneShape::CollideSoftBodyVertices(RMat44Arg inCenterOfMassTransform, Vec4Arg inScale, const CollideSoftBodyVertexIterator &inVertices, uint inNumVertices, int inCollidingShapeIndex) const
 {
-	JPH_PROFILE_FUNCTION();
-
-	// Convert plane to world space
-	Plane plane = mPlane.Scaled(inScale).GetTransformed(inCenterOfMassTransform);
-
-	for (CollideSoftBodyVertexIterator v = inVertices, sbv_end = inVertices + inNumVertices; v != sbv_end; ++v)
-		if (v.GetInvMass() > 0.0f)
-		{
-			// Calculate penetration
-			float penetration = -plane.SignedDistance(v.GetPosition());
-			if (v.UpdatePenetration(penetration))
-				v.SetCollision(plane, inCollidingShapeIndex);
-		}
+	// TODO(4D): CollideSoftBodyVertexIterator still exposes 3D positions. Stubbed until the soft-body
+	// subsystem is migrated to 4D (SoftBody is cut for v1).
+	(void)inCenterOfMassTransform; (void)inScale; (void)inVertices; (void)inNumVertices; (void)inCollidingShapeIndex;
 }
 
-// This is a version of GetSupportingFace that returns a face that is large enough to cover the shape we're colliding with but not as large as the regular GetSupportedFace to avoid numerical precision issues
-inline static void sGetSupportingFace(const ConvexShape *inShape, Vec3Arg inShapeCOM, const Plane &inPlane, Mat44Arg inPlaneToWorld, ConvexShape::SupportingFace &outPlaneFace)
+// This is a version of GetSupportingFace that returns a face large enough to cover the shape we're colliding with but
+// not as large as the regular GetSupportingFace to avoid numerical precision issues (in 4D the face is a 3-cube).
+inline static void sGetSupportingFace(const ConvexShape *inShape, Vec4Arg inShapeCOM, const Plane &inPlane, RMat44Arg inPlaneToWorld, ConvexShape::SupportingFace &outPlaneFace)
 {
 	// Project COM of shape onto plane
-	Plane world_plane = inPlane.GetTransformed(inPlaneToWorld);
-	Vec3 center = world_plane.ProjectPointOnPlane(inShapeCOM);
+	Plane world_plane = inPlane.GetTransformed(inPlaneToWorld.GetRotation(), Vec4(inPlaneToWorld.GetTranslation()));
+	Vec4 center = world_plane.ProjectPointOnPlane(inShapeCOM);
 
-	// Create orthogonal basis for the plane
-	Vec3 normal = world_plane.GetNormal();
-	Vec3 perp1, perp2;
-	sPlaneGetOrthogonalBasis(normal, perp1, perp2);
+	// Create orthonormal basis for the plane
+	Vec4 normal = world_plane.GetNormal();
+	Vec4 perp1, perp2, perp3;
+	normal.GetNormalizedPerpendicularBasis(perp1, perp2, perp3);
 
 	// Base the size of the face on the bounding box of the shape, ensuring that it is large enough to cover the entire shape
 	float size = inShape->GetLocalBounds().GetSize().Length();
 	perp1 *= size;
 	perp2 *= size;
+	perp3 *= size;
 
-	// Emit the vertices
-	outPlaneFace.resize(4);
-	outPlaneFace[0] = center + perp1 + perp2;
-	outPlaneFace[1] = center + perp1 - perp2;
-	outPlaneFace[2] = center - perp1 - perp2;
-	outPlaneFace[3] = center - perp1 + perp2;
+	// Emit the 8 corners of the 3-cube face
+	outPlaneFace.resize(8);
+	for (int i = 0; i < 8; ++i)
+		outPlaneFace[i] = center + ((i & 1)? perp1 : -perp1) + ((i & 2)? perp2 : -perp2) + ((i & 4)? perp3 : -perp3);
 }
 
-void PlaneShape::sCastConvexVsPlane(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec3Arg inScale, [[maybe_unused]] const ShapeFilter &inShapeFilter, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)
+void PlaneShape::sCastConvexVsPlane(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec4Arg inScale, [[maybe_unused]] const ShapeFilter &inShapeFilter, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -300,23 +254,23 @@ void PlaneShape::sCastConvexVsPlane(const ShapeCast &inShapeCast, const ShapeCas
 
 	// Shape cast is provided relative to COM of inShape, so all we need to do is transform our plane with inScale
 	Plane plane = plane_shape->mPlane.Scaled(inScale);
-	Vec3 normal = plane.GetNormal();
+	Vec4 normal = plane.GetNormal();
 
 	// Get support function
 	ConvexShape::SupportBuffer shape1_support_buffer;
 	const ConvexShape::Support *shape1_support = convex_shape->GetSupportFunction(ConvexShape::ESupportMode::Default, shape1_support_buffer, inShapeCast.mScale);
 
 	// Get the support point of the convex shape in the opposite direction of the plane normal in our local space
-	Vec3 normal_in_convex_shape_space = inShapeCast.mCenterOfMassStart.Multiply3x3Transposed(normal);
-	Vec3 support_point = inShapeCast.mCenterOfMassStart * shape1_support->GetSupport(-normal_in_convex_shape_space);
+	Vec4 normal_in_convex_shape_space = inShapeCast.mCenterOfMassStart.Multiply3x3Transposed(normal);
+	Vec4 support_point = Vec4(inShapeCast.mCenterOfMassStart * shape1_support->GetSupport(-normal_in_convex_shape_space));
 	float signed_distance = plane.SignedDistance(support_point);
 	float convex_radius = shape1_support->GetConvexRadius();
 	float penetration_depth = -signed_distance + convex_radius;
 	float dot = inShapeCast.mDirection.Dot(normal);
 
 	// Collision output
-	Mat44 com_hit;
-	Vec3 point1, point2;
+	RMat44 com_hit;
+	Vec4 point1, point2;
 	float fraction;
 
 	// Do we start in collision?
@@ -335,8 +289,8 @@ void PlaneShape::sCastConvexVsPlane(const ShapeCast &inShapeCast, const ShapeCas
 
 		// Get contact point
 		com_hit = inCenterOfMassTransform2;
-		point1 = inCenterOfMassTransform2 * (support_point - normal * convex_radius);
-		point2 = inCenterOfMassTransform2 * (support_point - normal * signed_distance);
+		point1 = Vec4(inCenterOfMassTransform2 * (support_point - normal * convex_radius));
+		point2 = Vec4(inCenterOfMassTransform2 * (support_point - normal * signed_distance));
 	}
 	else if (dot < 0.0f) // Moving towards the plane?
 	{
@@ -350,7 +304,7 @@ void PlaneShape::sCastConvexVsPlane(const ShapeCast &inShapeCast, const ShapeCas
 
 		// Get contact point
 		com_hit = inCenterOfMassTransform2.PostTranslated(fraction * inShapeCast.mDirection);
-		point1 = point2 = com_hit * (support_point - normal * convex_radius);
+		point1 = point2 = Vec4(com_hit * (support_point - normal * convex_radius));
 	}
 	else
 	{
@@ -359,7 +313,7 @@ void PlaneShape::sCastConvexVsPlane(const ShapeCast &inShapeCast, const ShapeCas
 	}
 
 	// Create cast result
-	Vec3 penetration_axis_world = com_hit.Multiply3x3(-normal);
+	Vec4 penetration_axis_world = com_hit.Multiply3x3(-normal);
 	bool back_facing = dot > 0.0f;
 	ShapeCastResult result(fraction, point1, point2, penetration_axis_world, back_facing, inSubShapeIDCreator1.GetID(), inSubShapeIDCreator2.GetID(), TransformedShape::sGetBodyID(ioCollector.GetContext()));
 
@@ -367,12 +321,12 @@ void PlaneShape::sCastConvexVsPlane(const ShapeCast &inShapeCast, const ShapeCas
 	if (inShapeCastSettings.mCollectFacesMode == ECollectFacesMode::CollectFaces)
 	{
 		// Get supporting face of convex shape
-		Mat44 shape_to_world = com_hit * inShapeCast.mCenterOfMassStart;
+		RMat44 shape_to_world = com_hit * inShapeCast.mCenterOfMassStart;
 		convex_shape->GetSupportingFace(SubShapeID(), normal_in_convex_shape_space, inShapeCast.mScale, shape_to_world, result.mShape1Face);
 
 		// Get supporting face of plane
 		if (!result.mShape1Face.empty())
-			sGetSupportingFace(convex_shape, shape_to_world.GetTranslation(), plane, inCenterOfMassTransform2, result.mShape2Face);
+			sGetSupportingFace(convex_shape, Vec4(shape_to_world.GetTranslation()), plane, inCenterOfMassTransform2, result.mShape2Face);
 	}
 
 	// Notify the collector
@@ -380,69 +334,21 @@ void PlaneShape::sCastConvexVsPlane(const ShapeCast &inShapeCast, const ShapeCas
 	ioCollector.AddHit(result);
 }
 
-struct PlaneShape::PSGetTrianglesContext
+void PlaneShape::GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec4Arg inPositionCOM, RotorArg inRotation, Vec4Arg inScale) const
 {
-	Float3	mVertices[4];
-	bool	mDone = false;
-};
-
-void PlaneShape::GetTrianglesStart(GetTrianglesContext &ioContext, const AABox &inBox, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale) const
-{
-	static_assert(sizeof(PSGetTrianglesContext) <= sizeof(GetTrianglesContext), "GetTrianglesContext too small");
-	JPH_ASSERT(IsAligned(&ioContext, alignof(PSGetTrianglesContext)));
-
-	PSGetTrianglesContext *context = new (&ioContext) PSGetTrianglesContext();
-
-	// Get the vertices of the plane
-	Vec3 vertices[4];
-	GetVertices(vertices);
-
-	// Reverse if scale is inside out
-	if (ScaleHelpers::IsInsideOut(inScale))
-	{
-		std::swap(vertices[0], vertices[3]);
-		std::swap(vertices[1], vertices[2]);
-	}
-
-	// Transform them to world space
-	Mat44 com = Mat44::sRotationTranslation(inRotation, inPositionCOM).PreScaled(inScale);
-	for (uint i = 0; i < 4; ++i)
-		(com * vertices[i]).StoreFloat3(&context->mVertices[i]);
+	// TODO(4D): The GetTriangles pipeline is still 3D. Stubbed until the 4D (tetrahedra-based)
+	// boundary tessellation is defined.
+	(void)ioContext; (void)inBox; (void)inPositionCOM; (void)inRotation; (void)inScale;
 }
 
-int PlaneShape::GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float3 *outTriangleVertices, const PhysicsMaterial **outMaterials) const
+int PlaneShape::GetTrianglesNext(GetTrianglesContext &ioContext, int inMaxTrianglesRequested, Float4 *outTriangleVertices, const PhysicsMaterial **outMaterials) const
 {
-	static_assert(cGetTrianglesMinTrianglesRequested >= 2, "cGetTrianglesMinTrianglesRequested is too small");
-	JPH_ASSERT(inMaxTrianglesRequested >= cGetTrianglesMinTrianglesRequested);
-
-	// Check if we're done
-	PSGetTrianglesContext &context = (PSGetTrianglesContext &)ioContext;
-	if (context.mDone)
-		return 0;
-	context.mDone = true;
-
-	// 1st triangle
-	outTriangleVertices[0] = context.mVertices[0];
-	outTriangleVertices[1] = context.mVertices[1];
-	outTriangleVertices[2] = context.mVertices[2];
-
-	// 2nd triangle
-	outTriangleVertices[3] = context.mVertices[0];
-	outTriangleVertices[4] = context.mVertices[2];
-	outTriangleVertices[5] = context.mVertices[3];
-
-	if (outMaterials != nullptr)
-	{
-		// Get material
-		const PhysicsMaterial *material = GetMaterial(SubShapeID());
-		outMaterials[0] = material;
-		outMaterials[1] = material;
-	}
-
-	return 2;
+	// TODO(4D): See GetTrianglesStart. Returns 0 to indicate no tessellation data is currently produced.
+	(void)ioContext; (void)inMaxTrianglesRequested; (void)outTriangleVertices; (void)outMaterials;
+	return 0;
 }
 
-void PlaneShape::sCollideConvexVsPlane(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, [[maybe_unused]] const ShapeFilter &inShapeFilter)
+void PlaneShape::sCollideConvexVsPlane(const Shape *inShape1, const Shape *inShape2, Vec4Arg inScale1, Vec4Arg inScale2, RMat44Arg inCenterOfMassTransform1, RMat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, [[maybe_unused]] const ShapeFilter &inShapeFilter)
 {
 	JPH_PROFILE_FUNCTION();
 
@@ -454,24 +360,25 @@ void PlaneShape::sCollideConvexVsPlane(const Shape *inShape1, const Shape *inSha
 
 	// Transform the plane to the space of the convex shape
 	Plane scaled_plane = shape2->mPlane.Scaled(inScale2);
-	Plane plane = scaled_plane.GetTransformed(inCenterOfMassTransform1.InversedRotationTranslation() * inCenterOfMassTransform2);
-	Vec3 normal = plane.GetNormal();
+	RMat44 transform_2_to_1 = inCenterOfMassTransform1.InversedRotationTranslation() * inCenterOfMassTransform2;
+	Plane plane = scaled_plane.GetTransformed(transform_2_to_1.GetRotation(), Vec4(transform_2_to_1.GetTranslation()));
+	Vec4 normal = plane.GetNormal();
 
 	// Get support function
 	ConvexShape::SupportBuffer shape1_support_buffer;
 	const ConvexShape::Support *shape1_support = shape1->GetSupportFunction(ConvexShape::ESupportMode::Default, shape1_support_buffer, inScale1);
 
 	// Get the support point of the convex shape in the opposite direction of the plane normal
-	Vec3 support_point = shape1_support->GetSupport(-normal);
+	Vec4 support_point = shape1_support->GetSupport(-normal);
 	float signed_distance = plane.SignedDistance(support_point);
 	float convex_radius = shape1_support->GetConvexRadius();
 	float penetration_depth = -signed_distance + convex_radius;
 	if (penetration_depth > -inCollideShapeSettings.mMaxSeparationDistance)
 	{
 		// Get contact point
-		Vec3 point1 = inCenterOfMassTransform1 * (support_point - normal * convex_radius);
-		Vec3 point2 = inCenterOfMassTransform1 * (support_point - normal * signed_distance);
-		Vec3 penetration_axis_world = inCenterOfMassTransform1.Multiply3x3(-normal);
+		Vec4 point1 = Vec4(inCenterOfMassTransform1 * (support_point - normal * convex_radius));
+		Vec4 point2 = Vec4(inCenterOfMassTransform1 * (support_point - normal * signed_distance));
+		Vec4 penetration_axis_world = inCenterOfMassTransform1.Multiply3x3(-normal);
 
 		// Create collision result
 		CollideShapeResult result(point1, point2, penetration_axis_world, penetration_depth, inSubShapeIDCreator1.GetID(), inSubShapeIDCreator2.GetID(), TransformedShape::sGetBodyID(ioCollector.GetContext()));
@@ -484,7 +391,7 @@ void PlaneShape::sCollideConvexVsPlane(const Shape *inShape1, const Shape *inSha
 
 			// Get supporting face of shape 2
 			if (!result.mShape1Face.empty())
-				sGetSupportingFace(shape1, inCenterOfMassTransform1.GetTranslation(), scaled_plane, inCenterOfMassTransform2, result.mShape2Face);
+				sGetSupportingFace(shape1, Vec4(inCenterOfMassTransform1.GetTranslation()), scaled_plane, inCenterOfMassTransform2, result.mShape2Face);
 		}
 
 		// Notify the collector

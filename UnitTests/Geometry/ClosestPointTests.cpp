@@ -170,13 +170,21 @@ TEST_SUITE("ClosestPointTests")
 		Vec4 c2(0, 0, 2, 0);
 		Vec4 d2(1, 1, 1, 0); // Interior-ish point for the 4th vertex
 
-		// Test with origin at (0.5, 0.5, 0.5, 0) which should be inside the tetrahedron
-		Vec4 interior(0.5f, 0.5f, 0.5f, 0);
+		// Face ABC of this tetrahedron is the plane x+y+z=2 and D has x+y+z=3, so a probe is inside
+		// only if x+y+z > 2. The centroid ((2+0+0+1)/4 etc.) has x+y+z = 2.25 and is inside.
+		Vec4 interior(0.75f, 0.75f, 0.75f, 0);
 		Vec4 ta = a2 - interior, tb = b2 - interior, tc = c2 - interior, td = d2 - interior;
 		UVec4 result2 = ClosestPoint::OriginOutsideOfTetrahedronPlanes(ta, tb, tc, td);
-		// All should be "inside" (not outside) = false
-		// Products should be >= 0 (not < epsilon), so result bits should be 0
 		CHECK_FALSE(result2.TestAnyTrue());
+
+		// (0.5, 0.5, 0.5) has x+y+z = 1.5 < 2, so it is on the far side of face ABC from D and must be
+		// reported outside exactly that one face
+		Vec4 outside(0.5f, 0.5f, 0.5f, 0);
+		UVec4 result3 = ClosestPoint::OriginOutsideOfTetrahedronPlanes(a2 - outside, b2 - outside, c2 - outside, d2 - outside);
+		CHECK(result3.GetX() != 0);
+		CHECK(result3.GetY() == 0);
+		CHECK(result3.GetZ() == 0);
+		CHECK(result3.GetW() == 0);
 	}
 
 	TEST_CASE("TestGetClosestPointOnTetrahedron")
@@ -195,22 +203,24 @@ TEST_SUITE("ClosestPointTests")
 		uint32 set = 0;
 		Vec4 closest = ClosestPoint::GetClosestPointOnTetrahedron(ta, tb, tc, td, set);
 
-		// Origin is inside, so closest point is origin and set should have all 4 bits
-		if (set == 0b1111)
-		{
-			CHECK_APPROX_EQUAL(closest.Length(), 0.0f, 1.0e-4f);
-		}
-		// Could also be on a face, which is acceptable for near-boundary cases
+		// The origin is strictly inside (barycentric coordinates are all positive), so the closest
+		// point is the origin itself and all 4 vertices are in the set
+		CHECK(set == 0b1111);
+		CHECK_APPROX_EQUAL(closest.Length(), 0.0f, 1.0e-4f);
 
-		// Test with origin clearly outside - closest to vertex A
-		Vec4 far_a(10, 0, 0, 0);
-		Vec4 far_b(-1, 1, 0, 0);
-		Vec4 far_c(-1, -1, 1, 0);
-		Vec4 far_d(-1, -1, -1, 0);
+		// Now a tetrahedron that really does not contain the origin: every vertex has x >= 1, so the
+		// origin is on the far side of face BCD (the plane x = 1) and the closest point is (1,0,0,0)
+		// on that face. Note that simply moving A further away, as one might expect, does NOT put the
+		// origin outside - it makes the tetrahedron bigger and keeps the origin inside.
+		Vec4 out_a(10, 0, 0, 0);
+		Vec4 out_b(1, 1, 0, 0);
+		Vec4 out_c(1, -1, 1, 0);
+		Vec4 out_d(1, -1, -1, 0);
 		set = 0;
-		closest = ClosestPoint::GetClosestPointOnTetrahedron(far_a, far_b, far_c, far_d, set);
-		// Closest to origin should be on face BCD (opposite A), not at A
-		CHECK((set & 0b0001) == 0); // A should not be in the set
+		closest = ClosestPoint::GetClosestPointOnTetrahedron(out_a, out_b, out_c, out_d, set);
+		CHECK((set & 0b0001) == 0); // A is not in the set
+		CHECK(set == 0b1110);
+		CHECK_APPROX_EQUAL(closest, Vec4(1, 0, 0, 0), 1.0e-4f);
 	}
 
 	TEST_CASE("TestGetClosestPointOnTetrahedron4D")

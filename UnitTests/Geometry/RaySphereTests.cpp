@@ -81,8 +81,9 @@ TEST_SUITE("RaySphereTests")
 		Vec4 origin(0.5f, 0, 0, 0);
 		Vec4 direction(1, 0, 0, 0);
 		float t = RaySphere(origin, direction, center, radius);
-		// Should return negative t (origin inside sphere)
-		CHECK(t < 0.0f);
+		// RaySphere's documented contract (same as 3D Jolt) is that a ray starting inside the sphere
+		// returns fraction 0, not a negative fraction - the caller is already in contact.
+		CHECK(t == 0.0f);
 	}
 
 	TEST_CASE("TestRaySphereBehind")

@@ -110,10 +110,12 @@ TEST_SUITE("RayTriangleTests")
 		Vec4 origin(0.25f, 0.25f, -3, 0);
 		Vec4 direction(0, 0, 1, 0);
 
-		// Triangle 0: should hit at t=3
-		// Triangle 1: should hit at t=5
-		// Triangle 2: should miss (origin outside)
-		// Triangle 3: should hit at t=1
+		// The ray runs along +z from (0.25, 0.25, -3).
+		// Triangle 0: in the z=0 plane                       -> hits at t=3
+		// Triangle 1: spanned by (2,0,2) and (0,2,2), so the point above (0.25,0.25) sits at z=0.5
+		//             (s=t=0.125, z=2s+2t)                    -> hits at t=3.5
+		// Triangle 2: tiny triangle near the origin corner    -> misses
+		// Triangle 3: same but with z=-2, so the point is at z=-0.5 -> hits at t=2.5
 		Vec4 v0x(0, 0, 3, 0);
 		Vec4 v0y(0, 0, 3, 0);
 		Vec4 v0z(0, 0, 0, 0);
@@ -132,8 +134,17 @@ TEST_SUITE("RayTriangleTests")
 		Vec4 result = RayTriangle4(origin, direction, v0x, v0y, v0z, v0w, v1x, v1y, v1z, v1w, v2x, v2y, v2z, v2w);
 
 		CHECK_APPROX_EQUAL(result.GetX(), 3.0f, 1.0e-3f); // Triangle 0
-		CHECK_APPROX_EQUAL(result.GetY(), 5.0f, 1.0e-3f); // Triangle 1
+		CHECK_APPROX_EQUAL(result.GetY(), 3.5f, 1.0e-3f); // Triangle 1
 		CHECK(result.GetZ() == FLT_MAX);                    // Triangle 2 - miss
-		CHECK_APPROX_EQUAL(result.GetW(), 1.0f, 1.0e-3f);  // Triangle 3
+		CHECK_APPROX_EQUAL(result.GetW(), 2.5f, 1.0e-3f);  // Triangle 3
+
+		// The SOA path must agree with the scalar one lane for lane - that is what this test is for
+		for (int i = 0; i < 4; ++i)
+		{
+			Vec4 a(v0x[i], v0y[i], v0z[i], v0w[i]);
+			Vec4 b(v1x[i], v1y[i], v1z[i], v1w[i]);
+			Vec4 c(v2x[i], v2y[i], v2z[i], v2w[i]);
+			CHECK_APPROX_EQUAL(result[i], RayTriangle(origin, direction, a, b, c), 1.0e-3f);
+		}
 	}
 }

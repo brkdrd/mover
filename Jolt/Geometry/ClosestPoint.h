@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <Jolt/Math/Bivec.h>
+
 JPH_NAMESPACE_BEGIN
 
 // Turn off fused multiply add instruction because it makes the equations of the form a * b - c * d inaccurate below
@@ -12,6 +14,21 @@ JPH_PRECISE_MATH_ON
 /// Helper utils to find the closest point to a line segment, triangle or tetrahedron
 namespace ClosestPoint
 {
+	/// The 2x2 Gram determinant |u|^2 |v|^2 - (u . v)^2 of two vectors, i.e. the squared area of the
+	/// parallelogram they span.
+	///
+	/// TODO(4D): compute it from the wedge product rather than directly. 3D Jolt gets this quantity as
+	/// |u x v|^2, and the cross product forms each component as a difference of products of individual
+	/// coordinates, which stays small. Evaluating |u|^2 |v|^2 - (u . v)^2 literally instead subtracts
+	/// two huge nearly equal numbers: for the sliver triangle in TestLongTriangle it is
+	/// 40000 * 40001 - 40000^2, where both products round to a multiple of 128 in float and the
+	/// difference lands ~0.16% off. The wedge product is the dimension-agnostic generalization of the
+	/// cross product and has exactly the same cancellation-free structure.
+	JPH_INLINE float GramDeterminant(Vec4Arg inU, Vec4Arg inV)
+	{
+		return Bivec::sWedge(inU, inV).LengthSq();
+	}
+
 	/// Compute barycentric coordinates of closest point to origin for infinite line defined by (inA, inB)
 	/// Point can then be computed as inA * outU + inB * outV
 	/// Returns false if the points inA, inB do not form a line (are at the same point)
@@ -69,7 +86,7 @@ namespace ClosestPoint
 
 			// Denominator must be positive:
 			// |v0|^2 * |v1|^2 - (v0 . v1)^2 = |v0|^2 * |v1|^2 * (1 - cos(angle)^2) >= 0
-			float denominator = d00 * d11 - d01 * d01;
+			float denominator = GramDeterminant(v0, v1);
 			if (denominator < 1.0e-12f)
 			{
 				// Degenerate triangle, return coordinates along longest edge
@@ -99,7 +116,7 @@ namespace ClosestPoint
 			// Use v1 and v2 to calculate barycentric coordinates
 			float d12 = v1.Dot(v2);
 
-			float denominator = d11 * d22 - d12 * d12;
+			float denominator = GramDeterminant(v1, v2);
 			if (denominator < 1.0e-12f)
 			{
 				// Degenerate triangle, return coordinates along longest edge
@@ -235,8 +252,7 @@ namespace ClosestPoint
 		// Calculate edges and Gram determinant (dimension-agnostic degeneracy check)
 		Vec4 ab = inB - a;
 		Vec4 ac = c - a;
-		float d00 = ab.Dot(ab), d01 = ab.Dot(ac), d11 = ac.Dot(ac);
-		float n_len_sq = d00 * d11 - d01 * d01; // Gram determinant = |ab x ac|^2 in 3D
+		float n_len_sq = GramDeterminant(ab, ac); // = |ab x ac|^2 in 3D
 
 		// Check degenerate
 		if (n_len_sq < 1.0e-10f) // Square(FLT_EPSILON) was too small and caused numerical problems, see test case TestCollideParallelTriangleVsCapsule
@@ -383,16 +399,21 @@ namespace ClosestPoint
 		}
 
 		// P inside face region.
-		// Project origin onto triangle using barycentric coordinates (dimension-agnostic).
-		// Solve Gram system: [d00 d01; d01 d11] * [u; v] = [b0; b1]
-		// where b0 = -a.Dot(ab), b1 = -a.Dot(ac)
+		// Like 3D Jolt we deviate from Christer Ericson's article here to improve accuracy: solving for
+		// barycentric coordinates and then rebuilding the point from them is much less accurate,
+		// because the 2x2 Gram solve subtracts two large nearly equal products.
+		//
+		// TODO(4D): 3D Jolt projects onto the single triangle normal n. A 4D triangle spans a 2-flat
+		// whose orthogonal complement is a 2-plane, so there is no single normal - but the wedge
+		// bivector B = ab ^ ac plays the same role. For a simple bivector, contracting twice is
+		// (minus) the projection onto its plane, |B|^2 * P_plane(v) = -B _| (B _| v), so the closest
+		// point on the affine hull is the part of a perpendicular to the plane:
+		//     closest = a - P_plane(a) = a + B _| (B _| a) / |B|^2
+		// This keeps every product small (it is the same structure as the 3D cross product form) and
+		// is exact for the TestLongTriangle sliver, where the barycentric form lost ~4 digits.
 		outSet = 0b0111;
-		float bp0 = -a.Dot(ab);
-		float bp1 = -a.Dot(ac);
-		float inv_det = 1.0f / n_len_sq;
-		float u = (d11 * bp0 - d01 * bp1) * inv_det;
-		float v = (d00 * bp1 - d01 * bp0) * inv_det;
-		return a + u * ab + v * ac;
+		Bivec plane = Bivec::sWedge(ab, ac);
+		return a + plane.Contract(plane.Contract(a)) * (1.0f / n_len_sq);
 	}
 
 	/// Check if the origin is outside the face (inA, inB, inC) of tetrahedron (inA, inB, inC, inD).
@@ -477,9 +498,18 @@ namespace ClosestPoint
 		// Taken from: Real-Time Collision Detection - Christer Ericson (Section: Closest Point on Tetrahedron to Point)
 		// With p = 0
 
-		// Start out assuming point inside all halfspaces, so closest to itself
+		// Start out assuming the origin projects into the tetrahedron.
+		// TODO(4D): in 3D a tetrahedron is a solid and "inside all 4 halfspaces" means the closest
+		// point IS the origin. In 4D four points span only a 3-flat, so the tetrahedron has no
+		// 4-volume and the origin is generally off that flat: the closest point is the orthogonal
+		// projection of the origin onto the affine hull, not the origin itself. (It is the
+		// pentachoron - 5 points - that can actually contain the origin in 4D, see
+		// GetClosestPointOnPentachoron.) GetBaryCentricCoordinates solves exactly that projection
+		// via the 3x3 Gram system, and fills the coordinates even in the degenerate case.
 		uint32 closest_set = 0b1111;
-		Vec4 closest_point = Vec4::sZero();
+		float bary_u, bary_v, bary_w, bary_x;
+		GetBaryCentricCoordinates(inA, inB, inC, inD, bary_u, bary_v, bary_w, bary_x);
+		Vec4 closest_point = bary_u * inA + bary_v * inB + bary_w * inC + bary_x * inD;
 		float best_dist_sq = FLT_MAX;
 
 		// Determine for each of the faces of the tetrahedron if the origin is in front of the plane

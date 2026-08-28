@@ -47,11 +47,6 @@ inline void CHECK_APPROX_EQUAL(Mat44Arg inLHS, Mat44Arg inRHS, float inTolerance
 	CHECK(inLHS.IsClose(inRHS, inTolerance * inTolerance));
 }
 
-inline void CHECK_APPROX_EQUAL(DMat44Arg inLHS, DMat44Arg inRHS, float inTolerance = 1.0e-6f)
-{
-	CHECK(inLHS.IsClose(inRHS, inTolerance * inTolerance));
-}
-
 inline void CHECK_APPROX_EQUAL(QuatArg inLHS, QuatArg inRHS, float inTolerance = 1.0e-6f)
 {
 	bool close = inLHS.IsClose(inRHS, inTolerance * inTolerance) || inLHS.IsClose(-inRHS, inTolerance * inTolerance);

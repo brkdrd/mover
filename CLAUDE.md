@@ -19,29 +19,55 @@ got stuck.
 ```bash
 # v1 is HEADLESS: build with the debug renderer OFF (the 3D DebugRenderer is deferred).
 cmake -S Build -B build -DCMAKE_BUILD_TYPE=Release -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
-cmake --build build -j$(nproc)                        # currently FAILS, see status below
-./build/UnitTests                                     # binary in repo is STALE (pre-4D tests) — do not trust it
+cmake --build build --target Jolt -j$(nproc)           # BUILDS CLEAN (headless v1)
+cmake --build build --target UnitTests -j$(nproc)      # builds and links
+./build/UnitTests                                     # runs: 364 cases, 349 pass, 15 fail (see below)
 ```
 
-**Current build status (verified 2026-07-22): broken, ~2,790 errors** with `make -k` **and the
-debug renderer OFF** (`-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF`; with it ON it's ~3,270, of
-which ~480 are DebugRenderer/Draw noise). Turning the renderer off is the sanctioned v1 direction
-and makes the counts reflect the real migration surface. Progress so far: AABox include fix
-(Phase A), TransformedShape/Shape base fixes, BoxShape/SphereShape ports, CollisionDispatch +
-ConvexShape convex-vs-convex collide path (Phase B step 6). Every remaining error is in an
-un-migrated layer. Error census (renderer off) by area:
-- **ConstraintPart headers (~1,100, the largest single block)** — Axis 441, DualAxis 270, Point
-  171, RotationEuler 136, Angle 91, HingeRotation 55. This is the constraint solver (conceptual
-  gap 2); every part takes a `Vec3` axis and needs bivector-Jacobian redesign, not a type swap.
-- **Shape hierarchy (~500)** — wrapper shapes Compound (96) / RotatedTranslated (60) / Decorated
-  (54) / Scaled (44) + CompoundShapeVisitors (58) [v1 set, need porting]; ConvexHull (60) [v1];
-  Mesh (48) / HeightField (37) / Cylinder (36) / Plane (36) [cut for v1 → exclude]; and
-  GetTrianglesContext (42, still 3D).
-- **PhysicsSystem (38), ContactConstraintManager (34)** — the stepping loop + contact solver.
+**Current build status (verified 2026-08-08): the headless v1 library BUILDS CLEAN** — `libJolt.a`,
+0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 364
+cases, 349 pass, 15 fail.** Build with the debug renderer OFF
+(`-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF`); v1 is headless.
 
-Dominant error classes: `Vec3 ↔ Bivec`/`Vec4` conversions, `Body::GetInverseInertia` removed,
-`Mat44::Multiply3x3`/`sScale`/`sRotationTranslation` removed, `RVec4 → RVec3`. This is Phase B/C
-work.
+This replaces the old standalone Math-only runner — **run the real `./build/UnitTests` from now on.**
+(The recipe for the standalone runner is kept below only as a fallback.)
+
+### The 15 remaining test failures — all in Geometry, all real 4D bugs
+These are the top of the queue. Geometry was previously described as "the strongest part of the
+project"; that assessment was based on reading the code, and the first real test run disagrees:
+- **ClosestPointTests (4)** — `TestGetClosestPointOnTetrahedron`, `...Tetrahedron4D`,
+  `TestLongTriangle`, `TestOriginOutsideOfTetrahedronPlanes`. The Gram-matrix barycentric code is
+  the foundation GJK stands on, so fix this first.
+- **EPATests (5)** — `TestEPASphereSphere4D`, `...Overlapping`, `...NearOverlapping`, `TestEPASphereBox`,
+  `TestEPACastSphereSphereInitialOverlap`. Likely downstream of ClosestPoint and/or the known
+  uninitialized-`mNormal` degenerate-cell path (bug #7).
+- **GJKTests (4)** — `TestGJKRaySphere`, `TestGJKRayBox`, `TestGJKRayTetrahedron`,
+  `TestGJKSphereVsBoxIntersect`.
+- **RaySphereTests (1)** — `TestRaySphereInsideOrigin` (a ray starting inside the sphere returns 0
+  rather than a negative t).
+- **RayTriangleTests (1)** — `TestRayTriangle4DSOA` (the SOA path disagrees with the scalar one by 1.5).
+
+**v1 scope cuts applied at the source level (2026-08-08).** Commented out of `Jolt.cmake` with
+`TODO(4D)` markers, with matching RTTI declarations / `Factory` registrations removed from
+`RegisterTypes.cpp`:
+- **SoftBody, Character, Vehicle, Ragdoll, Hair, Skeleton** (`RegisterHair()` is now a no-op).
+- **Joint constraints** — Cone, Distance, Fixed, Gear, Hinge, Path(+Hermite), Point, Pulley,
+  RackAndPinion, SixDOF, Slider, SwingTwist — and the rotational / joint-specific constraint parts
+  (Angle, Gear, HingeRotation, IndependentAxis, RackAndPinion, RotationEuler, RotationQuat,
+  SwingTwist). Deferred to v1.1 per roadmap step 9; this alone removed ~341 errors.
+  **`Axis`/`DualAxis`/`Point`/`Spring` parts stay** — the contact solver uses them.
+- **Triangle-mesh collision** — the `*VsTriangles` helpers, `InternalEdgeRemovingCollector`,
+  `TriangleSplitter/`, `AABBTree/`. They serve the already-cut Mesh/HeightField/Triangle shapes.
+  `PhysicsSystem::sDefaultSimCollideBodyVsBody` and `NarrowPhaseQuery::CollideShapeWithInternalEdgeRemoval`
+  now always take the plain-collide path.
+
+SoftBody additionally still has references *from* the rigid-body core, so those are compiled out
+behind **`JPH_ENABLE_SOFT_BODY`**, a macro never defined for v1 — upstream code left verbatim so the
+subsystem can be switched back on once ported.
+
+**33 unit-test files are de-registered** in `UnitTests.cmake` (still written against the 3D API or
+against cut features), plus `Mat44Tests`, `ComputeTests` and `PathConstraintTests`. **Do not delete
+them** — they encode a lot of expected behaviour; re-enable one at a time as each area is ported.
 
 ## The 4D type system (established, do not re-litigate)
 
@@ -138,31 +164,43 @@ The Clifford-algebra core now has a reference-validated test-first suite (added 
 `UnitTests/Math/RotorTests.cpp`, `BivecTests.cpp`, `Vec8Tests.cpp`, `RMat44Tests.cpp`, all
 checked against a brute-force Cl(4,0) implementation in `UnitTests/Math/Cl4Reference.h` (16-blade
 multivectors, geometric product from first principles). These are registered in
-`UnitTests/UnitTests.cmake`. **All 37 cases now pass (1564 assertions).** Writing them caught a
-bug the read-only audit missed and had praised (GetRotor, #8); the P0/P1 math bugs they pinned
-(#1 exp/log, #2 defect normalization, #8 GetRotor, #10 sAnd aliasing) are now all fixed and the
-former EXPECTED-TO-FAIL cases are green regression tests. **Do not weaken a test to go green —
-fix the code.**
+`UnitTests/UnitTests.cmake`. Writing them caught a bug the read-only audit missed and had praised
+(GetRotor, #8); the P0/P1 math bugs they pinned (#1 exp/log, #2 defect normalization, #8 GetRotor,
+#10 sAnd aliasing) are now all fixed and the former EXPECTED-TO-FAIL cases are green regression
+tests. **Do not weaken a test to go green — fix the code.**
+
+Added 2026-08-08 (dynamics conventions + constraint algebra), same test-first discipline:
+`UnitTests/Physics/DynamicsConventionsTest.cpp` (pins point velocity to the *actual* rotor
+integrator by finite differencing it, and the torque to `F ∧ r` by the power identity and by
+conservation of energy for an impulse at a point), `UnitTests/Physics/ConstraintPartTests.cpp`
+(point/axis constraint solves: relative point velocity vanishes, linear + angular momentum
+conserved, energy non-increasing), `UnitTests/Math/Mat44DeterminantTests.cpp` (new
+`Mat44::GetDeterminant` vs a brute-force Leibniz expansion). Both physics files deliberately depend
+only on `Jolt/Math/*` headers so they run in the standalone runner; `ConstraintPartTests` mirrors the
+formulas in the real parts (which need `Body`) — **once the library links, drive the real classes and
+delete the duplication.** These were mutation-checked: flipping any single wedge/Contract sign fails
+4–5 of the 6 constraint cases. **All 55 cases pass (3652 assertions).**
 
 Running them: the full `UnitTests` target cannot link yet (the physics library doesn't build),
-so the suite is verified via a standalone runner that compiles just the header-only Math tests
+so the suite is verified via a standalone runner that compiles just the header-only tests
 against the Core/Math sources that do build. Reproduce with (from repo root, all one line):
 ```
 g++ -O2 -std=c++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -pthread \
   -DNDEBUG -DJPH_OBJECT_STREAM -DJPH_PROFILE_ENABLED -DJPH_USE_AVX -DJPH_USE_AVX2 \
   -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT \
-  -IUnitTests -I. UnitTests/Math/{RotorTests,BivecTests,Vec8Tests,RMat44Tests}.cpp \
-  <a main defining DOCTEST_CONFIG_IMPLEMENT + Trace + RegisterDefaultAllocator> \
-  Jolt/Core/{Memory,IssueReporting,Profiler,TickCounter,StringTools,Color}.cpp Jolt/Math/Vec3.cpp \
-  -o math_tests && ./math_tests
+  -IUnitTests -I. UnitTests/Math/{RotorTests,BivecTests,Vec8Tests,RMat44Tests,Mat44DeterminantTests}.cpp \
+  UnitTests/Physics/{DynamicsConventionsTest,ConstraintPartTests}.cpp \
+  <a main defining DOCTEST_CONFIG_IMPLEMENT + Trace + RegisterDefaultAllocator + Factory::sInstance> \
+  Jolt/Core/{Memory,IssueReporting,Profiler,TickCounter,StringTools,Color,Factory,RTTI}.cpp \
+  Jolt/Math/Vec3.cpp -o math_tests && ./math_tests
 ```
 Once the library links, delete the standalone runner and run these through the normal
 `UnitTests` binary. The committed `build/UnitTests` binary predates all 4D tests; never cite it.
 
 Still missing: `Mat44Tests`/`Vec3Tests`/`QuatTests` test removed/legacy APIs and need rewriting
 or deletion (`DMat44Tests.cpp` was de-registered from cmake — its `DMat44.h` is gone); Lane4 has
-no dedicated suite (it is exercised transitively through Vec4Tests); no physics-level dynamics
-tests yet (Phase C).
+no dedicated suite (it is exercised transitively through Vec4Tests); no *whole-body* dynamics tests
+yet (integrator + solver over many steps, gyroscopic term, determinism — Phase C).
 
 ## Verified bugs (fix before building anything on top)
 
@@ -181,15 +219,22 @@ P0 — correctness of core dynamics/geometry:
    defect), and `LERP` normalizes its result (`Rotor.inl`). Tracked by
    `TestRotorIsNormalizedDetectsDefect` / `TestRotorNormalizedRemovesDefect` /
    `TestRotorLERPReturnsValidRotor`.
-3. **`MotionProperties::MultiplyWorldSpaceInverseInertiaByVector` is a stub**
-   (`MotionProperties.inl:61-110`): computes the world→body rotor then discards it
-   (`(void)combined`), applying the diagonal inertia as if the body were axis-aligned. Every
-   constraint impulse and buoyancy call goes through this. Same missing adjoint in the
-   gyroscopic path (`MotionProperties.inl:130`).
-4. **`Plane::sIntersectPlanes` sign bug** (`Plane.h:56-99`): returns (−x, y, −z, w) — the
-   `det = n4·sCross(n1,n2,n3)` convention is −det[n1;n2;n3;n4] and the alternating numerator
-   signs don't compensate. Its own unit test (`TestPlaneIntersectPlanes`) fails once rebuilt.
-   Verified by hand 2026-07-22.
+3. **[FIXED]** ~~`MotionProperties::MultiplyWorldSpaceInverseInertiaByVector` is a stub.~~ The
+   world-space inverse inertia is now the proper adjoint operator I⁻¹ = Ad(R) D⁻¹ Ad(R⁻¹) with
+   R = body_rotation · inertia_rotation, implemented via the new `Rotor::RotateBivec` /
+   `InverseRotateBivec` (the bivector adjoint Ad(R)(B) = grade2(R B R̃), computed as
+   (R eᵢ R̃)∧(R eⱼ R̃)). The gyroscopic path (`MotionProperties.inl`) now also transforms into and
+   out of the body frame. Both are validated against the brute-force Cl(4,0) reference by
+   `TestRotorRotateBivec` / `TestInverseInertiaAdjoint` (adjoint = brute-force sandwich, orthogonal,
+   symmetric-positive-definite operator, reduces to the diagonal at identity).
+4. **[FIXED 2026-08-08]** ~~`Plane::sIntersectPlanes` sign bug~~ — it returned (−x, y, −z, w). The
+   per-component Cramer expansion mixed two sign conventions. Rewritten in vector form: with
+   `u . sCross(a,b,c) == det[u;a;b;c]`, the row-cofactor vectors of `M = [n1;n2;n3;n4]` are
+   `v1=+sCross(n2,n3,n4)`, `v2=−sCross(n1,n3,n4)`, `v3=+sCross(n1,n2,n4)`, `v4=−sCross(n1,n2,n3)`
+   and `x = Σ (−1)^(i+1) rhs_i v_i / det` with `det = n1·v1`. Also removed a dead `Mat44` build at the
+   top. `TestPlaneIntersectPlanes` passes. ⚠ `TestPlaneIntersectPlanesDiagonal` was ALSO failing but
+   the *test* was wrong, not the code: its normals satisfied `n1−n2+n3−n4 = 0`, i.e. 4 dependent
+   hyperplanes with no unique intersection. Fixed the test's normals and documented why.
 5. **`MortonCode` is still 3D** (`MortonCode.h`): stride-3 masks (`0x09249249`…) with 4 axes →
    bit collisions (x bit at position 3 collides with w), plus `+` instead of `|` propagates
    carries. Needs an 8-bit stride-4 spread (masks ending `0x11111111`). Degrades BVH quality
@@ -223,6 +268,16 @@ P1 — determinism / hygiene:
     files now tracked; `Bivec.h` registered in `Jolt.cmake`. **Still open:** the bulk of the
     Geometry/Physics/ObjectStream migration is still uncommitted working-tree changes — commit
     in reviewable slices.
+13. **[FIXED 2026-08-08]** ~~Torque / angular-impulse wedge operands reversed everywhere.~~ The
+    migration transliterated the 3D `r × F` as `r ∧ F`, but the 4D point-velocity operator
+    (`Bivec::Contract`, pinned by the `exp(½Ω·dt)·R` integrator) is the *negative* adjoint of the
+    wedge, so the torque conjugate to Ω is `F ∧ r`. As written, a force applied off-center spun the
+    body the **wrong way**, and constraint solves converged to the wrong velocity state. Fixed in
+    `Body::AddForce`/`AddImpulse` (`Body.inl`), the buoyancy impulse (`Body.cpp`) and the angular
+    Jacobians of `Axis`/`DualAxisConstraintPart` (`r∧n` → `n∧r`). See the 🔑 box in the roadmap;
+    pinned by `DynamicsConventionsTest.cpp` + `ConstraintPartTests.cpp`. ⚠ Note the effective mass is
+    invariant under this flip, which is why it survived a compile-clean port — only a
+    velocity-residual / momentum / energy test detects it.
 
 ## Things that do NOT trivially generalize (the real design work left)
 
@@ -262,13 +317,141 @@ P1 — determinism / hygiene:
 
 ## Roadmap to a shippable v1
 
-**⏸ RESUME HERE (2026-07-22):** Phases A, B step 5, and B step 6(a) are done (see the DONE
-lists below). Build is renderer-off, ~2,790 errors. **Next task = Phase B step 6(b):** make
-`Shape.cpp` link — port the wrapper shapes (Compound/StaticCompound/MutableCompound/Decorated/
-Scaled/RotatedTranslated/OffsetCOM) + ConvexHull + Capsule + a real 4D PlaneShape, and
-cmake-exclude Mesh/HeightField/Cylinder/Tapered*/Triangle (also remove their includes/sRegister
-calls in `RegisterTypes.cpp`). Full detail in the "Phase B … 6." entry below. After that: (c) the
-constraint solver + `PhysicsSystem` loop, (d) link + tests.
+**⏸ RESUME HERE (2026-08-08):** **The headless v1 library builds and `UnitTests` runs (349/364).**
+Next, in priority order: (1) **fix the 15 failing Geometry tests** — start with `ClosestPointTests`,
+since GJK and EPA both stand on the Gram-matrix barycentrics and their failures are probably
+downstream; the list and analysis are in the build-status section at the top. (2) Write the **4D
+HelloWorld** (tesseract onto a hyperplane floor) — the whole stepping loop now compiles, so this is
+the first chance to see the engine actually simulate, and it will flush out runtime bugs the unit
+tests cannot. (3) The **contact manifold pipeline** (`ManifoldBetweenTwoFaces` is currently a reduced
+single-point fallback — see the TODO in that file; resting boxes get one contact point instead of a
+patch, so stacks will be less stable than 3D Jolt). (4) Re-enable de-registered unit tests as each
+area is ported. **Read the 🔑 torque-convention box below before touching any dynamics code** — the
+naive `r ∧ F` transliteration is wrong and an effective-mass test cannot detect it.
+
+**Phase B step 6(b) is COMPLETE — the v1 shape layer compiles clean at the per-TU level (15/15 TUs).**
+Verified via a per-TU `-fsyntax-only` check with the Jolt build flags (helper `cc.sh`; recreate from
+`Jolt.dir/flags.make`, `-O0 -fsyntax-only`). The clean TUs: `Shape.cpp`, ConvexShape, SphereShape,
+BoxShape, CapsuleShape, ConvexHullShape, PlaneShape, EmptyShape, DecoratedShape, ScaledShape,
+RotatedTranslatedShape, OffsetCenterOfMassShape, CompoundShape, StaticCompoundShape,
+MutableCompoundShape. (Re-verified 2026-08-08: still 15/15 clean. `ConvexHullShape.cpp` had picked up 1
+error from the still-3D `PolyhedronSubmergedVolumeCalculator.h`; that include was a leftover — the
+class is only named in a TODO now that `GetSubmergedVolume` is stubbed — and removing it restored the
+TU. That header stays 3D until the 4D polytope-vs-hyperplane clip is written.)
+
+**⏳ Phase B step 6(c) IN PROGRESS.** Foundational, tested pieces done:
+- **Inverse-inertia operator (bug #3) FIXED + tested** — `Rotor::RotateBivec`/`InverseRotateBivec`
+  (bivector adjoint) added to `Rotor.h`/`.inl`; `MultiplyWorldSpaceInverseInertiaByVector` and the
+  gyroscopic path now do the real Ad(R) D⁻¹ Ad(R⁻¹). Validated vs the brute-force Cl(4,0) reference
+  (`RotorTests.cpp`: `TestRotorRotateBivec`, `TestInverseInertiaAdjoint`). This is THE operation every
+  constraint impulse flows through.
+- **🔑 THE 4D TORQUE CONVENTION — settled, tested, and it invalidates the naive port (2026-08-08).**
+  The three halves of 4D rigid-body dynamics only close for ONE choice of wedge operand order, and the
+  code originally had it backwards in every place. The chain: `Body::AddRotationStep` integrates
+  `R ← exp(½Ω·dt)·R`, which forces the body-fixed point velocity to be `+Ω.Contract(r)` (verified by
+  finite-differencing the real integrator, not by analogy). Since
+  **`⟨Ω.Contract(r), F⟩_R4 = −⟨Ω, r∧F⟩ = +⟨Ω, F∧r⟩`** (Contract is the *negative* adjoint of wedge),
+  the bivector conjugate to Ω — i.e. the torque — is **`F ∧ r`, not `r ∧ F`**. General rule:
+  > **a 3D `a × b` in a torque / angular-Jacobian role becomes a 4D `b ∧ a` — operands swapped.**
+
+  Consequences applied: torque/angular impulse in `Body::AddForce`/`AddImpulse` (`Body.inl`) and the
+  buoyancy impulse (`Body.cpp`) were `r ∧ F` → now `F ∧ r`; the angular Jacobian in `AxisConstraintPart`
+  /`DualAxisConstraintPart` was `r ∧ n` → now `n ∧ r`. ⚠ The effective mass is *quadratic* in the
+  Jacobian, so it is identical under the flip — an effective-mass or symmetry/PSD test can NOT catch
+  this. Only a velocity-residual or momentum/energy test can. Pinned by
+  `UnitTests/Physics/DynamicsConventionsTest.cpp` (4 cases) and `ConstraintPartTests.cpp` (6 cases);
+  mutation-checked (flipping any one sign fails 4–5 of the 6). Angular momentum about the origin is
+  correspondingly `L = I·Ω + m(v ∧ x)`.
+- **`AxisConstraintPart` (1-row) and `DualAxisConstraintPart` (2-row) ported to 4D bivector Jacobians.**
+  Angular Jacobian is the bivector `n ∧ r` (was `r × n`, see the convention above); the inverse inertia
+  is applied via the operator above (diagonal+adjoint, no precomputed matrix); `J·w` uses `Bivec::Dot`.
+  The effective mass is scalar (Axis) / 2×2 (DualAxis) — the row count, independent of the spatial
+  dimension. Both compile clean per-TU. The old `Mat44Arg inRotation` / `GetInverseInertiaForRotation`
+  args became `RotorArg` + the operator. These are the parts contacts and most joints reuse.
+- **`PointConstraintPart` redesigned for 4D + validated (2026-08-08).** A point-to-point constraint has
+  **4** linear DOF in 4D: `C = p2 − p1` has 4 rows, the effective mass is a `Mat44` and λ is a `Vec4`.
+  Writing `C_r` for the 4×6 map `Ω ↦ Ω.Contract(r)`, its transpose is `C_rᵀ: u ↦ u ∧ r` (6×4), so
+  `K = (m₁⁻¹+m₂⁻¹)E + C_{r1} I₁⁻¹ C_{r1}ᵀ + C_{r2} I₂⁻¹ C_{r2}ᵀ`, assembled one column at a time by
+  feeding it the 4 basis vectors. The per-body 6×4 operator `I⁻¹C_rᵀ` is cached as its 4 bivector
+  columns (`mInvI1_R1X[4]`) and doubles as the λ→Δω map. Needed a new **`Mat44::GetDeterminant()`**
+  (upstream only had the 3×3) to guard invertibility — tested against a brute-force Leibniz expansion
+  in `UnitTests/Math/Mat44DeterminantTests.cpp`. Compiles clean per-TU.
+
+- **`ContactConstraintManager` + `ContactListener` ported (2026-08-08).** Both compile clean per-TU.
+  The 4D-specific parts:
+  - **Friction has 3 directions, not 2.** The space perpendicular to a contact normal is a hyperplane,
+    so Coulomb friction acts in a **3D tangent space**: `mFrictionConstraint3` added, `GetTangents`
+    returns 3, `mFrictionLambda` is `Vector<3>`, and the friction cone clamp is over
+    `λ₁²+λ₂²+λ₃² ≤ (μλₙ)²` (the cone itself is unchanged — only the dimension of the disc it clamps to).
+  - The orthonormal 3-frame moved from a file-static in `PlaneShape.cpp` to
+    **`Vec4::GetNormalizedPerpendicularBasis`** (tested: orthonormal + spans R⁴ with the normal), since
+    contacts and planar patches both need it.
+  - **The world-space inverse inertia can no longer be precomputed as a `Mat44`** — it is a 6×6 operator
+    on bivectors — so the three places that cached `inv_i1`/`inv_i2` now pass `RotorArg` + the inertia
+    scale down to `AxisConstraintPart` (whose templated entry point gained the scale args).
+  - Cache layout: `Float3`→`Float4` throughout; `CachedBodyPair::mDeltaRotation` is an uncompressed
+    `Float8` rotor (the 3-of-4 quaternion trick does not generalize — Spin(4) needs both SU(2) signs).
+    Struct sizes: `CachedContactPoint` 36→48, `CachedManifold` 56→72, `CachedBodyPair` 28→52.
+  - The body-pair cache-validity rotation test now uses the **8-component rotor dot** = scalar part of
+    `p·~q` = `(cos(a/2)+cos(b/2))/2` under the SU(2)×SU(2) split; still 1 at zero rotation and decreasing
+    as either angle grows, so the existing `mBodyPairCacheCosMaxDeltaRotationDiv2` comparison stays valid.
+  - `ContactSettings::mRelativeAngularSurfaceVelocity` is a `Bivec`; the surface velocity it induces at
+    `r` is `Contract(r)` (was a cross product).
+
+**Remaining for 6(c), in order:**
+- **`PhysicsSystem` stepping loop** (mostly mechanical renames onto the migrated Body API).
+- **Contact manifold pipeline** (conceptual gap 1 — supporting-face polyhedra, halfspace clipping,
+  ≥5-point reduction). ⚠ Note the contact *solver* above is done, but it is fed by the manifold
+  pipeline, which is still the hardest open problem.
+- **The rotational parts** (`RotationEuler`/`Angle`/`Hinge`/`SwingTwist`) — apply the same convention;
+  these constrain *relative orientation*, so their Jacobians are bivector-valued in both bodies (no
+  lever arm) and the redesign question is which 6-DOF subspace each part locks. Not needed for a first
+  simulating scene.
+- **Excise SoftBody from the core for v1** (the documented scope cut, not yet done at the source level).
+  `SoftBodyShape.h`/`SoftBodyCreationSettings.h`/`SoftBodyMotionProperties.h` are still 3D and are still
+  *included* by `Body.cpp` (2 errors, all in `GetSoftBodyCreationSettings`) and `BodyManager.cpp`
+  (9 errors, ~50 references). These are the only remaining errors in the otherwise-migrated Body layer.
+- **Contact manifold pipeline** (conceptual gap 1 — supporting-face polyhedra, halfspace clipping,
+  ≥5-point reduction; the hardest open problem).
+- **`ContactConstraintManager`** (2354 lines): uses 3 `AxisConstraintPart`s per contact point — the
+  normal + friction. In 4D the friction tangent space is 3D, so add a **3rd** friction axis + tangent
+  (reuse the orthonormal-3-frame from `PlaneShape::sPlaneGetOrthogonalBasis`); `mFrictionLambda`
+  `Vector<2>` → `Vector<3>`; `GetTangents` returns 3; replace the `Mat44` inverse-inertia args with the
+  operator.
+- **`PhysicsSystem` stepping loop** (mostly mechanical renames onto the migrated Body API).
+
+**The full library link is still gated on all of the above** — `RegisterTypes.cpp` registers the
+un-migrated constraint/vehicle/ragdoll types, so `cmake --build` will not link yet. Verify with the
+per-TU syntax check for now, and add reference-validated tests for each new constraint part /
+conservation law (Phase C). Also still TODO on the (now-compiling) shapes: `GetTrianglesStart/Next`,
+`CollideSoftBodyVertices`, and `GetSubmergedVolume` are stubbed (S³ tetra tessellation / 4D polytope
+submerged-volume clip / soft-body iterator all deferred); ConvexHull's convex radius is forced to 0
+(the 4D vertex shrink needs a 4-hyperplane vertex solve).
+
+Key 4D decisions locked in the 6(b) pass:
+- **Real 4D shape content:** CapsuleShape (segment+4-ball support, derived 4D second-moment tensor —
+  reduces to the 4-ball `mass*r²/6` as height→0); PlaneShape (hyperplane + 3-cube finite patch via an
+  orthonormal 3-frame); ConvexHullShape (mass tensor via **pentachoron decomposition**: cone each
+  boundary tetra to the COM; canonical 4-simplex second moment has diagonal 1/360, off-diagonal
+  1/720; `mInertia` = the raw second-moment covariance, matching Box/Capsule).
+- **SIMD 4-box helpers** (`RayAABox4`/`AABox4VsBox`/`AABox4Scale`/`AABox4EnlargeWithExtent`/
+  `AABox4VsPoint`) take **8 axis args** (min/max × X/Y/Z/W); every visitor `TestBounds`/`VisitNodes`/
+  `TestBlock` is 8-arg. Added a conservative `AABox4VsBox(OrientedBox,…)` 4D overload (tests the OBB's
+  world AABB — TODO tighten to a real 4D OBB-vs-AABB SAT).
+- Compound `SubShape` stores a full `Rotor` (`Float8`) + `Vec4` position uncompressed (the 3-of-4
+  quaternion compression trick does not generalize). `StaticCompoundShape::Node` gained
+  `mBoundsMin/MaxW[4]` (HalfFloat) → 80 bytes; `MutableCompoundShape::Bounds` SOA gained `mMinW`/`mMaxW`.
+- Support infra: `ScaleHelpers::CanScaleBeRotated`/`RotateScale` (4D rotor form), `Plane::Scaled(Vec4)`,
+  `Shape.cpp` `ToRotor`→`GetRotor` fix, cmake + `RegisterTypes.cpp` cut-shape edits
+  (Mesh/HeightField/Cylinder/Tapered*/Triangle + SoftBodyShape removed).
+
+**Bug found while porting (unfixed, flagged):** `SphereShape::GetMassProperties` stores
+`mass*r^2/3` on the `mInertia` diagonal, but `mInertia` is the raw second-moment tensor M_ij
+(BoxShape sets `m*S_i^2/12`; the correct 4-ball value is `mass*r^2/6`). SphereShape is 2× too
+large and inconsistent with Box/Capsule. CapsuleShape uses the correct second-moment convention
+and reduces to `mass*r^2/6` as height→0. Fix SphereShape to `mass*r^2/6` (and add a mass-
+properties reference test) — deferred because SphereShape is marked "done" and I didn't want to
+silently edit it.
 
 Definition of "shipped v1": headless library builds warning-clean; UnitTests all green
 (including new Rotor/Bivec/dynamics conservation tests); a 4D HelloWorld (tesseract falling

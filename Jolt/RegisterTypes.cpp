@@ -9,57 +9,55 @@
 #include <Jolt/Core/RTTI.h>
 #include <Jolt/Core/TickCounter.h>
 #include <Jolt/Physics/Collision/CollisionDispatch.h>
-#include <Jolt/Physics/Collision/Shape/TriangleShape.h>
+// TODO(4D): TriangleShape/TaperedCapsuleShape/CylinderShape/TaperedCylinderShape/MeshShape/
+// HeightFieldShape are cut from the v1 build (see CLAUDE.md "Scope cuts"); their headers are still 3D.
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
-#include <Jolt/Physics/Collision/Shape/TaperedCapsuleShape.h>
-#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
-#include <Jolt/Physics/Collision/Shape/TaperedCylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
-#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
-#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/MutableCompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/EmptyShape.h>
 #include <Jolt/Physics/Collision/PhysicsMaterialSimple.h>
-#include <Jolt/Physics/SoftBody/SoftBodyShape.h>
+// TODO(4D): SoftBodyShape cut for v1 (SoftBody is deeply 3D-coupled).
 
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, Skeleton)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, SkeletalAnimation)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, RagdollSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PointConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, SixDOFConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, SliderConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, SwingTwistConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, DistanceConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, HingeConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, FixedConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, ConeConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PathConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PathConstraintPath)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PathConstraintPathHermite)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, VehicleConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, WheeledVehicleControllerSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, WheelSettingsWV)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, TrackedVehicleControllerSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, WheelSettingsTV)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, MotorcycleControllerSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, RackAndPinionConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, GearConstraintSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PulleyConstraintSettings)
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, Skeleton)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, SkeletalAnimation)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, RagdollSettings)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PointConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, SixDOFConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, SliderConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, SwingTwistConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, DistanceConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, HingeConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, FixedConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, ConeConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PathConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PathConstraintPath)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PathConstraintPathHermite)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, VehicleConstraintSettings)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, WheeledVehicleControllerSettings)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, WheelSettingsWV)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, TrackedVehicleControllerSettings)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, WheelSettingsTV)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, MotorcycleControllerSettings)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, RackAndPinionConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, GearConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PulleyConstraintSettings)	// TODO(4D): joint constraints deferred to v1.1
 JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, MotorSettings)
 JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PhysicsScene)
 JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, PhysicsMaterial)
 JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, GroupFilter)
 JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, GroupFilterTable)
 JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, BodyCreationSettings)
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1, its sources are out of Jolt.cmake
 JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, SoftBodyCreationSettings)
-JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, HairSettings)
+#endif // JPH_ENABLE_SOFT_BODY
+//JPH_DECLARE_RTTI_WITH_NAMESPACE_FOR_FACTORY(JPH_EXPORT, JPH, HairSettings)	// TODO(4D): v1 scope cut, sources out of Jolt.cmake
 
 JPH_NAMESPACE_BEGIN
 
@@ -112,18 +110,12 @@ void RegisterTypesInternal(uint64 inVersionID)
 	StaticCompoundShape::sRegister();
 
 	// Leaf classes
-	TriangleShape::sRegister();
+	// TODO(4D): Triangle/TaperedCapsule/Cylinder/TaperedCylinder/Mesh/HeightField/SoftBody cut for v1.
 	PlaneShape::sRegister();
 	SphereShape::sRegister();
 	BoxShape::sRegister();
 	CapsuleShape::sRegister();
-	TaperedCapsuleShape::sRegister();
-	CylinderShape::sRegister();
-	TaperedCylinderShape::sRegister();
-	MeshShape::sRegister();
 	ConvexHullShape::sRegister();
-	HeightFieldShape::sRegister();
-	SoftBodyShape::sRegister();
 
 	// Register these last because their collision functions are simple so we want to execute them first (register them in reverse order of collision complexity)
 	RotatedTranslatedShape::sRegister();
@@ -133,47 +125,41 @@ void RegisterTypesInternal(uint64 inVersionID)
 
 	// Create list of all types
 	const RTTI *types[] = {
-		JPH_RTTI(SkeletalAnimation),
-		JPH_RTTI(Skeleton),
+//		JPH_RTTI(SkeletalAnimation),	// TODO(4D): v1 scope cut
+//		JPH_RTTI(Skeleton),	// TODO(4D): v1 scope cut
 		JPH_RTTI(CompoundShapeSettings),
 		JPH_RTTI(StaticCompoundShapeSettings),
 		JPH_RTTI(MutableCompoundShapeSettings),
-		JPH_RTTI(TriangleShapeSettings),
 		JPH_RTTI(PlaneShapeSettings),
 		JPH_RTTI(SphereShapeSettings),
 		JPH_RTTI(BoxShapeSettings),
 		JPH_RTTI(CapsuleShapeSettings),
-		JPH_RTTI(TaperedCapsuleShapeSettings),
-		JPH_RTTI(CylinderShapeSettings),
-		JPH_RTTI(TaperedCylinderShapeSettings),
 		JPH_RTTI(ScaledShapeSettings),
-		JPH_RTTI(MeshShapeSettings),
 		JPH_RTTI(ConvexHullShapeSettings),
-		JPH_RTTI(HeightFieldShapeSettings),
 		JPH_RTTI(RotatedTranslatedShapeSettings),
 		JPH_RTTI(OffsetCenterOfMassShapeSettings),
 		JPH_RTTI(EmptyShapeSettings),
-		JPH_RTTI(RagdollSettings),
-		JPH_RTTI(PointConstraintSettings),
-		JPH_RTTI(SixDOFConstraintSettings),
-		JPH_RTTI(SliderConstraintSettings),
-		JPH_RTTI(SwingTwistConstraintSettings),
-		JPH_RTTI(DistanceConstraintSettings),
-		JPH_RTTI(HingeConstraintSettings),
-		JPH_RTTI(FixedConstraintSettings),
-		JPH_RTTI(ConeConstraintSettings),
-		JPH_RTTI(PathConstraintSettings),
-		JPH_RTTI(VehicleConstraintSettings),
-		JPH_RTTI(WheeledVehicleControllerSettings),
-		JPH_RTTI(WheelSettingsWV),
-		JPH_RTTI(TrackedVehicleControllerSettings),
-		JPH_RTTI(WheelSettingsTV),
-		JPH_RTTI(MotorcycleControllerSettings),
-		JPH_RTTI(PathConstraintPath),
-		JPH_RTTI(PathConstraintPathHermite),
-		JPH_RTTI(RackAndPinionConstraintSettings),
-		JPH_RTTI(GearConstraintSettings),
-		JPH_RTTI(PulleyConstraintSettings),
+//		JPH_RTTI(RagdollSettings),	// TODO(4D): v1 scope cut
+//		JPH_RTTI(PointConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(SixDOFConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(SliderConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(SwingTwistConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(DistanceConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(HingeConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(FixedConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(ConeConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(PathConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(VehicleConstraintSettings),	// TODO(4D): v1 scope cut
+//		JPH_RTTI(WheeledVehicleControllerSettings),	// TODO(4D): v1 scope cut
+//		JPH_RTTI(WheelSettingsWV),	// TODO(4D): v1 scope cut
+//		JPH_RTTI(TrackedVehicleControllerSettings),	// TODO(4D): v1 scope cut
+//		JPH_RTTI(WheelSettingsTV),	// TODO(4D): v1 scope cut
+//		JPH_RTTI(MotorcycleControllerSettings),	// TODO(4D): v1 scope cut
+//		JPH_RTTI(PathConstraintPath),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(PathConstraintPathHermite),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(RackAndPinionConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(GearConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
+//		JPH_RTTI(PulleyConstraintSettings),	// TODO(4D): joint constraints deferred to v1.1
 		JPH_RTTI(MotorSettings),
 		JPH_RTTI(PhysicsScene),
 		JPH_RTTI(PhysicsMaterial),
@@ -181,7 +167,9 @@ void RegisterTypesInternal(uint64 inVersionID)
 		JPH_RTTI(GroupFilter),
 		JPH_RTTI(GroupFilterTable),
 		JPH_RTTI(BodyCreationSettings),
-		JPH_RTTI(SoftBodyCreationSettings)
+#ifdef JPH_ENABLE_SOFT_BODY // TODO(4D): SoftBody cut for v1
+		JPH_RTTI(SoftBodyCreationSettings),
+#endif // JPH_ENABLE_SOFT_BODY
 	};
 
 	// Register them all
@@ -192,9 +180,10 @@ void RegisterTypesInternal(uint64 inVersionID)
 		PhysicsMaterial::sDefault = new PhysicsMaterialSimple("Default", Color::sGrey);
 }
 
+// TODO(4D): Hair is a v1 scope cut (CLAUDE.md "Scope cuts for v1"); its sources are out of
+// Jolt.cmake, so RegisterHair is a no-op until Hair is ported.
 void RegisterHair()
 {
-	Factory::sInstance->Register(JPH_RTTI(HairSettings));
 }
 
 void UnregisterTypes()

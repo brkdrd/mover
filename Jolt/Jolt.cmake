@@ -8,11 +8,14 @@ set(JOLT_PHYSICS_ROOT ${PHYSICS_REPO_ROOT}/Jolt)
 
 # Source files
 set(JOLT_PHYSICS_SRC_FILES
-	${JOLT_PHYSICS_ROOT}/AABBTree/AABBTreeBuilder.cpp
-	${JOLT_PHYSICS_ROOT}/AABBTree/AABBTreeBuilder.h
-	${JOLT_PHYSICS_ROOT}/AABBTree/AABBTreeToBuffer.h
-	${JOLT_PHYSICS_ROOT}/AABBTree/NodeCodec/NodeCodecQuadTreeHalfFloat.h
-	${JOLT_PHYSICS_ROOT}/AABBTree/TriangleCodec/TriangleCodecIndexed8BitPackSOA4Flags.h
+	# TODO(4D): triangle-mesh collision support. These serve the cut Mesh/HeightField/Triangle
+	# shapes (a 4D 'mesh' is a tetrahedral boundary mesh - conceptual gap 3), and internal edge
+	# removal is inherently a triangle-mesh adjacency concept. Cut for v1.
+#	${JOLT_PHYSICS_ROOT}/AABBTree/AABBTreeBuilder.cpp
+#	${JOLT_PHYSICS_ROOT}/AABBTree/AABBTreeBuilder.h
+#	${JOLT_PHYSICS_ROOT}/AABBTree/AABBTreeToBuffer.h
+#	${JOLT_PHYSICS_ROOT}/AABBTree/NodeCodec/NodeCodecQuadTreeHalfFloat.h
+#	${JOLT_PHYSICS_ROOT}/AABBTree/TriangleCodec/TriangleCodecIndexed8BitPackSOA4Flags.h
 	${JOLT_PHYSICS_ROOT}/ConfigurationString.h
 	${JOLT_PHYSICS_ROOT}/Compute/ComputeBuffer.h
 	${JOLT_PHYSICS_ROOT}/Compute/ComputeQueue.h
@@ -197,13 +200,14 @@ set(JOLT_PHYSICS_SRC_FILES
 	${JOLT_PHYSICS_ROOT}/Physics/Body/MotionProperties.inl
 	${JOLT_PHYSICS_ROOT}/Physics/Body/MotionQuality.h
 	${JOLT_PHYSICS_ROOT}/Physics/Body/MotionType.h
-	${JOLT_PHYSICS_ROOT}/Physics/Character/Character.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Character/Character.h
-	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterBase.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterBase.h
-	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterID.h
-	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterVirtual.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterVirtual.h
+	# TODO(4D): Physics/Character is a v1 scope cut (CLAUDE.md "Scope cuts for v1") - still 3D.
+#	${JOLT_PHYSICS_ROOT}/Physics/Character/Character.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Character/Character.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterBase.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterBase.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterID.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterVirtual.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Character/CharacterVirtual.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/AABoxCast.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/ActiveEdgeMode.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/ActiveEdges.h
@@ -222,21 +226,21 @@ set(JOLT_PHYSICS_SRC_FILES
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterTable.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/BroadPhase/QuadTree.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/BroadPhase/QuadTree.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/CastConvexVsTriangles.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/CastConvexVsTriangles.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/CastConvexVsTriangles.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/CastConvexVsTriangles.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/CastResult.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/CastSphereVsTriangles.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/CastSphereVsTriangles.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/CastSphereVsTriangles.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/CastSphereVsTriangles.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollectFacesMode.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideConvexVsTriangles.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideConvexVsTriangles.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideConvexVsTriangles.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideConvexVsTriangles.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollidePointResult.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideShapeVsShapePerLeaf.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideSoftBodyVertexIterator.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideSoftBodyVerticesVsTriangles.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideSphereVsTriangles.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideSphereVsTriangles.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideSoftBodyVerticesVsTriangles.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideSphereVsTriangles.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollideSphereVsTriangles.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollisionCollector.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollisionCollectorImpl.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/CollisionDispatch.cpp
@@ -250,7 +254,7 @@ set(JOLT_PHYSICS_SRC_FILES
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/GroupFilter.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/GroupFilterTable.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/GroupFilterTable.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/InternalEdgeRemovingCollector.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Collision/InternalEdgeRemovingCollector.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/ManifoldBetweenTwoFaces.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/ManifoldBetweenTwoFaces.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/NarrowPhaseQuery.cpp
@@ -276,17 +280,19 @@ set(JOLT_PHYSICS_SRC_FILES
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/ConvexHullShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/ConvexShape.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/ConvexShape.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/CylinderShape.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/CylinderShape.h
+	# TODO(4D): CylinderShape cut for v1 (see CLAUDE.md scope cuts)
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/CylinderShape.cpp
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/CylinderShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/DecoratedShape.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/DecoratedShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/EmptyShape.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/EmptyShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/GetTrianglesContext.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/HeightFieldShape.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/HeightFieldShape.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/MeshShape.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/MeshShape.h
+	# TODO(4D): HeightFieldShape/MeshShape cut for v1 (see CLAUDE.md scope cuts)
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/HeightFieldShape.cpp
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/HeightFieldShape.h
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/MeshShape.cpp
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/MeshShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/MutableCompoundShape.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/MutableCompoundShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/OffsetCenterOfMassShape.cpp
@@ -307,13 +313,14 @@ set(JOLT_PHYSICS_SRC_FILES
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/StaticCompoundShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/SubShapeID.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/SubShapeIDPair.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCapsuleShape.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCapsuleShape.gliffy
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCapsuleShape.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCylinderShape.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCylinderShape.h
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TriangleShape.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TriangleShape.h
+	# TODO(4D): TaperedCapsule/TaperedCylinder/Triangle shapes cut for v1 (see CLAUDE.md scope cuts)
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCapsuleShape.cpp
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCapsuleShape.gliffy
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCapsuleShape.h
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCylinderShape.cpp
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TaperedCylinderShape.h
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TriangleShape.cpp
+	# ${JOLT_PHYSICS_ROOT}/Physics/Collision/Shape/TriangleShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/ShapeCast.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/ShapeFilter.h
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/SimShapeFilter.h
@@ -322,68 +329,75 @@ set(JOLT_PHYSICS_SRC_FILES
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/TransformedShape.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Collision/TransformedShape.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/CalculateSolverSteps.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConeConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConeConstraint.h
+	# TODO(4D): joint constraints deferred to v1.1 (CLAUDE.md roadmap step 9). v1 ships
+	# contacts only; Constraint/TwoBodyConstraint/ConstraintManager/ContactConstraintManager stay.
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConeConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConeConstraint.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/Constraint.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/Constraint.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintManager.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintManager.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/AngleConstraintPart.h
+	# TODO(4D): rotational / joint-specific constraint parts are deferred to v1.1 (CLAUDE.md
+	# roadmap step 9). They need bivector Jacobians and a decision on which of the 6
+	# rotational DOFs each locks (conceptual gap 2). Axis/DualAxis/Point/Spring stay - the
+	# contact solver uses them.
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/AngleConstraintPart.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/AxisConstraintPart.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/DualAxisConstraintPart.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/GearConstraintPart.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/HingeRotationConstraintPart.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/IndependentAxisConstraintPart.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/GearConstraintPart.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/HingeRotationConstraintPart.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/IndependentAxisConstraintPart.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/PointConstraintPart.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/RackAndPinionConstraintPart.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/RotationEulerConstraintPart.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/RotationQuatConstraintPart.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/RackAndPinionConstraintPart.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/RotationEulerConstraintPart.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/RotationQuatConstraintPart.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/SpringPart.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/SwingTwistConstraintPart.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ConstraintPart/SwingTwistConstraintPart.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ContactConstraintManager.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/ContactConstraintManager.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/DistanceConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/DistanceConstraint.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/FixedConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/FixedConstraint.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/GearConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/GearConstraint.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/HingeConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/HingeConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/DistanceConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/DistanceConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/FixedConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/FixedConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/GearConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/GearConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/HingeConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/HingeConstraint.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/MotorSettings.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/MotorSettings.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraint.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraintPath.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraintPath.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraintPathHermite.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraintPathHermite.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PointConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PointConstraint.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PulleyConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PulleyConstraint.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/RackAndPinionConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/RackAndPinionConstraint.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SixDOFConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SixDOFConstraint.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SliderConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SliderConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraintPath.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraintPath.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraintPathHermite.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PathConstraintPathHermite.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PointConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PointConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PulleyConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/PulleyConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/RackAndPinionConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/RackAndPinionConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SixDOFConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SixDOFConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SliderConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SliderConstraint.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SpringSettings.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SpringSettings.h
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SwingTwistConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SwingTwistConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SwingTwistConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Constraints/SwingTwistConstraint.h
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/TwoBodyConstraint.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/Constraints/TwoBodyConstraint.h
 	${JOLT_PHYSICS_ROOT}/Physics/DeterminismLog.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/DeterminismLog.h
 	${JOLT_PHYSICS_ROOT}/Physics/EActivation.h
 	${JOLT_PHYSICS_ROOT}/Physics/EPhysicsUpdateError.h
-	${JOLT_PHYSICS_ROOT}/Physics/Hair/Hair.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Hair/Hair.h
-	${JOLT_PHYSICS_ROOT}/Physics/Hair/HairSettings.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Hair/HairSettings.h
-	${JOLT_PHYSICS_ROOT}/Physics/Hair/HairShaders.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Hair/HairShaders.h
+	# TODO(4D): Physics/Hair is a v1 scope cut (CLAUDE.md "Scope cuts for v1") - still 3D.
+#	${JOLT_PHYSICS_ROOT}/Physics/Hair/Hair.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Hair/Hair.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Hair/HairSettings.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Hair/HairSettings.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Hair/HairShaders.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Hair/HairShaders.h
 	${JOLT_PHYSICS_ROOT}/Physics/IslandBuilder.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/IslandBuilder.h
 	${JOLT_PHYSICS_ROOT}/Physics/LargeIslandSplitter.cpp
@@ -397,47 +411,51 @@ set(JOLT_PHYSICS_SRC_FILES
 	${JOLT_PHYSICS_ROOT}/Physics/PhysicsSystem.h
 	${JOLT_PHYSICS_ROOT}/Physics/PhysicsUpdateContext.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/PhysicsUpdateContext.h
-	${JOLT_PHYSICS_ROOT}/Physics/Ragdoll/Ragdoll.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Ragdoll/Ragdoll.h
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyContactListener.h
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyCreationSettings.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyCreationSettings.h
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyManifold.h
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyMotionProperties.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyMotionProperties.h
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyShape.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyShape.h
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodySharedSettings.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodySharedSettings.h
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyUpdateContext.h
-	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyVertex.h
+	# TODO(4D): Physics/Ragdoll is a v1 scope cut (CLAUDE.md "Scope cuts for v1") - still 3D.
+#	${JOLT_PHYSICS_ROOT}/Physics/Ragdoll/Ragdoll.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Ragdoll/Ragdoll.h
+	# TODO(4D): SoftBody is a v1 scope cut (CLAUDE.md). These are still 3D; the rigid body core
+	# references them only behind JPH_ENABLE_SOFT_BODY, which is not defined for v1.
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyContactListener.h
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyCreationSettings.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyCreationSettings.h
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyManifold.h
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyMotionProperties.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyMotionProperties.h
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyShape.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyShape.h
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodySharedSettings.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodySharedSettings.h
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyUpdateContext.h
+#	${JOLT_PHYSICS_ROOT}/Physics/SoftBody/SoftBodyVertex.h
 	${JOLT_PHYSICS_ROOT}/Physics/StateRecorder.h
 	${JOLT_PHYSICS_ROOT}/Physics/StateRecorderImpl.cpp
 	${JOLT_PHYSICS_ROOT}/Physics/StateRecorderImpl.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/MotorcycleController.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/MotorcycleController.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/TrackedVehicleController.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/TrackedVehicleController.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleAntiRollBar.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleAntiRollBar.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleCollisionTester.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleCollisionTester.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleConstraint.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleConstraint.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleController.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleController.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleDifferential.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleDifferential.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleEngine.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleEngine.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleTrack.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleTrack.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleTransmission.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleTransmission.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/Wheel.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/Wheel.h
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/WheeledVehicleController.cpp
-	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/WheeledVehicleController.h
+	# TODO(4D): Physics/Vehicle is a v1 scope cut (CLAUDE.md "Scope cuts for v1") - still 3D.
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/MotorcycleController.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/MotorcycleController.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/TrackedVehicleController.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/TrackedVehicleController.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleAntiRollBar.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleAntiRollBar.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleCollisionTester.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleCollisionTester.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleConstraint.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleConstraint.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleController.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleController.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleDifferential.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleDifferential.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleEngine.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleEngine.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleTrack.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleTrack.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleTransmission.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/VehicleTransmission.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/Wheel.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/Wheel.h
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/WheeledVehicleController.cpp
+#	${JOLT_PHYSICS_ROOT}/Physics/Vehicle/WheeledVehicleController.h
 	${JOLT_PHYSICS_ROOT}/RegisterTypes.cpp
 	${JOLT_PHYSICS_ROOT}/RegisterTypes.h
 	${JOLT_PHYSICS_ROOT}/Renderer/DebugRenderer.cpp
@@ -448,20 +466,21 @@ set(JOLT_PHYSICS_SRC_FILES
 	${JOLT_PHYSICS_ROOT}/Renderer/DebugRendererRecorder.h
 	${JOLT_PHYSICS_ROOT}/Renderer/DebugRendererSimple.cpp
 	${JOLT_PHYSICS_ROOT}/Renderer/DebugRendererSimple.h
-	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletalAnimation.cpp
-	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletalAnimation.h
-	${JOLT_PHYSICS_ROOT}/Skeleton/Skeleton.cpp
-	${JOLT_PHYSICS_ROOT}/Skeleton/Skeleton.h
-	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletonMapper.cpp
-	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletonMapper.h
-	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletonPose.cpp
-	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletonPose.h
-	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitter.cpp
-	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitter.h
-	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterBinning.cpp
-	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterBinning.h
-	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterMean.cpp
-	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterMean.h
+	# TODO(4D): Skeleton is a v1 scope cut (CLAUDE.md "Scope cuts for v1") - still 3D.
+#	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletalAnimation.cpp
+#	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletalAnimation.h
+#	${JOLT_PHYSICS_ROOT}/Skeleton/Skeleton.cpp
+#	${JOLT_PHYSICS_ROOT}/Skeleton/Skeleton.h
+#	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletonMapper.cpp
+#	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletonMapper.h
+#	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletonPose.cpp
+#	${JOLT_PHYSICS_ROOT}/Skeleton/SkeletonPose.h
+#	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitter.cpp
+#	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitter.h
+#	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterBinning.cpp
+#	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterBinning.h
+#	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterMean.cpp
+#	${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterMean.h
 )
 
 if (ENABLE_OBJECT_STREAM)

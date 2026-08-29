@@ -347,17 +347,19 @@ P1 — determinism / hygiene:
 ## Roadmap to a shippable v1
 
 **⏸ RESUME HERE (2026-08-08):** The headless v1 library builds and `UnitTests` runs at **358/364**.
-Next, in priority order: (1) **the GJK simplex-growth bug** — all 7 remaining failures (5 EPA, 2 GJK)
-trace to it, and the diagnosis with trace evidence and everything already ruled out is in the
-build-status section at the top; start from the `MustIncludeD` shortcut in
-`GetClosestPointOnTetrahedron`. (2) Write the **4D HelloWorld** (tesseract onto a hyperplane floor) —
-the whole stepping loop compiles now, so this is the first chance to see the engine simulate, and it
-will flush out runtime bugs the unit tests cannot. (3) The **contact manifold pipeline**
-(`ManifoldBetweenTwoFaces` is a reduced single-point fallback — see the TODO in that file; resting
-boxes get one contact instead of a patch, so stacks will be less stable than 3D Jolt). (4) Re-enable
-de-registered unit tests as each area is ported. **Read the 🔑 torque-convention box below before
-touching any dynamics code** — the naive `r ∧ F` transliteration is wrong and an effective-mass test
-cannot detect it.
+Next, in priority order: (1) **EPA** — it is broken outright, not borderline (5 of the 6 remaining
+failures); GJK correctly reports a hit and distance 0 for two deeply overlapping spheres but
+`GetPenetrationDepth` returns false, and along another axis returns true with a zero penetration
+vector, so the bug is in the hull expansion rather than the GJK seed. Analysis and suspects are in
+the build-status section at the top; **bug #7** (uninitialized `mNormal` on a degenerate cell) is
+prime. (2) Write the **4D HelloWorld** (tesseract onto a hyperplane floor) — the whole stepping loop
+compiles, so this is the first chance to see the engine simulate and it will flush out runtime bugs
+the unit tests cannot; note contacts will be weak until (3). (3) The **contact manifold pipeline**
+(`ManifoldBetweenTwoFaces` is a reduced single-point fallback — the 4D >=5-point reduction is done
+and correct, the face *clipping* is not; resting boxes get one contact instead of a patch). (4)
+Re-enable de-registered unit tests as each area is ported. **Read the 🔑 torque-convention box below
+before touching any dynamics code** — the naive `r ∧ F` transliteration is wrong and an
+effective-mass test cannot detect it.
 
 **Phase B step 6(b) is COMPLETE — the v1 shape layer compiles clean at the per-TU level (15/15 TUs).**
 Verified via a per-TU `-fsyntax-only` check with the Jolt build flags (helper `cc.sh`; recreate from

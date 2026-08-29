@@ -32,25 +32,28 @@ cases, 358 pass, 6 fail.** Build with the debug renderer OFF
 This replaces the old standalone Math-only runner — **run the real `./build/UnitTests` from now on.**
 (The recipe for the standalone runner is kept below only as a fallback.)
 
-### The 6 remaining test failures — EPA is broken, GJK is fixed
-`UnitTests` is at **358/364**. The GJK simplex-growth bug is **FIXED** (see below); what is left is
-**EPA (5 cases) plus one borderline GJK case**.
+### The 6 remaining test failures — EPA converges to the wrong answer
+`UnitTests` is at **358/364** (failed assertions are down to 20). Five failures are EPA and one is a
+borderline GJK case.
 
-**EPA does not work at all, even for deep overlap.** Two radius-2 spheres with centres 1 apart
-(`TestEPASphereSphere4D`) should report a penetration depth of 3. Measured directly:
-- `GJKClosestPoint::Intersects` correctly returns true, and `GetClosestPoints` correctly returns 0.
-- `EPAPenetrationDepth::GetPenetrationDepth` returns **false** for that pair, and for the same pair
-  offset along X instead of W it returns true but with `|pa - pb| == 0` — no penetration vector.
+**EPA now produces a penetration depth where it used to return false, but it is ~7% off and does not
+refine.** For two radius-2 spheres 1 apart it reports 2.81 against an expected 3.0, and **the answer
+is bit-identical for tolerances from 1e-2 down to 1e-6** — so EPA is terminating early rather than
+converging. The main loop's tolerance test is therefore not what ends it; one of the `break` paths is
+(`AddPoint` failing, the `has_defect` check, or `IsFacing` rejecting the new support point). **Next
+step: instrument `EPAConvexHullBuilder::AddPoint` and check that the incremental hull update actually
+produces a closed, correctly linked hull in 4D** — cells are tetrahedra and ridges are triangles, and
+the ridge linking is brute-force 3-vertex matching, so it is the prime suspect.
 
-So the failure is inside the EPA hull expansion itself, not in the GJK seed. Prime suspects, in
-order: the pentachoron seed simplex; the degenerate-cell path in `EPAConvexHullBuilder.h:668-713`
-that can leave `mNormal`/`mLambda` uninitialized while still linking the cell (**this is known bug
-#7**, still open); and the tetrahedral-cell / triangle-ridge bookkeeping generally. Start by checking
-whether the seed simplex is built and whether any cell ever gets a valid normal.
+Four EPA bugs were fixed getting this far (see the commit for detail): the cell "normal" was actually
+the closest point on the cell's hyperplane (which collapses to zero when the origin lies on it, and
+silently disabled `IsFacingOrigin()` and any negative `mClosestLenSq`); degenerate cells were linked
+with `mNormal`/`mLambda` uninitialized (**bug #7, now fixed**); the seed hulls could not contain the
+origin because the port kept 3D's *count* of spread directions while the perpendicular spaces grew a
+dimension; and cell normals were never oriented outward, which the old pseudo-normal had masked.
 
-The last GJK case (`TestGJKSphereVsBoxIntersect`) is now down to **2 disagreements in 10,000** with a
-worst missed overlap of **0.001** — against a test tolerance of 2e-4, so this is a precision-limit
-case rather than a logic bug, and it should be revisited only after EPA works.
+The last GJK case (`TestGJKSphereVsBoxIntersect`) is 2 disagreements in 10,000 with a worst missed
+overlap of 0.001 against a 2e-4 tolerance — a precision-limit case, not a logic bug.
 
 ### FIXED: GJK never grew its simplex to 5 points (2026-08-08)
 The bug was a **scale-dependent epsilon in the barycentric sign tests**. `OriginOutsideOfPlane`,
@@ -347,19 +350,16 @@ P1 — determinism / hygiene:
 ## Roadmap to a shippable v1
 
 **⏸ RESUME HERE (2026-08-08):** The headless v1 library builds and `UnitTests` runs at **358/364**.
-Next, in priority order: (1) **EPA** — it is broken outright, not borderline (5 of the 6 remaining
-failures); GJK correctly reports a hit and distance 0 for two deeply overlapping spheres but
-`GetPenetrationDepth` returns false, and along another axis returns true with a zero penetration
-vector, so the bug is in the hull expansion rather than the GJK seed. Analysis and suspects are in
-the build-status section at the top; **bug #7** (uninitialized `mNormal` on a degenerate cell) is
-prime. (2) Write the **4D HelloWorld** (tesseract onto a hyperplane floor) — the whole stepping loop
-compiles, so this is the first chance to see the engine simulate and it will flush out runtime bugs
-the unit tests cannot; note contacts will be weak until (3). (3) The **contact manifold pipeline**
-(`ManifoldBetweenTwoFaces` is a reduced single-point fallback — the 4D >=5-point reduction is done
-and correct, the face *clipping* is not; resting boxes get one contact instead of a patch). (4)
-Re-enable de-registered unit tests as each area is ported. **Read the 🔑 torque-convention box below
-before touching any dynamics code** — the naive `r ∧ F` transliteration is wrong and an
-effective-mass test cannot detect it.
+Next, in priority order: (1) **`EPAConvexHullBuilder::AddPoint`** — EPA now returns a penetration
+depth instead of failing, but it is ~7% off and identical for every tolerance from 1e-2 to 1e-6, so
+the incremental hull expansion is not refining; see the analysis at the top. (2) Write the **4D
+HelloWorld** (tesseract onto a hyperplane floor) — the stepping loop compiles, so this is the first
+chance to see the engine simulate and it will flush out runtime bugs the unit tests cannot. (3) The
+**contact manifold pipeline** (`ManifoldBetweenTwoFaces` is a reduced single-point fallback; the 4D
+>=5-point reduction is done and correct, the face *clipping* is not). (4) Re-enable de-registered
+unit tests as each area is ported. **Read the 🔑 torque-convention box below before touching any
+dynamics code** — the naive `r ∧ F` transliteration is wrong and an effective-mass test cannot detect
+it.
 
 **Phase B step 6(b) is COMPLETE — the v1 shape layer compiles clean at the per-TU level (15/15 TUs).**
 Verified via a per-TU `-fsyntax-only` check with the Jolt build flags (helper `cc.sh`; recreate from

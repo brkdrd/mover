@@ -81,7 +81,7 @@ public:
 		int				mIdx[4];							///< Vertex indices
 		Cell *			mNeighbour[4];						///< mNeighbour[i] shares the ridge opposite vertex mIdx[i]
 		int				mNeighbourRidge[4];					///< Which ridge of the neighbour connects back to this cell
-		Vec4			mNormal;							///< Pseudo-normal (closest point on cell's hyperplane to origin)
+		Vec4			mNormal;							///< Normal of this cell = sCross of its 3 edge vectors (not normalized), oriented by the vertex winding
 		Vec4			mCentroid;							///< Center of the cell
 		float			mClosestLenSq = FLT_MAX;			///< Closest distance^2 from origin to cell
 		float			mLambda[3];							///< Barycentric coordinates of closest point to origin
@@ -211,6 +211,10 @@ public:
 		mCellQueue.clear();
 
 		int idx[5] = { inIdx0, inIdx1, inIdx2, inIdx3, inIdx4 };
+
+		// Centroid of the seed simplex: a point inside the hull, used to orient every cell normal
+		// outward. The hull only grows from here, so it stays interior.
+		mInteriorPoint = (mPositions[inIdx0] + mPositions[inIdx1] + mPositions[inIdx2] + mPositions[inIdx3] + mPositions[inIdx4]) * 0.2f;
 
 		// Create 5 cells — cell i omits vertex idx[i]
 		Cell *cells[5];
@@ -359,6 +363,18 @@ private:
 		Cell *c = mFactory.CreateCell(inIdx0, inIdx1, inIdx2, inIdx3, mPositions.data());
 		if (c == nullptr)
 			return nullptr;
+
+		// TODO(4D): orient the cell normal outward. The normal's sign comes from the vertex winding
+		// (sCross of the edge vectors), and neither Initialize (which just omits one vertex at a time)
+		// nor the brute-force ridge linking maintains a consistent winding across cells, so roughly
+		// half of them would point inward. That breaks IsFacing()/IsFacingOrigin() and makes EPA bail
+		// out immediately. mInteriorPoint is a point known to be inside the hull, so "outward" is
+		// simply "away from it"; the hull only ever grows, so it stays interior.
+		if (c->mNormal.Dot(c->mCentroid - mInteriorPoint) < 0.0f)
+		{
+			c->mNormal = -c->mNormal;
+			c->mClosestLenSq = -c->mClosestLenSq;	// signed distance flips with the normal
+		}
 
 #ifdef JPH_EPA_CONVEX_BUILDER_DRAW
 		c->mIteration = mIteration;
@@ -576,6 +592,7 @@ public:
 
 private:
 	CellFactory			mFactory;							///< Factory to create/free cells
+	Vec4				mInteriorPoint { Vec4::sZero() };	///< A point known to be inside the hull, used to orient cell normals outward
 	const Points &		mPositions;							///< List of positions
 	CellQueue			mCellQueue;							///< Priority queue of cells sorted by closest distance to origin
 
@@ -621,11 +638,41 @@ EPAConvexHullBuilder::Cell::Cell(int inIdx0, int inIdx1, int inIdx2, int inIdx3,
 	Vec4 e2 = y2 - y0;
 	Vec4 e3 = y3 - y0;
 
-	// 3x3 Gram matrix
+	// TODO(4D): the normal of a tetrahedral cell is the generalized cross product of its three edge
+	// vectors, i.e. the vector orthogonal to the cell's 3-flat, with its orientation coming from the
+	// vertex winding exactly as 3D Jolt's y10.Cross(y20) does.
+	//
+	// It must NOT be "the closest point on the cell's hyperplane to the origin", which is what this
+	// port used to store. That collapses to the zero vector whenever the origin lies on the cell's
+	// hyperplane, leaving EPA with no direction to expand in. Worse, it silently disabled two whole
+	// mechanisms: centroid . closest_point = |closest_point|^2 >= 0 always, so IsFacingOrigin() could
+	// never return true and mClosestLenSq could never go negative - and those are exactly the signals
+	// that drive the "encapsulate the origin" phase and the hull-defect check.
+	mNormal = Vec4::sCross(e1, e2, e3);
+	float normal_len_sq = mNormal.LengthSq();
+
+	if (normal_len_sq <= cMinCellVolume)
+	{
+		// Degenerate cell. Leave mClosestLenSq at its FLT_MAX default so it sorts last, and make sure
+		// nothing downstream can read an uninitialized normal or lambda (this was bug #7 in CLAUDE.md:
+		// the old code linked the cell while leaving both uninitialized).
+		mNormal = Vec4::sZero();
+		mLambda[0] = mLambda[1] = mLambda[2] = 0.0f;
+		mLambdaRelativeTo0 = true;
+		return;
+	}
+
+	// Signed squared distance from the origin to the cell's hyperplane. The sign records which side
+	// of the cell the origin is on, which is what tells EPA the origin is not enclosed yet.
+	float c_dot_n = mCentroid.Dot(mNormal);
+	mClosestLenSq = abs(c_dot_n) * c_dot_n / normal_len_sq;
+
+	// Barycentric coordinates of the closest point, by solving the 3x3 Gram system. This is only used
+	// to reconstruct the closest point later; the distance above is computed from the normal because
+	// that is much more accurate (see the same note in 3D Jolt and in ClosestPoint::GetClosestPointOnTriangle).
 	float d00 = e1.Dot(e1), d01 = e1.Dot(e2), d02 = e1.Dot(e3);
 	float d11 = e2.Dot(e2), d12 = e2.Dot(e3), d22 = e3.Dot(e3);
 
-	// Cofactors of the 3x3 Gram matrix
 	float C00 = d11 * d22 - d12 * d12;
 	float C01 = d02 * d12 - d01 * d22;
 	float C02 = d01 * d12 - d02 * d11;
@@ -633,84 +680,27 @@ EPAConvexHullBuilder::Cell::Cell(int inIdx0, int inIdx1, int inIdx2, int inIdx3,
 	float C12 = d01 * d02 - d00 * d12;
 	float C22 = d00 * d11 - d01 * d01;
 
-	// Gram determinant
-	float determinant = d00 * C00 + d01 * C01 + d02 * C02;
+	// The Gram determinant of 3 vectors is exactly the squared 3-volume they span, i.e. |sCross|^2
+	float determinant = normal_len_sq;
 
-	if (determinant > cMinCellVolume)
-	{
-		// RHS: b_i = -y0 . e_i
-		float b0 = -y0.Dot(e1);
-		float b1 = -y0.Dot(e2);
-		float b2 = -y0.Dot(e3);
+	float b0 = -y0.Dot(e1);
+	float b1 = -y0.Dot(e2);
+	float b2 = -y0.Dot(e3);
 
-		// Solve by Cramer's rule
-		float l0 = (b0 * C00 + b1 * C01 + b2 * C02) / determinant;
-		float l1 = (b0 * C01 + b1 * C11 + b2 * C12) / determinant;
-		float l2 = (b0 * C02 + b1 * C12 + b2 * C22) / determinant;
-		mLambda[0] = l0;
-		mLambda[1] = l1;
-		mLambda[2] = l2;
-		mLambdaRelativeTo0 = true;
+	float l0 = (b0 * C00 + b1 * C01 + b2 * C02) / determinant;
+	float l1 = (b0 * C01 + b1 * C11 + b2 * C12) / determinant;
+	float l2 = (b0 * C02 + b1 * C12 + b2 * C22) / determinant;
+	mLambda[0] = l0;
+	mLambda[1] = l1;
+	mLambda[2] = l2;
+	mLambdaRelativeTo0 = true;
 
-		// Closest point on the tetrahedron's affine hyperplane to the origin
-		Vec4 v_closest = y0 + l0 * e1 + l1 * e2 + l2 * e3;
-		mNormal = v_closest;
-
-		// Signed squared distance from origin to cell's hyperplane
-		float dist_sq = v_closest.LengthSq();
-		float c_dot_n = mCentroid.Dot(mNormal);
-		mClosestLenSq = c_dot_n >= 0.0f ? dist_sq : -dist_sq;
-
-		// Check if closest point is interior to the tetrahedron
-		if (l0 > -cBarycentricEpsilon && l1 > -cBarycentricEpsilon && l2 > -cBarycentricEpsilon
-			&& l0 + l1 + l2 < 1.0f + cBarycentricEpsilon)
-			mClosestPointInterior = true;
-	}
-	else
-	{
-		// Try reference vertex y1 instead
-		Vec4 f0 = y0 - y1;  // = -e1 from y1's frame
-		Vec4 f2 = y2 - y1;
-		Vec4 f3 = y3 - y1;
-
-		float g00 = f0.Dot(f0), g01 = f0.Dot(f2), g02 = f0.Dot(f3);
-		float g11 = f2.Dot(f2), g12 = f2.Dot(f3), g22 = f3.Dot(f3);
-
-		float D00 = g11 * g22 - g12 * g12;
-		float D01 = g02 * g12 - g01 * g22;
-		float D02 = g01 * g12 - g02 * g11;
-		float D11 = g00 * g22 - g02 * g02;
-		float D12 = g01 * g02 - g00 * g12;
-		float D22 = g00 * g11 - g01 * g01;
-
-		float det2 = g00 * D00 + g01 * D01 + g02 * D02;
-
-		if (det2 > cMinCellVolume)
-		{
-			float b0 = -y1.Dot(f0);
-			float b1 = -y1.Dot(f2);
-			float b2 = -y1.Dot(f3);
-
-			float l0 = (b0 * D00 + b1 * D01 + b2 * D02) / det2;
-			float l1 = (b0 * D01 + b1 * D11 + b2 * D12) / det2;
-			float l2 = (b0 * D02 + b1 * D12 + b2 * D22) / det2;
-			mLambda[0] = l0;
-			mLambda[1] = l1;
-			mLambda[2] = l2;
-			mLambdaRelativeTo0 = false;
-
-			Vec4 v_closest = y1 + l0 * f0 + l1 * f2 + l2 * f3;
-			mNormal = v_closest;
-
-			float dist_sq = v_closest.LengthSq();
-			float c_dot_n = mCentroid.Dot(mNormal);
-			mClosestLenSq = c_dot_n >= 0.0f ? dist_sq : -dist_sq;
-
-			if (l0 > -cBarycentricEpsilon && l1 > -cBarycentricEpsilon && l2 > -cBarycentricEpsilon
-				&& l0 + l1 + l2 < 1.0f + cBarycentricEpsilon)
-				mClosestPointInterior = true;
-		}
-	}
+	// Check if the closest point is interior to the tetrahedron. As in 3D, several coplanar cells can
+	// share the same hyperplane and only one of them has the origin's projection as an interior point;
+	// that is the one we want to use for the contact points.
+	if (l0 > -cBarycentricEpsilon && l1 > -cBarycentricEpsilon && l2 > -cBarycentricEpsilon
+		&& l0 + l1 + l2 < 1.0f + cBarycentricEpsilon)
+		mClosestPointInterior = true;
 }
 
 JPH_PRECISE_MATH_OFF

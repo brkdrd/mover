@@ -183,52 +183,69 @@ public:
 
 		case 2:
 			{
-				// Two vertices, create 3 extra perpendicular directions using 4D cross products
+				// Two vertices. TODO(4D): 3D Jolt spreads 3 directions at 120 degrees around the axis,
+				// which surrounds it because the perpendicular space of an axis in 3D is a 2-plane. In
+				// 4D that perpendicular space is a 3-space, so 3 directions cannot surround it - and 3
+				// mutually orthogonal ones (what this port used to do) form a lopsided "corner" whose
+				// hull has the origin sitting exactly on one of its cell hyperplanes, which makes EPA
+				// compute a zero penetration vector and give up. Use 4 directions forming a regular
+				// tetrahedron in the perpendicular 3-space instead, which does surround it.
 				Vec4 axis = (support_points.mY[1] - support_points.mY[0]).Normalized();
-				Vec4 dir1 = axis.GetNormalizedPerpendicular();
-				Vec4 dir2 = Vec4::sCross(axis, dir1, Vec4(0, 0, 0, 1)).Normalized();
-				// If dir2 is zero (axis is parallel to w), try another vector
-				if (dir2.IsNearZero()) dir2 = Vec4::sCross(axis, dir1, Vec4(1, 0, 0, 0)).Normalized();
-				Vec4 dir3 = Vec4::sCross(axis, dir1, dir2).Normalized();
-				int p1, p2, p3;
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, dir1, p1);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, dir2, p2);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, dir3, p3);
-				JPH_ASSERT(p1 == 2);
-				JPH_ASSERT(p2 == 3);
-				JPH_ASSERT(p3 == 4);
+				Vec4 u1, u2, u3;
+				axis.GetNormalizedPerpendicularBasis(u1, u2, u3);
+				int p;
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius,  u1 + u2 + u3, p);
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius,  u1 - u2 - u3, p);
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, -u1 + u2 - u3, p);
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, -u1 - u2 + u3, p);
 				break;
 			}
 
 		case 3:
 			{
-				// 3 vertices (triangle). In 4D the normal space of a triangle is 2D, so add 2 perpendicular directions.
+				// 3 vertices (a triangle). Its perpendicular space in 4D is a 2-plane, so - exactly as
+				// 3D Jolt does around an axis - use 3 directions at 120 degrees inside that 2-plane so
+				// they surround it. Two orthogonal directions would again leave the origin on the hull
+				// boundary.
 				Vec4 e0 = support_points.mY[1] - support_points.mY[0];
 				Vec4 e1 = support_points.mY[2] - support_points.mY[0];
-				Vec4 dir1 = Vec4::sCross(e0, e1, Vec4(0, 0, 0, 1));
-				if (dir1.IsNearZero()) dir1 = Vec4::sCross(e0, e1, Vec4(1, 0, 0, 0));
-				dir1 = dir1.Normalized();
-				Vec4 dir2 = Vec4::sCross(e0, e1, dir1).Normalized();
-				int p1, p2;
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, dir1, p1);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, dir2, p2);
-				JPH_ASSERT(p1 == 3);
-				JPH_ASSERT(p2 == 4);
+
+				// Pick the coordinate axis least aligned with the triangle to seed the perpendicular
+				Vec4 align = e0.Abs() + e1.Abs();
+				int best = 0;
+				float best_v = align.GetX();
+				if (align.GetY() < best_v) { best = 1; best_v = align.GetY(); }
+				if (align.GetZ() < best_v) { best = 2; best_v = align.GetZ(); }
+				if (align.GetW() < best_v) { best = 3; }
+				Vec4 seed = best == 0? Vec4::sAxisX() : best == 1? Vec4::sAxisY() : best == 2? Vec4::sAxisZ() : Vec4::sAxisW();
+
+				Vec4 n1 = Vec4::sCross(e0, e1, seed).Normalized();
+				Vec4 n2 = Vec4::sCross(e0, e1, n1).Normalized();
+
+				const float cCos120 = -0.5f, cSin120 = 0.86602540378f;
+				int p;
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, n1, p);
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, cCos120 * n1 + cSin120 * n2, p);
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, cCos120 * n1 - cSin120 * n2, p);
 				break;
 			}
 
 		case 4:
 			{
-				// 4 vertices (tetrahedron). In 4D the normal space is 1D, add 1 hyperplane normal direction.
+				// 4 vertices (a tetrahedron). Its perpendicular space in 4D is 1 dimensional, so add
+				// support points on BOTH sides of its hyperplane. Adding only the +normal side (what
+				// this port used to do) gives a hull that has the tetrahedron as a boundary cell, so
+				// the origin can lie exactly on it.
 				Vec4 e0 = support_points.mY[1] - support_points.mY[0];
 				Vec4 e1 = support_points.mY[2] - support_points.mY[0];
 				Vec4 e2 = support_points.mY[3] - support_points.mY[0];
 				Vec4 normal = Vec4::sCross(e0, e1, e2);
-				if (normal.IsNearZero()) normal = Vec4(0, 0, 0, 1); // Degenerate fallback
+				if (normal.IsNearZero())
+					normal = Vec4(0, 0, 0, 1); // Degenerate fallback
 				normal = normal.Normalized();
-				int p1;
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, normal, p1);
-				JPH_ASSERT(p1 == 4);
+				int p;
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, normal, p);
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, -normal, p);
 				break;
 			}
 

@@ -21,51 +21,60 @@ got stuck.
 cmake -S Build -B build -DCMAKE_BUILD_TYPE=Release -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
 cmake --build build --target Jolt -j$(nproc)           # BUILDS CLEAN (headless v1)
 cmake --build build --target UnitTests -j$(nproc)      # builds and links
-./build/UnitTests                                     # runs: 364 cases, 357 pass, 7 fail (see below)
+./build/UnitTests                                     # runs: 364 cases, 358 pass, 6 fail (see below)
 ```
 
 **Current build status (verified 2026-08-08): the headless v1 library BUILDS CLEAN** — `libJolt.a`,
 0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 364
-cases, 357 pass, 7 fail.** Build with the debug renderer OFF
+cases, 358 pass, 6 fail.** Build with the debug renderer OFF
 (`-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF`); v1 is headless.
 
 This replaces the old standalone Math-only runner — **run the real `./build/UnitTests` from now on.**
 (The recipe for the standalone runner is kept below only as a fallback.)
 
-### The 7 remaining test failures — all one root cause in GJK
-`UnitTests` is at **357/364**. Everything left is EPA (5 cases) and GJK (2), and the evidence points
-at a single mechanism: **GJK does not reliably grow its simplex to 5 points in 4D.**
+### The 6 remaining test failures — EPA is broken, GJK is fixed
+`UnitTests` is at **358/364**. The GJK simplex-growth bug is **FIXED** (see below); what is left is
+**EPA (5 cases) plus one borderline GJK case**.
 
-Measured on `TestGJKSphereVsBoxIntersect` (10,000 random sphere/box pairs): **24 disagreements, all
-false negatives** — GJK reports MISS for pairs that genuinely overlap by up to 0.071, far beyond the
-2e-4 test tolerance. A traced run of the first failure shows |v|² descending 15 → 3 → 0.25 → … →
-5.0e-6, then *rising* to 5.1e-6, which trips the `prev_v_len_sq - v_len_sq <= FLT_EPSILON *
-prev_v_len_sq` "converged, therefore separated" early-out. The true distance is 0 (the shapes
-overlap), so the loop converged to the wrong answer rather than to a separating axis.
+**EPA does not work at all, even for deep overlap.** Two radius-2 spheres with centres 1 apart
+(`TestEPASphereSphere4D`) should report a penetration depth of 3. Measured directly:
+- `GJKClosestPoint::Intersects` correctly returns true, and `GetClosestPoints` correctly returns 0.
+- `EPAPenetrationDepth::GetPenetrationDepth` returns **false** for that pair, and for the same pair
+  offset along X instead of W it returns true but with `|pa - pb| == 0` — no penetration vector.
 
-Across the whole trace the simplex point count goes 1,2,3,4,3,2,3,4,3,4,3,4,2 — the tetrahedron
-reduction **never once returns the full set 0x0f**, so the pentachoron case (and its `set == 0x1f`
-"origin enclosed, therefore hit" test) is never reached.
+So the failure is inside the EPA hull expansion itself, not in the GJK seed. Prime suspects, in
+order: the pentachoron seed simplex; the degenerate-cell path in `EPAConvexHullBuilder.h:668-713`
+that can leave `mNormal`/`mLambda` uninitialized while still linking the cell (**this is known bug
+#7**, still open); and the tetrahedral-cell / triangle-ridge bookkeeping generally. Start by checking
+whether the seed simplex is built and whether any cell ever gets a valid normal.
 
-What has already been ruled out:
-- `GetClosestPointOnTetrahedron` is correct, including the 4D projection fix: given a tetrahedron
-  whose 3-flat the origin projects strictly inside, it returns set `0xF` and the right projection.
-- `GetClosestPointOnPentachoron` is correct: for a pentachoron strictly containing the origin it
-  returns set `0b11111` and a zero closest point.
-- `Sphere::GetSupport` / `AABox::GetSupport` are correct 4D support functions.
-- `GJKClosestPoint::Intersects` and `GetClosest` are structurally right for 4D (they already switch
-  on 5 points and test `set == 0x1f`).
+The last GJK case (`TestGJKSphereVsBoxIntersect`) is now down to **2 disagreements in 10,000** with a
+worst missed overlap of **0.001** — against a test tolerance of 2e-4, so this is a precision-limit
+case rather than a logic bug, and it should be revisited only after EPA works.
 
-Prime suspect: the `LastPointPartOfClosestFeature` / `MustIncludeD` path. In
-`GetClosestPointOnTetrahedron`, when face ABC is flagged and D must be included, the code returns
-`set = 0b0001, closest = A` (inherited verbatim from 3D Jolt, whose comment argues the closest point
-"cannot be an interior point either"). In 3D four points are a full simplex so that reasoning holds;
-in 4D four points are only a 3-flat and the origin is essentially never on it, so returning vertex A
-can be far worse than the true closest point and destroys the monotonic decrease of |v| that GJK's
-convergence test depends on. **The 4D question to answer is what the `MustInclude` shortcut should
-be when the simplex is one dimension short of enclosing the origin.**
+### FIXED: GJK never grew its simplex to 5 points (2026-08-08)
+The bug was a **scale-dependent epsilon in the barycentric sign tests**. `OriginOutsideOfPlane`,
+`OriginOutsideOfTetrahedronPlanes` and `OriginOutsideOfPentachoronPlanes` decided "is the origin
+outside this face" with `det_Gi * det_G < FLT_EPSILON`. Both determinants scale as a high power of
+the simplex size (the product goes as length^12), so once GJK's simplex shrank — around |v| ~ 1e-2,
+long before it could gather 5 points — every product underflowed the absolute epsilon and **every
+face reported "outside"**. The interior case could then never be selected, the tetrahedron never
+returned the full set `0x0f`, the simplex never grew to a pentachoron, and the `set == 0x1f`
+"origin enclosed" test never ran. GJK stalled and its convergence check reported "separated".
 
-Reproduce with the probes in the scratchpad, or just run `./build/UnitTests -ts=GJKTests`.
+Since `det_G >= 0` (it is a Gram determinant), `lambda_i < 0` reduces to `det_Gi < 0`, so the tests
+are now `det_Gi < FLT_EPSILON * det_G` — dimensionally consistent and scale-invariant. Genuinely
+degenerate simplices are handled explicitly instead of falling out of the epsilon: `det_G` is
+compared against its Hadamard bound (`d00*d11*d22...`), which is a scale-invariant conditioning
+measure, and a degenerate simplex reports all faces outside, which is the safe answer.
+
+Measured on 10,000 random sphere/box pairs: disagreements **24 -> 2**, worst missed overlap
+**0.071 -> 0.001**, and `TestGJKRaySphere` / `RayBox` / `RayTetrahedron` all pass.
+
+⚠ Two things were ruled out along the way and should not be re-tried: the `MustIncludeD` shortcut
+(disabling it changes nothing — measured), and widening the `FLT_EPSILON * GetMaxYLengthSq()`
+"machine precision" early-out (a sweep from 1x to 256x only trades false negatives for false
+positives and never fixes the worst case).
 
 **v1 scope cuts applied at the source level (2026-08-08).** Commented out of `Jolt.cmake` with
 `TODO(4D)` markers, with matching RTTI declarations / `Factory` registrations removed from
@@ -337,7 +346,7 @@ P1 — determinism / hygiene:
 
 ## Roadmap to a shippable v1
 
-**⏸ RESUME HERE (2026-08-08):** The headless v1 library builds and `UnitTests` runs at **357/364**.
+**⏸ RESUME HERE (2026-08-08):** The headless v1 library builds and `UnitTests` runs at **358/364**.
 Next, in priority order: (1) **the GJK simplex-growth bug** — all 7 remaining failures (5 EPA, 2 GJK)
 trace to it, and the diagnosis with trace evidence and everything already ruled out is in the
 build-status section at the top; start from the `MustIncludeD` shortcut in

@@ -435,9 +435,19 @@ namespace ClosestPoint
 		float det_G = d00 * (d11 * d22 - d12 * d12) - d01 * (d01 * d22 - d12 * d02) + d02 * c01_12;
 		float det_G3 = d00 * (d11 * b2 - d12 * b1) - d01 * (d01 * b2 - d02 * b1) + b0 * c01_12;
 
-		// lambda3 = det_G3 / det_G. Origin is outside if lambda3 < 0 (opposite sign).
-		// We compare against a small negative value to allow for slop in the calculations
-		return det_G3 * det_G < FLT_EPSILON;
+		// lambda3 = det_G3 / det_G, and det_G >= 0 (it is a Gram determinant), so the origin is
+		// outside face ABC exactly when det_G3 < 0.
+		//
+		// TODO(4D): compare det_G3 against a *relative* slop, not an absolute FLT_EPSILON. Both
+		// determinants scale as the 6th power of the simplex size, so testing det_G3 * det_G against
+		// an absolute epsilon silently reports "outside" for every face once the simplex shrinks -
+		// (1e-2)^6 is already below FLT_EPSILON. That matters far more in 4D than in 3D: a 4D simplex
+		// needs 5 points to enclose the origin, so it goes through more (and smaller) intermediate
+		// configurations, and once every face reads "outside" the tetrahedron case can never return
+		// the full set and GJK can never grow to a pentachoron.
+		if (det_G <= 1.0e-6f * d00 * d11 * d22)
+			return true; // Degenerate: no reliable inside
+		return det_G3 < FLT_EPSILON * det_G;
 	}
 
 	/// Returns for each of the planes of the tetrahedron if the origin is outside it.
@@ -481,12 +491,22 @@ namespace ClosestPoint
 		float det_GA = det_G - det_G1 - det_G2 - det_G3;
 
 		// Origin is outside face i iff the opposite vertex's barycentric coordinate is negative.
-		// Since det_G >= 0 (Gram), lambda_i < 0 iff det_Gi < 0 iff det_Gi * det_G < 0.
-		// When det_G = 0 (degenerate), all products are zero < FLT_EPSILON → all faces outside.
+		// Since det_G >= 0 (Gram), lambda_i < 0 iff det_Gi < 0.
+		//
+		// TODO(4D): the slop has to be relative to det_G - see the note in OriginOutsideOfPlane. The
+		// previous form compared det_Gi * det_G against an absolute FLT_EPSILON, which reports every
+		// face as "outside" as soon as the simplex is small, so the tetrahedron never returns the full
+		// set and GJK never grows to 5 points. A degenerate simplex (det_G == 0) still reports all
+		// faces outside, which is the safe answer.
+		// A numerically degenerate simplex has no reliable inside: report every face outside so the
+		// caller falls back to the sub-simplices. det_G <= d00*d11*d22 (Hadamard), so the ratio is a
+		// scale-invariant conditioning measure.
+		if (det_G <= 1.0e-6f * d00 * d11 * d22)
+			return UVec4::sReplicate(0xffffffff);
+
 		// Order: [face ABC/D opposite, face ACD/B opposite, face ADB/C opposite, face BDC/A opposite]
 		Vec4 numerators(det_G3, det_G1, det_G2, det_GA);
-		Vec4 products = numerators * Vec4::sReplicate(det_G);
-		return Vec4::sLess(products, Vec4::sReplicate(FLT_EPSILON));
+		return Vec4::sLess(numerators, Vec4::sReplicate(FLT_EPSILON * det_G));
 	}
 
 	/// Get the closest point between tetrahedron (inA, inB, inC, inD) to the origin
@@ -649,14 +669,23 @@ namespace ClosestPoint
 		float num_E = b0 * C03 + b1 * C13 + b2 * C23 + b3 * C33;
 		float num_A = det_G - num_B - num_C - num_D - num_E;
 
-		// Origin is outside face opposite vertex V iff lambda_V < 0 iff num_V * det_G < 0.
-		// When det_G = 0 (degenerate), all products are zero < FLT_EPSILON → all faces report outside.
+		// Origin is outside the face opposite vertex V iff lambda_V < 0, and det_G >= 0 (Gram), so
+		// iff num_V < 0. TODO(4D): the slop must be relative to det_G - see OriginOutsideOfPlane. An
+		// absolute FLT_EPSILON on num_V * det_G reports every face as "outside" once the simplex is
+		// small (both scale as a high power of the simplex size), which stops the pentachoron from
+		// ever reporting that it encloses the origin. A degenerate simplex (det_G == 0) still reports
+		// all faces outside, which is the safe answer.
+		// Degenerate simplex: report every face outside (see OriginOutsideOfTetrahedronPlanes)
+		if (det_G <= 1.0e-6f * d00 * d11 * d22 * d33)
+			return 0x1f;
+
+		float slop = FLT_EPSILON * det_G;
 		uint32 result = 0;
-		if (num_E * det_G < FLT_EPSILON) result |= 0x01;	// face ABCD, opposite E
-		if (num_A * det_G < FLT_EPSILON) result |= 0x02;	// face BCDE, opposite A
-		if (num_B * det_G < FLT_EPSILON) result |= 0x04;	// face ACDE, opposite B
-		if (num_C * det_G < FLT_EPSILON) result |= 0x08;	// face ABDE, opposite C
-		if (num_D * det_G < FLT_EPSILON) result |= 0x10;	// face ABCE, opposite D
+		if (num_E < slop) result |= 0x01;	// face ABCD, opposite E
+		if (num_A < slop) result |= 0x02;	// face BCDE, opposite A
+		if (num_B < slop) result |= 0x04;	// face ACDE, opposite B
+		if (num_C < slop) result |= 0x08;	// face ABDE, opposite C
+		if (num_D < slop) result |= 0x10;	// face ABCE, opposite D
 		return result;
 	}
 

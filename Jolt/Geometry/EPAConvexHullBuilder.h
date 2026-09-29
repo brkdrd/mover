@@ -32,8 +32,26 @@ private:
 #endif
 
 public:
-	static constexpr int cMaxCells = 256;					///< Max cells in hull
-	static constexpr int cMaxPoints = cMaxCells / 2;		///< Max number of points in hull
+	// TODO(4D): these two limits are independent in 4D, and both had to grow a lot.
+	//
+	// 3D Jolt sets cMaxPoints = cMaxTriangles / 2, which is Euler's formula: a 3D simplicial polytope
+	// with V vertices has exactly 2V - 4 triangles. In 4D the analogous bound is quadratic - a
+	// simplicial 4-polytope with V vertices can have up to V(V-3)/2 tetrahedral cells - so the ratio
+	// does not hold and the cell pool ran out long before the point limit, making AddPoint fail and
+	// EPA return whatever it had (measured: it stopped at 47 points and reported a penetration depth
+	// of 2.81 where the answer was 3.0).
+	//
+	// Approximating the boundary of a 3-sphere with a polytope also simply needs more vertices than
+	// approximating a 2-sphere, so 4D EPA needs more iterations for the same accuracy on curved
+	// shapes. Measured on two overlapping spheres (the worst case; boxes converge almost instantly):
+	// 64 points -> 2.93, 96 -> 2.97, 128 -> 2.99, 192 -> 2.998. Cells needed scale at roughly 8 per
+	// point for points spread over a 3-sphere; 768 is enough for 96 points (1024 changes nothing).
+	//
+	// This costs stack: the builder is a local in EPAPenetrationDepth::GetPenetrationDepth and is
+	// ~104 KB at these limits. If that ever becomes a problem, lower to 512/64 (~68 KB) and accept
+	// ~2.5% error on curved shapes, or move the builder off the stack.
+	static constexpr int cMaxCells = 768;					///< Max cells in hull
+	static constexpr int cMaxPoints = 96;					///< Max number of points in hull
 	static constexpr int cMaxRidgeLength = 256;				///< Max number of horizon ridges
 	static constexpr float cMinCellVolume = 1.0e-12f;		///< Minimum Gram determinant before a cell is considered degenerate
 	static constexpr float cBarycentricEpsilon = 1.0e-3f;	///< Epsilon for barycentric interior check

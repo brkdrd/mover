@@ -21,39 +21,74 @@ got stuck.
 cmake -S Build -B build -DCMAKE_BUILD_TYPE=Release -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
 cmake --build build --target Jolt -j$(nproc)           # BUILDS CLEAN (headless v1)
 cmake --build build --target UnitTests -j$(nproc)      # builds and links
-./build/UnitTests                                     # runs: 364 cases, 358 pass, 6 fail (see below)
+./build/UnitTests                                     # runs: 364 cases, 359 pass, 5 fail (see below)
 ```
 
 **Current build status (verified 2026-08-08): the headless v1 library BUILDS CLEAN** — `libJolt.a`,
 0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 364
-cases, 358 pass, 6 fail.** Build with the debug renderer OFF
+cases, 359 pass, 5 fail.** Build with the debug renderer OFF
 (`-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF`); v1 is headless.
 
 This replaces the old standalone Math-only runner — **run the real `./build/UnitTests` from now on.**
 (The recipe for the standalone runner is kept below only as a fallback.)
 
-### The 6 remaining test failures — EPA converges to the wrong answer
-`UnitTests` is at **358/364** (failed assertions are down to 20). Five failures are EPA and one is a
-borderline GJK case.
+### The 5 remaining test failures — all precision/discretization on CURVED shapes
+`UnitTests` is at **359/364**. EPA's logic is now correct; every remaining failure is a numerical
+accuracy limit, and **none of them is reachable through the engine's own collision path** (see the
+convex-radius note below). Each has been measured:
 
-**EPA now produces a penetration depth where it used to return false, but it is ~7% off and does not
-refine.** For two radius-2 spheres 1 apart it reports 2.81 against an expected 3.0, and **the answer
-is bit-identical for tolerances from 1e-2 down to 1e-6** — so EPA is terminating early rather than
-converging. The main loop's tolerance test is therefore not what ends it; one of the `break` paths is
-(`AddPoint` failing, the `has_defect` check, or `IsFacing` rejecting the new support point). **Next
-step: instrument `EPAConvexHullBuilder::AddPoint` and check that the incremental hull update actually
-produces a closed, correctly linked hull in 4D** — cells are tetrahedra and ridges are triangles, and
-the ridge linking is brute-force 3-vertex matching, so it is the prime suspect.
+| Test | Nature | Measured |
+|---|---|---|
+| `TestEPASphereSphereOverlapping` | two *exactly coincident* spheres — the origin sits at the dead centre of the Minkowski ball, so EPA must resolve the radius uniformly in every direction | error 0.269 vs tolerance 0.07 |
+| `TestEPASphereSphereNearOverlapping` | same, slightly offset | 0.277 vs 0.05 |
+| `TestEPASphereBox` | knife-edge: penetration is 0.01 and the tolerance handed to EPA is also 1e-2. Flips with optimization — correct at `-O2`, wrong at the test target's `-O3 -flto`. Also edge/vertex contact accuracy (0.39 where 0.01 is expected) | boolean flip + accuracy |
+| `TestEPACastSphereSphereInitialOverlap` | shape cast starting already overlapping | boolean |
+| `TestGJKSphereVsBoxIntersect` | 2 disagreements in 10,000, worst missed overlap 0.001 vs a 2e-4 tolerance | precision limit |
 
-Four EPA bugs were fixed getting this far (see the commit for detail): the cell "normal" was actually
-the closest point on the cell's hyperplane (which collapses to zero when the origin lies on it, and
-silently disabled `IsFacingOrigin()` and any negative `mClosestLenSq`); degenerate cells were linked
-with `mNormal`/`mLambda` uninitialized (**bug #7, now fixed**); the seed hulls could not contain the
-origin because the port kept 3D's *count* of spread directions while the perpendicular spaces grew a
-dimension; and cell normals were never oriented outward, which the old pseudo-normal had masked.
+**Why 4D is inherently worse here, and it is not a constant factor.** EPA approximates the Minkowski
+difference with an inscribed polytope, so its error is set by the angular size of a cell. On S² (3D)
+that gives error ~ V⁻¹ in the vertex count; on S³ (4D) it gives **error ~ V^(−2/3)**. Measured on the
+coincident-sphere case, which matches the law almost exactly (8× the points → 4× less error):
 
-The last GJK case (`TestGJKSphereVsBoxIntersect`) is 2 disagreements in 10,000 with a worst missed
-overlap of 0.001 against a 2e-4 tolerance — a precision-limit case, not a logic bug.
+| points | 96 | 192 | 384 | 768 |
+|---|---|---|---|---|
+| error | 0.269 | 0.171 | 0.109 | 0.069 |
+
+Meeting the 3D-inherited 0.07 tolerance therefore needs ~768 hull points ≈ **836 KB of stack** (the
+builder is a local in `GetPenetrationDepth`). The current 768 cells / 96 points is already ~104 KB,
+about 5× upstream's budget.
+
+⚠ **These tolerances were copied verbatim from upstream's 3D `EPATests.cpp`**, whose own comment
+already says the coincident-sphere case "will be building a convex hull of a full sphere and run out
+of triangles resulting in a pretty bad approximation". They encode a *discretization budget*
+calibrated for S², and that budget does not transfer to S³. So the choice here is a judgement call,
+not a bug fix: **either recalibrate these tolerances for 4D (with the table above as justification),
+or spend the memory.** Do not silently loosen them without recording the measurement.
+
+**Why this does not affect the engine.** `ConvexShape::sCollideConvexVsConvex` shrinks both shapes by
+their convex radius and adds it back analytically, so a sphere becomes a *point* and EPA never sees a
+curved boundary. Shapes that do reach raw EPA are polytopes (boxes, hulls), which EPA resolves in
+very few iterations. These tests pass a convex radius of 0 deliberately, to stress raw EPA.
+
+### FIXED: EPA did not work at all (2026-08-08)
+Five separate bugs, each a different way the 3D→4D port lost a dimension:
+1. The cell "normal" was stored as *the closest point on the cell's hyperplane to the origin*. That
+   collapses to zero when the origin lies on the hyperplane, and it also makes
+   `centroid · normal = |v|² ≥ 0` always — so `IsFacingOrigin()` could never fire and
+   `mClosestLenSq` could never go negative, silently disabling both the "encapsulate the origin"
+   phase and the defect check. Now `sCross` of the three edge vectors.
+2. **Bug #7 fixed** — degenerate cells were linked with `mNormal`/`mLambda` uninitialized.
+3. Seed hulls could not contain the origin: the port kept 3D's *count* of spread support directions
+   while each perpendicular space gained a dimension (2 GJK points → the perpendicular space is a
+   3-space, so 3 orthogonal directions form a lopsided corner; now 4 tetrahedral ones). That case was
+   also outright degenerate for a W-aligned axis — two seed points came out identical.
+4. Cell normals were never oriented outward (exposed by fix 1, which the pseudo-normal had masked):
+   neither `Initialize` nor the brute-force ridge linking maintains consistent winding, so ~half the
+   cells pointed inward and `IsFacing()` rejected everything. The hull now orients each new cell away
+   from an interior reference point (the seed centroid, which stays interior as the hull only grows).
+5. **`cMaxPoints = cMaxCells / 2` is 3D Euler's formula** (a simplicial 3-polytope with V vertices has
+   exactly 2V−4 triangles). In 4D the bound is quadratic — up to V(V−3)/2 cells — so the cell pool ran
+   out long before the point limit, `AddPoint` failed and the loop broke out early. Decoupled.
 
 ### FIXED: GJK never grew its simplex to 5 points (2026-08-08)
 The bug was a **scale-dependent epsilon in the barycentric sign tests**. `OriginOutsideOfPlane`,
@@ -349,17 +384,17 @@ P1 — determinism / hygiene:
 
 ## Roadmap to a shippable v1
 
-**⏸ RESUME HERE (2026-08-08):** The headless v1 library builds and `UnitTests` runs at **358/364**.
-Next, in priority order: (1) **`EPAConvexHullBuilder::AddPoint`** — EPA now returns a penetration
-depth instead of failing, but it is ~7% off and identical for every tolerance from 1e-2 to 1e-6, so
-the incremental hull expansion is not refining; see the analysis at the top. (2) Write the **4D
-HelloWorld** (tesseract onto a hyperplane floor) — the stepping loop compiles, so this is the first
-chance to see the engine simulate and it will flush out runtime bugs the unit tests cannot. (3) The
-**contact manifold pipeline** (`ManifoldBetweenTwoFaces` is a reduced single-point fallback; the 4D
->=5-point reduction is done and correct, the face *clipping* is not). (4) Re-enable de-registered
-unit tests as each area is ported. **Read the 🔑 torque-convention box below before touching any
-dynamics code** — the naive `r ∧ F` transliteration is wrong and an effective-mass test cannot detect
-it.
+**⏸ RESUME HERE (2026-08-08):** The headless v1 library builds and `UnitTests` runs at **359/364**.
+EPA and GJK are now logically correct; the 5 remaining failures are all measured precision limits on
+*curved* shapes, none of them reachable through the engine's own collision path — see the table at
+the top, and note the open judgement call about recalibrating those 3D-inherited tolerances.
+Next: (1) write the **4D HelloWorld** (tesseract onto a hyperplane floor) — the stepping loop
+compiles, so this is the first chance to see the engine simulate and it will flush out runtime bugs
+the unit tests cannot; (2) the **contact manifold pipeline** (`ManifoldBetweenTwoFaces` is a reduced
+single-point fallback — the ≥5-point reduction is done, the face *clipping* is not, so resting boxes
+get one contact instead of a patch); (3) re-enable de-registered unit tests as each area is ported.
+**Read the 🔑 torque-convention box below before touching any dynamics code** — the naive `r ∧ F`
+transliteration is wrong and an effective-mass test cannot detect it.
 
 **Phase B step 6(b) is COMPLETE — the v1 shape layer compiles clean at the per-TU level (15/15 TUs).**
 Verified via a per-TU `-fsyntax-only` check with the Jolt build flags (helper `cc.sh`; recreate from

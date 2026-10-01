@@ -52,6 +52,71 @@ private:
 	float				mGJKTolerance = 0.0f;
 #endif // JPH_ENABLE_ASSERTS
 
+	/// Gram-Schmidt residual of inVector against the span of inBasis (which is orthonormalized in place)
+	static float		sOrthogonalize(Vec4 *ioBasis, int inNumBasis, Vec4Arg inVector, Vec4 &outResidual)
+	{
+		outResidual = inVector;
+		for (int i = 0; i < inNumBasis; ++i)
+			outResidual -= ioBasis[i].Dot(outResidual) * ioBasis[i];
+		return outResidual.Length();
+	}
+
+	/// A direction perpendicular to the affine span of the first inNumPoints points, i.e. the
+	/// direction in which a support point is most likely to grow that span.
+	static Vec4			sGetSpanPerpendicular(const Vec4 *inPoints, int inNumPoints)
+	{
+		if (inNumPoints <= 1)
+			return Vec4::sAxisX();
+
+		// Orthonormal basis of the span
+		Vec4 basis[3];
+		int num_basis = 0;
+		for (int i = 1; i < inNumPoints && num_basis < 3; ++i)
+		{
+			Vec4 residual;
+			float len = sOrthogonalize(basis, num_basis, inPoints[i] - inPoints[0], residual);
+			if (len > 1.0e-6f)
+				basis[num_basis++] = residual / len;
+		}
+
+		// Find the coordinate axis with the smallest component in the span and orthogonalize it
+		for (int a = 0; a < 4; ++a)
+		{
+			Vec4 axis = a == 0? Vec4::sAxisX() : a == 1? Vec4::sAxisY() : a == 2? Vec4::sAxisZ() : Vec4::sAxisW();
+			Vec4 residual;
+			if (sOrthogonalize(basis, num_basis, axis, residual) > 1.0e-3f)
+				return residual.Normalized();
+		}
+		return Vec4::sAxisX();
+	}
+
+	/// Does the last point in inPoints lie outside the affine span of the preceding ones?
+	static bool			sLastPointGrowsSpan(const Vec4 *inPoints, int inNumPoints)
+	{
+		if (inNumPoints <= 1)
+			return true;
+
+		// Scale the tolerance to the size of the simplex
+		float scale = 0.0f;
+		for (int i = 0; i < inNumPoints; ++i)
+			scale = max(scale, (inPoints[i] - inPoints[0]).Length());
+		if (scale < FLT_EPSILON)
+			return false;
+
+		Vec4 basis[3];
+		int num_basis = 0;
+		for (int i = 1; i < inNumPoints - 1 && num_basis < 3; ++i)
+		{
+			Vec4 residual;
+			float len = sOrthogonalize(basis, num_basis, inPoints[i] - inPoints[0], residual);
+			if (len > 1.0e-6f * scale)
+				basis[num_basis++] = residual / len;
+		}
+
+		Vec4 residual;
+		return sOrthogonalize(basis, num_basis, inPoints[inNumPoints - 1] - inPoints[0], residual) > 1.0e-3f * scale;
+	}
+
 	/// A list of support points for the EPA algorithm
 	class SupportPoints
 	{
@@ -157,101 +222,123 @@ public:
 		SupportPoints support_points;
 		mGJK.GetClosestPointsSimplex(support_points.mY.data(), support_points.mP, support_points.mQ, support_points.mY.GetSizeRef());
 
-		// Fill up the amount of support points to 5 (need a pentachoron in 4D)
-		switch (support_points.mY.size())
+		// A single support point can only be the origin itself, which tells us nothing
+		if (support_points.mY.size() == 1)
 		{
-		case 1:
+			JPH_ASSERT(support_points.mY[0].IsNearZero(Square(mGJKTolerance)));
+			support_points.mY.pop_back();
+		}
+
+		// TODO(4D): fill the simplex up to the 5 affinely independent points a pentachoron needs.
+		//
+		// 3D Jolt completes a partial GJK simplex with a FIXED spread of directions (3 at 120 degrees
+		// around an axis, and so on). That silently assumes every direction yields a distinct support
+		// point, which is false for polytopes: a box's support is constant over a whole cone of
+		// directions, so for a box-vs-box Minkowski difference several spread directions return the
+		// SAME corner. Measured before this change: a tesseract resting on a wider floor box produced
+		// three identical seed points, every cell of the seed hull came out degenerate, and EPA
+		// reported no collision at all - the single most common contact in any scene.
+		//
+		// So we keep the well spread directions, which are far better conditioned for curved shapes,
+		// but verify that each candidate actually raises the dimension of the simplex, and fall back
+		// to probing perpendicular to the current span when one does not.
+		{
+			auto try_direction = [&](Vec4Arg inDirection) -> bool
 			{
-				// 1 vertex, which must be at the origin, which is useless for our purpose
-				JPH_ASSERT(support_points.mY[0].IsNearZero(Square(mGJKTolerance)));
+				if (support_points.mY.size() >= 5 || inDirection.IsNearZero())
+					return false;
+				int new_index;
+				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, inDirection, new_index);
+				if (sLastPointGrowsSpan(support_points.mY.data(), int(support_points.mY.size())))
+					return true;
 				support_points.mY.pop_back();
+				return false;
+			};
 
-				// Add support points in 5 spread-out 4D directions to form an initial pentachoron around the origin
-				int p1, p2, p3, p4, p5;
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, Vec4( 1,  0,  0,  0), p1);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, Vec4( 0,  1,  0,  0), p2);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, Vec4( 0,  0,  1,  0), p3);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, Vec4( 0,  0,  0,  1), p4);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, Vec4(-1, -1, -1, -1), p5);
-				JPH_ASSERT(p1 == 0);
-				JPH_ASSERT(p2 == 1);
-				JPH_ASSERT(p3 == 2);
-				JPH_ASSERT(p4 == 3);
-				JPH_ASSERT(p5 == 4);
-				break;
-			}
-
-		case 2:
+			// Well spread directions for the feature GJK left us with
+			switch (support_points.mY.size())
 			{
-				// Two vertices. TODO(4D): 3D Jolt spreads 3 directions at 120 degrees around the axis,
-				// which surrounds it because the perpendicular space of an axis in 3D is a 2-plane. In
-				// 4D that perpendicular space is a 3-space, so 3 directions cannot surround it - and 3
-				// mutually orthogonal ones (what this port used to do) form a lopsided "corner" whose
-				// hull has the origin sitting exactly on one of its cell hyperplanes, which makes EPA
-				// compute a zero penetration vector and give up. Use 4 directions forming a regular
-				// tetrahedron in the perpendicular 3-space instead, which does surround it.
-				Vec4 axis = (support_points.mY[1] - support_points.mY[0]).Normalized();
-				Vec4 u1, u2, u3;
-				axis.GetNormalizedPerpendicularBasis(u1, u2, u3);
-				int p;
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius,  u1 + u2 + u3, p);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius,  u1 - u2 - u3, p);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, -u1 + u2 - u3, p);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, -u1 - u2 + u3, p);
+			case 0:
+				// Nothing to go on: 5 directions that surround the origin
+				try_direction(Vec4( 1,  0,  0,  0));
+				try_direction(Vec4( 0,  1,  0,  0));
+				try_direction(Vec4( 0,  0,  1,  0));
+				try_direction(Vec4( 0,  0,  0,  1));
+				try_direction(Vec4(-1, -1, -1, -1));
 				break;
+
+			case 2:
+				{
+					// The perpendicular space of an axis is a 3-space in 4D, so surround it with the
+					// 4 directions of a regular tetrahedron (3 orthogonal ones form a lopsided corner)
+					Vec4 axis = (support_points.mY[1] - support_points.mY[0]).Normalized();
+					Vec4 u1, u2, u3;
+					axis.GetNormalizedPerpendicularBasis(u1, u2, u3);
+					try_direction( u1 + u2 + u3);
+					try_direction( u1 - u2 - u3);
+					try_direction(-u1 + u2 - u3);
+					try_direction(-u1 - u2 + u3);
+					break;
+				}
+
+			case 3:
+				{
+					// The perpendicular space of a triangle is a 2-plane, so use 3 directions at 120
+					// degrees in it
+					Vec4 e0 = support_points.mY[1] - support_points.mY[0];
+					Vec4 e1 = support_points.mY[2] - support_points.mY[0];
+					Vec4 align = e0.Abs() + e1.Abs();
+					int best = 0;
+					float best_v = align.GetX();
+					if (align.GetY() < best_v) { best = 1; best_v = align.GetY(); }
+					if (align.GetZ() < best_v) { best = 2; best_v = align.GetZ(); }
+					if (align.GetW() < best_v) { best = 3; }
+					Vec4 seed = best == 0? Vec4::sAxisX() : best == 1? Vec4::sAxisY() : best == 2? Vec4::sAxisZ() : Vec4::sAxisW();
+					Vec4 n1 = Vec4::sCross(e0, e1, seed);
+					if (!n1.IsNearZero())
+					{
+						n1 = n1.Normalized();
+						Vec4 n2 = Vec4::sCross(e0, e1, n1).Normalized();
+						const float cCos120 = -0.5f, cSin120 = 0.86602540378f;
+						try_direction(n1);
+						try_direction(cCos120 * n1 + cSin120 * n2);
+						try_direction(cCos120 * n1 - cSin120 * n2);
+					}
+					break;
+				}
+
+			case 4:
+				{
+					// The perpendicular space of a tetrahedron is 1 dimensional, so probe both sides
+					Vec4 normal = Vec4::sCross(support_points.mY[1] - support_points.mY[0], support_points.mY[2] - support_points.mY[0], support_points.mY[3] - support_points.mY[0]);
+					if (!normal.IsNearZero())
+					{
+						normal = normal.Normalized();
+						if (!try_direction(normal))
+							try_direction(-normal);
+					}
+					break;
+				}
 			}
 
-		case 3:
+			// Fall back to probing perpendicular to whatever we have, which is the direction most
+			// likely to grow the span, then to the coordinate axes
+			while (support_points.mY.size() < 5)
 			{
-				// 3 vertices (a triangle). Its perpendicular space in 4D is a 2-plane, so - exactly as
-				// 3D Jolt does around an axis - use 3 directions at 120 degrees inside that 2-plane so
-				// they surround it. Two orthogonal directions would again leave the origin on the hull
-				// boundary.
-				Vec4 e0 = support_points.mY[1] - support_points.mY[0];
-				Vec4 e1 = support_points.mY[2] - support_points.mY[0];
+				Vec4 perpendicular = sGetSpanPerpendicular(support_points.mY.data(), int(support_points.mY.size()));
+				if (try_direction(perpendicular) || try_direction(-perpendicular))
+					continue;
 
-				// Pick the coordinate axis least aligned with the triangle to seed the perpendicular
-				Vec4 align = e0.Abs() + e1.Abs();
-				int best = 0;
-				float best_v = align.GetX();
-				if (align.GetY() < best_v) { best = 1; best_v = align.GetY(); }
-				if (align.GetZ() < best_v) { best = 2; best_v = align.GetZ(); }
-				if (align.GetW() < best_v) { best = 3; }
-				Vec4 seed = best == 0? Vec4::sAxisX() : best == 1? Vec4::sAxisY() : best == 2? Vec4::sAxisZ() : Vec4::sAxisW();
+				bool added = false;
+				for (int a = 0; a < 4 && !added; ++a)
+				{
+					Vec4 axis = a == 0? Vec4::sAxisX() : a == 1? Vec4::sAxisY() : a == 2? Vec4::sAxisZ() : Vec4::sAxisW();
+					added = try_direction(axis) || try_direction(-axis);
+				}
 
-				Vec4 n1 = Vec4::sCross(e0, e1, seed).Normalized();
-				Vec4 n2 = Vec4::sCross(e0, e1, n1).Normalized();
-
-				const float cCos120 = -0.5f, cSin120 = 0.86602540378f;
-				int p;
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, n1, p);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, cCos120 * n1 + cSin120 * n2, p);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, cCos120 * n1 - cSin120 * n2, p);
-				break;
+				if (!added)
+					return false; // The Minkowski difference is lower dimensional, so there is nothing to report
 			}
-
-		case 4:
-			{
-				// 4 vertices (a tetrahedron). Its perpendicular space in 4D is 1 dimensional, so add
-				// support points on BOTH sides of its hyperplane. Adding only the +normal side (what
-				// this port used to do) gives a hull that has the tetrahedron as a boundary cell, so
-				// the origin can lie exactly on it.
-				Vec4 e0 = support_points.mY[1] - support_points.mY[0];
-				Vec4 e1 = support_points.mY[2] - support_points.mY[0];
-				Vec4 e2 = support_points.mY[3] - support_points.mY[0];
-				Vec4 normal = Vec4::sCross(e0, e1, e2);
-				if (normal.IsNearZero())
-					normal = Vec4(0, 0, 0, 1); // Degenerate fallback
-				normal = normal.Normalized();
-				int p;
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, normal, p);
-				(void)support_points.Add(inAIncludingConvexRadius, inBIncludingConvexRadius, -normal, p);
-				break;
-			}
-
-		case 5:
-			// Full pentachoron from GJK, already have enough points
-			break;
 		}
 
 		// Create hull out of the initial points (need at least 5 for a pentachoron in 4D)

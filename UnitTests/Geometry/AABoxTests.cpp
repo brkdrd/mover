@@ -49,11 +49,17 @@ TEST_SUITE("AABoxTests")
 				// A cube cell of the tesseract has 8 vertices
 				CHECK(face.size() == 8);
 
-				// All lie on the extreme of the dominant axis matching the direction sign, and
-				// GetSupport must be one of the returned face vertices
-				float expected = sign > 0? he[uint(axis)] : -he[uint(axis)];
+				// TODO(4D): GetSupportingFace does NOT follow GetSupport's convention. It returns the
+				// face that inDirection points INTO - the extreme OPPOSITE the direction sign - which
+				// is what 3D Jolt does and what ConvexHullShape::GetSupportingFace does (it picks the
+				// face whose normal is most anti-parallel to inDirection). Callers depend on it:
+				// ConvexShape::sCollideConvexVsConvex asks shape 1 for -penetration_axis. An earlier
+				// pass through this port flipped it to agree with GetSupport and this test was written
+				// to match, which silently selected the far face of every shape and collapsed the
+				// contact manifold to a single point.
+				float expected = sign > 0? -he[uint(axis)] : he[uint(axis)];
 				bool all_on_cell = true, contains_support = false;
-				Vec4 support = box.GetSupport(dir);
+				Vec4 support = box.GetSupport(-dir);
 				for (const Vec4 &v : face)
 				{
 					all_on_cell = all_on_cell && v[uint(axis)] == expected;

@@ -8,6 +8,261 @@
 
 JPH_NAMESPACE_BEGIN
 
+// TODO(4D): everything below the "4D polytope clipping" block is 3D Jolt's polygon clipping. It
+// assumes the vertices form an ordered 2D loop (it walks consecutive pairs as edges), which a 4D
+// supporting face does not: that face is a 3-dimensional polytope and GetSupportingFace returns its
+// vertices unordered. Those functions are unused and kept only for reference while the shapes that
+// needed them (Mesh/HeightField/Triangle) are cut.
+
+/// A halfspace used to clip a contact patch, in the form mNormal . x <= mDistance.
+///
+/// The normal is perpendicular to the penetration axis, so the halfspace is a "prism" that extends
+/// along the axis - the 4D counterpart of 3D Jolt building its clip planes from an edge and the
+/// penetration axis. Testing a point against it is therefore automatically a test of that point
+/// *projected along the axis*, which is what contact clipping wants.
+struct ClipHalfSpace
+{
+	Vec4			mNormal;								///< Outward normal, normalized, perpendicular to the penetration axis
+	float			mDistance;								///< Inside is mNormal . x <= mDistance
+};
+
+using ClipHalfSpaces = StaticArray<ClipHalfSpace, 64>;
+
+/// Derive the supporting halfspaces of the convex hull of inVertices, within the hyperplane
+/// perpendicular to inAxis.
+///
+/// TODO(4D): a 4D supporting face is a 3D polytope given as an unordered vertex set, so there is no
+/// edge loop to walk as in 3D. We enumerate candidate facets over vertex triples and keep a triple
+/// when every other vertex lies on one side of it. That is O(n^3 * n), which is fine here because n
+/// is small by construction: a tesseract's or plane patch's supporting cell is a cube (8 vertices)
+/// and a convex hull's is a tetrahedral cell (4), against a hard cap of 32.
+template <class VERTEX_ARRAY>
+void GetClipHalfSpaces(const VERTEX_ARRAY &inVertices, Vec4Arg inAxis, ClipHalfSpaces &outHalfSpaces)
+{
+	outHalfSpaces.clear();
+
+	int n = int(inVertices.size());
+	if (n < 3)
+		return;
+
+	// Scale the tolerances to the size of the face so this is resolution independent
+	Vec4 centroid = Vec4::sZero();
+	for (int i = 0; i < n; ++i)
+		centroid += inVertices[i];
+	centroid = centroid / float(n);
+	float extent_sq = 0.0f;
+	for (int i = 0; i < n; ++i)
+		extent_sq = max(extent_sq, (inVertices[i] - centroid).LengthSq());
+	float extent = sqrt(extent_sq);
+	if (extent < FLT_EPSILON)
+		return;
+	float dist_tolerance = 1.0e-4f * extent;
+
+	for (int i = 0; i < n; ++i)
+		for (int j = i + 1; j < n; ++j)
+			for (int k = j + 1; k < n; ++k)
+			{
+				Vec4 origin = inVertices[i];
+
+				// Normal of the facet within the hyperplane: perpendicular to both facet directions
+				// and to the axis
+				Vec4 normal = Vec4::sCross(inVertices[j] - origin, inVertices[k] - origin, inAxis);
+				float normal_len_sq = normal.LengthSq();
+				if (normal_len_sq < FLT_EPSILON)
+					continue; // Degenerate triple (collinear, or the facet contains the axis)
+				normal = normal / sqrt(normal_len_sq);
+
+				// Keep the triple only if it supports the whole set
+				float d = normal.Dot(origin);
+				bool all_below = true, all_above = true;
+				for (int m = 0; m < n; ++m)
+				{
+					float dm = normal.Dot(inVertices[m]) - d;
+					if (dm > dist_tolerance)
+						all_below = false;
+					if (dm < -dist_tolerance)
+						all_above = false;
+					if (!all_below && !all_above)
+						break;
+				}
+				if (!all_below && !all_above)
+					continue;
+				if (!all_below)
+				{
+					normal = -normal;
+					d = -d;
+				}
+
+				// Several triples describe the same facet, so skip one we already have
+				bool duplicate = false;
+				for (const ClipHalfSpace &h : outHalfSpaces)
+					if (h.mNormal.Dot(normal) > 0.999f && abs(h.mDistance - d) < dist_tolerance)
+					{
+						duplicate = true;
+						break;
+					}
+				if (!duplicate && outHalfSpaces.size() < outHalfSpaces.capacity())
+					outHalfSpaces.push_back({ normal, d });
+			}
+}
+
+/// Check if inPoint is inside all of inHalfSpaces (within inTolerance)
+inline bool IsInsideClipHalfSpaces(Vec4Arg inPoint, const ClipHalfSpaces &inHalfSpaces, float inTolerance)
+{
+	for (const ClipHalfSpace &h : inHalfSpaces)
+		if (h.mNormal.Dot(inPoint) - h.mDistance > inTolerance)
+			return false;
+	return true;
+}
+
+/// Clip the segment inA -> inB against inHalfSpaces, returning the surviving parameter range.
+/// Returns false if the segment lies entirely outside.
+inline bool ClipSegmentVsHalfSpaces(Vec4Arg inA, Vec4Arg inB, const ClipHalfSpaces &inHalfSpaces, float inTolerance, float &outT0, float &outT1)
+{
+	outT0 = 0.0f;
+	outT1 = 1.0f;
+	Vec4 delta = inB - inA;
+
+	for (const ClipHalfSpace &h : inHalfSpaces)
+	{
+		float da = h.mNormal.Dot(inA) - h.mDistance;
+		float dd = h.mNormal.Dot(delta);
+		if (abs(dd) < FLT_EPSILON)
+		{
+			// Parallel to the halfspace boundary
+			if (da > inTolerance)
+				return false;
+			continue;
+		}
+		float t = -da / dd;
+		if (dd > 0.0f)
+			outT1 = min(outT1, t);		// Leaving the halfspace
+		else
+			outT0 = max(outT0, t);		// Entering it
+		if (outT0 > outT1)
+			return false;
+	}
+	return true;
+}
+
+/// Clip the convex polytope inPolytopeToClip against the convex polytope inClippingPolytope, both
+/// given as unordered vertex sets of a 4D supporting face, along inAxis.
+///
+/// TODO(4D): this replaces 3D Jolt's Sutherland-Hodgman polygon clip. In 3D the contact patch is a
+/// 2D polygon and you can clip an ordered loop edge by edge; in 4D it is a 3D polyhedron and there
+/// is no loop. Instead we build the intersection from its definition: the vertices of conv(P) n
+/// conv(Q) are exactly the vertices of P inside Q, the vertices of Q inside P, and the points where
+/// an edge of one crosses a facet of the other. The crossings come out of clipping segments against
+/// the other polytope's halfspaces.
+///
+/// We feed in ALL vertex pairs rather than computing the true edge set. A pair that is not an edge
+/// is a chord lying inside the polytope, so clipping it can only produce points that are already
+/// inside the intersection - harmless, because the caller reduces the result with
+/// PruneContactPoints, which selects extreme points. The output is therefore a superset of the
+/// intersection's vertices, all of which lie in the intersection, rather than exactly its vertex
+/// set. Measured output sizes for typical v1 faces: a tesseract resting on a plane patch gives
+/// exactly its 8 corners, a half-overlapping pair of cells gives 18, against a cap of 64.
+///
+/// Output points lie on the affine hull of inPolytopeToClip (mirroring 3D Jolt, where the clipped
+/// points lie on face 2 and the caller then projects them onto the plane of face 1).
+template <class VERTEX_ARRAY, class OUT_ARRAY>
+void ClipPolytopeVsPolytope(const VERTEX_ARRAY &inPolytopeToClip, const VERTEX_ARRAY &inClippingPolytope, Vec4Arg inAxis, OUT_ARRAY &outClippedPolytope)
+{
+	outClippedPolytope.clear();
+
+	int n_clip = int(inPolytopeToClip.size());
+	int n_clipper = int(inClippingPolytope.size());
+	if (n_clip == 0 || n_clipper == 0)
+		return;
+
+	ClipHalfSpaces clipper_planes, to_clip_planes;
+	GetClipHalfSpaces(inClippingPolytope, inAxis, clipper_planes);
+	GetClipHalfSpaces(inPolytopeToClip, inAxis, to_clip_planes);
+	if (clipper_planes.empty())
+		return;
+
+	// Tolerance relative to the size of the face being clipped
+	Vec4 centroid = Vec4::sZero();
+	for (int i = 0; i < n_clip; ++i)
+		centroid += inPolytopeToClip[i];
+	centroid = centroid / float(n_clip);
+	float extent = 0.0f;
+	for (int i = 0; i < n_clip; ++i)
+		extent = max(extent, (inPolytopeToClip[i] - centroid).Length());
+	float tolerance = 1.0e-4f * max(extent, FLT_EPSILON);
+
+	// The 3-flat of the polytope being clipped, so results can be lifted back onto it along the axis
+	Vec4 plane_origin = inPolytopeToClip[0];
+	Vec4 plane_normal = Vec4::sZero();
+	for (int j = 1; j < n_clip && plane_normal.IsNearZero(); ++j)
+		for (int k = j + 1; k < n_clip && plane_normal.IsNearZero(); ++k)
+			for (int l = k + 1; l < n_clip && plane_normal.IsNearZero(); ++l)
+			{
+				Vec4 candidate = Vec4::sCross(inPolytopeToClip[j] - plane_origin, inPolytopeToClip[k] - plane_origin, inPolytopeToClip[l] - plane_origin);
+				if (candidate.LengthSq() > FLT_EPSILON)
+					plane_normal = candidate;
+			}
+	float axis_dot_normal = inAxis.Dot(plane_normal);
+	bool can_project = !plane_normal.IsNearZero() && abs(axis_dot_normal) > FLT_EPSILON;
+
+	// Add a point, lifting it onto the 3-flat of the clipped polytope and skipping near duplicates
+	auto add_point = [&](Vec4Arg inPoint)
+	{
+		if (outClippedPolytope.size() >= outClippedPolytope.capacity())
+			return;
+
+		Vec4 p = inPoint;
+		if (can_project)
+			p = p - ((p - plane_origin).Dot(plane_normal) / axis_dot_normal) * inAxis;
+
+		for (const Vec4 &existing : outClippedPolytope)
+			if ((existing - p).LengthSq() < Square(tolerance))
+				return;
+
+		outClippedPolytope.push_back(p);
+	};
+
+	// Vertices of the clipped polytope that are inside the clipper
+	for (int i = 0; i < n_clip; ++i)
+		if (IsInsideClipHalfSpaces(inPolytopeToClip[i], clipper_planes, tolerance))
+			add_point(inPolytopeToClip[i]);
+
+	// Vertices of the clipper that are inside the clipped polytope
+	if (!to_clip_planes.empty())
+		for (int i = 0; i < n_clipper; ++i)
+			if (IsInsideClipHalfSpaces(inClippingPolytope[i], to_clip_planes, tolerance))
+				add_point(inClippingPolytope[i]);
+
+	// Crossings: clip every segment of one polytope against the other
+	for (int i = 0; i < n_clip; ++i)
+		for (int j = i + 1; j < n_clip; ++j)
+		{
+			float t0, t1;
+			if (ClipSegmentVsHalfSpaces(inPolytopeToClip[i], inPolytopeToClip[j], clipper_planes, tolerance, t0, t1))
+			{
+				Vec4 d = inPolytopeToClip[j] - inPolytopeToClip[i];
+				if (t0 > 0.0f) add_point(inPolytopeToClip[i] + t0 * d);
+				if (t1 < 1.0f) add_point(inPolytopeToClip[i] + t1 * d);
+			}
+		}
+	if (!to_clip_planes.empty())
+		for (int i = 0; i < n_clipper; ++i)
+			for (int j = i + 1; j < n_clipper; ++j)
+			{
+				float t0, t1;
+				if (ClipSegmentVsHalfSpaces(inClippingPolytope[i], inClippingPolytope[j], to_clip_planes, tolerance, t0, t1))
+				{
+					Vec4 d = inClippingPolytope[j] - inClippingPolytope[i];
+					if (t0 > 0.0f) add_point(inClippingPolytope[i] + t0 * d);
+					if (t1 < 1.0f) add_point(inClippingPolytope[i] + t1 * d);
+				}
+			}
+}
+
+#ifdef JPH_ENABLE_2D_POLY_CLIPPING
+// TODO(4D): never defined. See the note at the top of this file - these walk an ordered 2D
+// vertex loop, which a 4D supporting face is not. Kept verbatim for reference.
+
 /// Clip inPolygonToClip against the positive halfspace of plane defined by inPlaneOrigin and inPlaneNormal.
 /// inPlaneNormal does not need to be normalized.
 template <class VERTEX_ARRAY>
@@ -236,5 +491,7 @@ void ClipPolyVsAABox(const VERTEX_ARRAY &inPolygonToClip, const AABox &inAABox, 
 			normal = -normal;
 		}
 }
+
+#endif // JPH_ENABLE_2D_POLY_CLIPPING
 
 JPH_NAMESPACE_END

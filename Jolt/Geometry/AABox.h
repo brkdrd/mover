@@ -245,9 +245,16 @@ public:
 
 		int axis = inDirection.Abs().GetHighestComponentIndex();
 
-		// The fixed coordinate on the dominant axis: the face whose outward normal faces
-		// inDirection the most, i.e. mMax for a positive component (consistent with GetSupport)
-		float fixed_val = (inDirection[axis] < 0.0f) ? mMin[axis] : mMax[axis];
+		// The fixed coordinate on the dominant axis.
+		//
+		// TODO(4D): note the convention, which is NOT the same as GetSupport's. GetSupportingFace
+		// returns the face that inDirection points INTO (mMax for a negative component), matching 3D
+		// Jolt and ConvexHullShape::GetSupportingFace, which picks the face whose normal is most
+		// anti-parallel to inDirection. Callers rely on it: ConvexShape::sCollideConvexVsConvex asks
+		// shape 1 for -penetration_axis and shape 2 for +penetration_axis. An earlier pass through
+		// this port "corrected" it to agree with GetSupport, which silently selected the far face of
+		// each shape and made the contact manifold collapse to a single point.
+		float fixed_val = (inDirection[axis] < 0.0f) ? mMax[axis] : mMin[axis];
 
 		// Generate 2^3 = 8 combinations of min/max for the other 3 coordinates
 		int other[3];

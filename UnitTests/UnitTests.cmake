@@ -20,6 +20,7 @@ set(UNIT_TESTS_SRC_FILES
 	${UNIT_TESTS_ROOT}/Core/UnorderedMapTest.cpp
 	${UNIT_TESTS_ROOT}/doctest.h
 	${UNIT_TESTS_ROOT}/Geometry/AABoxTests.cpp
+	${UNIT_TESTS_ROOT}/Geometry/ClipPolytopeTests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/ClosestPointTests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/ConvexHullBuilderTest.cpp
 	${UNIT_TESTS_ROOT}/Geometry/EllipseTest.cpp

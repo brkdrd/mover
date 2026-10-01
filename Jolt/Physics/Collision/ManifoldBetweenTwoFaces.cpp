@@ -6,6 +6,7 @@
 
 #include <Jolt/Physics/Collision/ManifoldBetweenTwoFaces.h>
 #include <Jolt/Physics/Constraints/ContactConstraintManager.h>
+#include <Jolt/Geometry/ClipPoly.h>
 
 JPH_NAMESPACE_BEGIN
 
@@ -157,26 +158,80 @@ void ManifoldBetweenTwoFaces(Vec4Arg inContactPoint1, Vec4Arg inContactPoint2, V
 	// Remember size before adding new points, to check at the end if we added some
 	ContactPoints::size_type old_size = outContactPoints1.size();
 
-	// TODO(4D): THIS IS THE REDUCED v1 PATH -- conceptual gap 1 in CLAUDE.md.
+	// TODO(4D): in 3D a supporting face is a polygon and upstream clips face 2 against face 1 with
+	// Sutherland-Hodgman, walking face 1's ordered edge loop. In 4D a supporting face is a 3D
+	// *polytope* in the contact hyperplane (a tesseract gives a cubic cell, a plane its 3-cube patch,
+	// a convex hull a tetrahedral cell) and SupportingFace is an unordered vertex set, so there is no
+	// loop to walk. ClipPolytopeVsPolytope builds the intersection from its definition instead; see
+	// the note there.
 	//
-	// In 3D a supporting face is a polygon and upstream clips face 2 against face 1 with
-	// Sutherland-Hodgman (ClipPolyVsPoly / ClipPolyVsEdge in Geometry/ClipPoly.h) to produce a contact
-	// patch of up to 32 points, which PruneContactPoints then reduces.
-	//
-	// In 4D a supporting face is a 3D *polyhedron* living in the contact hyperplane (BoxShape returns a
-	// cubic cell, PlaneShape a 3-cube patch), and ConvexShape::SupportingFace is only an unordered
-	// vertex list -- clipping a polyhedron against a polyhedron needs face connectivity, which the
-	// support function does not currently return. Until that plumbing plus a halfspace clip for
-	// polyhedra exists (ClipPoly.h is still 2D), we fall back to the single deepest contact point,
-	// which upstream also does whenever clipping produces nothing.
-	//
-	// Consequence: collisions, restitution and friction are correct, but a resting box gets one contact
-	// point per manifold instead of a patch, so large flat stacks will be less stable than in 3D Jolt.
-	// The reduction step above is already the real 4D algorithm and is ready for the clipped patch.
-	(void)inPenetrationAxis;
-	(void)inMaxContactDistance;
-	(void)inShape1Face;
-	(void)inShape2Face;
+	// Both faces need enough vertices to bound a region: with fewer than 3 the intersection has no
+	// area and the single deepest point below is the right answer.
+	if (inShape1Face.size() >= 3 && inShape2Face.size() >= 3)
+	{
+		// Clip the face with the most vertices against the other, matching upstream's convention of
+		// clipping against the better defined face
+		const ConvexShape::SupportingFace *shape1_face, *shape2_face;
+		ContactPoints *contact_points1, *contact_points2;
+		Vec4 penetration_axis;
+		if (inShape2Face.size() >= inShape1Face.size())
+		{
+			shape1_face = &inShape1Face;
+			shape2_face = &inShape2Face;
+			contact_points1 = &outContactPoints1;
+			contact_points2 = &outContactPoints2;
+			penetration_axis = inPenetrationAxis;
+		}
+		else
+		{
+			shape1_face = &inShape2Face;
+			shape2_face = &inShape1Face;
+			contact_points1 = &outContactPoints2;
+			contact_points2 = &outContactPoints1;
+			penetration_axis = -inPenetrationAxis;
+		}
+
+		// Clip face 2 against face 1; the result lies on the affine hull of face 2
+		ContactPoints clipped_face;
+		ClipPolytopeVsPolytope(*shape2_face, *shape1_face, penetration_axis, clipped_face);
+
+		if (!clipped_face.empty())
+		{
+			// The 3-flat of face 1, so the clipped points can be projected back onto it
+			Vec4 plane_origin = shape1_face->at(0);
+			Vec4 plane_normal = Vec4::sZero();
+			for (ConvexShape::SupportingFace::size_type j = 1; j < shape1_face->size() && plane_normal.IsNearZero(); ++j)
+				for (ConvexShape::SupportingFace::size_type k = j + 1; k < shape1_face->size() && plane_normal.IsNearZero(); ++k)
+					for (ConvexShape::SupportingFace::size_type l = k + 1; l < shape1_face->size() && plane_normal.IsNearZero(); ++l)
+					{
+						Vec4 candidate = Vec4::sCross(shape1_face->at(j) - plane_origin, shape1_face->at(k) - plane_origin, shape1_face->at(l) - plane_origin);
+						if (candidate.LengthSq() > FLT_EPSILON)
+							plane_normal = candidate;
+					}
+
+			// If the penetration axis lies in face 1's hyperplane we cannot project onto it
+			float penetration_axis_dot_plane_normal = penetration_axis.Dot(plane_normal);
+			if (penetration_axis_dot_plane_normal != 0.0f)
+			{
+				float penetration_axis_len = penetration_axis.Length();
+
+				for (Vec4 p2 : clipped_face)
+				{
+					// Project back onto the hyperplane of face 1 along the penetration axis:
+					// p1 = p2 + distance * axis, with (p1 - plane_origin) . plane_normal = 0
+					float distance = (p2 - plane_origin).Dot(plane_normal) / penetration_axis_dot_plane_normal;
+
+					// Keep the point if face 2 is within inMaxContactDistance of the plane of face 1
+					if (distance * penetration_axis_len < inMaxContactDistance
+						&& contact_points1->size() < contact_points1->capacity())
+					{
+						contact_points1->push_back(p2 - distance * penetration_axis);
+						contact_points2->push_back(p2);
+					}
+				}
+			}
+		}
+	}
 
 	// If the clipping result is empty, use the contact point itself
 	if (outContactPoints1.size() == old_size)

@@ -4,6 +4,8 @@
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/Atomics.h>
+#include <Jolt/Math/Rotor.h>
+#include <Jolt/Math/Bivec.h>
 #include <Jolt/Math/DVec4.h>
 #include <Jolt/Math/Float2.h>
 
@@ -40,6 +42,19 @@ inline void CHECK_APPROX_EQUAL(Vec3Arg inLHS, Vec3Arg inRHS, float inTolerance =
 inline void CHECK_APPROX_EQUAL(Vec4Arg inLHS, Vec4Arg inRHS, float inTolerance = 1.0e-6f)
 {
 	CHECK(inLHS.IsClose(inRHS, inTolerance * inTolerance));
+}
+
+// TODO(4D): the 4D rotation types. A Rotor is compared up to sign like a Quat - R and -R are the
+// same rotation.
+inline void CHECK_APPROX_EQUAL(RotorArg inLHS, RotorArg inRHS, float inTolerance = 1.0e-6f)
+{
+	bool close = inLHS.IsClose(inRHS, inTolerance * inTolerance) || inLHS.IsClose(-inRHS, inTolerance * inTolerance);
+	CHECK(close);
+}
+
+inline void CHECK_APPROX_EQUAL(BivecArg inLHS, BivecArg inRHS, float inTolerance = 1.0e-6f)
+{
+	CHECK(inLHS.GetVec8().IsClose(inRHS.GetVec8(), inTolerance * inTolerance));
 }
 
 inline void CHECK_APPROX_EQUAL(Mat44Arg inLHS, Mat44Arg inRHS, float inTolerance = 1.0e-6f)

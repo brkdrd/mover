@@ -18,7 +18,12 @@ PhysicsTestContext::PhysicsTestContext(float inDeltaTime, int inCollisionSteps, 
 #ifdef JPH_DISABLE_TEMP_ALLOCATOR
 	mTempAllocator(new TempAllocatorMalloc()),
 #else
-	mTempAllocator(new TempAllocatorImpl(4 * 1024 * 1024)),
+	// TODO(4D): was 4 MB. A ContactConstraint is 4128 bytes in 4D (measured) against a few hundred
+	// in 3D: it holds 6 manifold points instead of 4, each with 4 AxisConstraintParts instead of 3
+	// (friction has a 3D tangent space here), each holding bivector Jacobians of 8 floats instead of
+	// Vec3s. The default 1024 constraints alone are 4.2 MB, so the old pool could not serve a single
+	// allocation.
+	mTempAllocator(new TempAllocatorImpl(32 * 1024 * 1024)),
 #endif
 	mJobSystem(new JobSystemThreadPool(cMaxPhysicsJobs, cMaxPhysicsBarriers, inWorkerThreads)),
 	mDeltaTime(inDeltaTime),
@@ -43,14 +48,15 @@ PhysicsTestContext::~PhysicsTestContext()
 
 void PhysicsTestContext::ZeroGravity()
 {
-	mSystem->SetGravity(Vec3::sZero());
+	mSystem->SetGravity(Vec4::sZero());
 }
 
 Body &PhysicsTestContext::CreateFloor()
 {
 	BodyCreationSettings settings;
-	settings.SetShape(new BoxShape(Vec3(100.0f, 1.0f, 100.0f), 0.0f));
-	settings.mPosition = RVec3(0.0f, -1.0f, 0.0f);
+	// TODO(4D): the floor's boundary is a 3D volume, so the slab is wide in X, Z *and* W
+	settings.SetShape(new BoxShape(Vec4(100.0f, 1.0f, 100.0f, 100.0f), 0.0f));
+	settings.mPosition = RVec4(0.0f, -1.0f, 0.0f, 0.0f);
 	settings.mMotionType = EMotionType::Static;
 	settings.mObjectLayer = Layers::NON_MOVING;
 
@@ -66,7 +72,7 @@ Body &PhysicsTestContext::CreateBody(const BodyCreationSettings &inSettings, EAc
 	return body;
 }
 
-Body &PhysicsTestContext::CreateBody(const ShapeSettings *inShapeSettings, RVec3Arg inPosition, QuatArg inRotation, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, EActivation inActivation)
+Body &PhysicsTestContext::CreateBody(const ShapeSettings *inShapeSettings, RVec4Arg inPosition, RotorArg inRotation, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, EActivation inActivation)
 {
 	BodyCreationSettings settings;
 	settings.SetShapeSettings(inShapeSettings);
@@ -81,14 +87,14 @@ Body &PhysicsTestContext::CreateBody(const ShapeSettings *inShapeSettings, RVec3
 	return CreateBody(settings, inActivation);
 }
 
-Body &PhysicsTestContext::CreateBox(RVec3Arg inPosition, QuatArg inRotation, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, Vec3Arg inHalfExtent, EActivation inActivation)
+Body &PhysicsTestContext::CreateBox(RVec4Arg inPosition, RotorArg inRotation, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, Vec4Arg inHalfExtent, EActivation inActivation)
 {
 	return CreateBody(new BoxShapeSettings(inHalfExtent), inPosition, inRotation, inMotionType, inMotionQuality, inLayer, inActivation);
 }
 
-Body &PhysicsTestContext::CreateSphere(RVec3Arg inPosition, float inRadius, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, EActivation inActivation)
+Body &PhysicsTestContext::CreateSphere(RVec4Arg inPosition, float inRadius, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, EActivation inActivation)
 {
-	return CreateBody(new SphereShapeSettings(inRadius), inPosition, Quat::sIdentity(), inMotionType, inMotionQuality, inLayer, inActivation);
+	return CreateBody(new SphereShapeSettings(inRadius), inPosition, Rotor::sIdentity(), inMotionType, inMotionQuality, inLayer, inActivation);
 }
 
 EPhysicsUpdateError PhysicsTestContext::SimulateNoDeltaTime()
@@ -131,11 +137,11 @@ EPhysicsUpdateError PhysicsTestContext::Simulate(float inTotalTime, function<voi
 	return errors;
 }
 
-RVec3 PhysicsTestContext::PredictPosition(RVec3Arg inPosition, Vec3Arg inVelocity, Vec3Arg inAcceleration, float inTotalTime) const
+RVec4 PhysicsTestContext::PredictPosition(RVec4Arg inPosition, Vec4Arg inVelocity, Vec4Arg inAcceleration, float inTotalTime) const
 {
 	// Integrate position using a Symplectic Euler step (just like the PhysicsSystem)
-	RVec3 pos = inPosition;
-	Vec3 vel = inVelocity;
+	RVec4 pos = inPosition;
+	Vec4 vel = inVelocity;
 
 	const float delta_time = GetStepDeltaTime();
 	const int cNumSteps = int(round(inTotalTime / delta_time));
@@ -148,20 +154,24 @@ RVec3 PhysicsTestContext::PredictPosition(RVec3Arg inPosition, Vec3Arg inVelocit
 }
 
 // Predict rotation assuming ballistic motion using initial orientation, angular velocity angular acceleration and time
-Quat PhysicsTestContext::PredictOrientation(QuatArg inRotation, Vec3Arg inAngularVelocity, Vec3Arg inAngularAcceleration, float inTotalTime) const
+// TODO(4D): a 4D angular velocity is a bivector that need not describe a single rotation plane, so
+// there is no axis/angle to feed to Quat::sRotation. This mirrors Body::AddRotationStep exactly -
+// R <- exp(Omega * dt / 2) * R via the general rotor exponential - rather than reimplementing it,
+// so a test comparing against this prediction cannot pass by making the same mistake twice in a
+// different way. It is still an independent check of the *solver*: it asserts that an unconstrained
+// body does nothing but integrate.
+Rotor PhysicsTestContext::PredictOrientation(RotorArg inRotation, BivecArg inAngularVelocity, BivecArg inAngularAcceleration, float inTotalTime) const
 {
-	// Integrate position using a Symplectic Euler step (just like the PhysicsSystem)
-	Quat rot = inRotation;
-	Vec3 vel = inAngularVelocity;
+	// Integrate orientation using a Symplectic Euler step (just like the PhysicsSystem)
+	Rotor rot = inRotation;
+	Bivec vel = inAngularVelocity;
 
 	const float delta_time = GetStepDeltaTime();
 	const int cNumSteps = int(round(inTotalTime / delta_time));
 	for (int s = 0; s < cNumSteps; ++s)
 	{
 		vel += inAngularAcceleration * delta_time;
-		float vel_len = vel.Length();
-		if (vel_len != 0.0f)
-			rot = Quat::sRotation(vel / vel_len, vel_len * delta_time) * rot;
+		rot = (Rotor::sExp(0.5f * (vel * delta_time)) * rot).Normalized();
 	}
 	return rot;
 }

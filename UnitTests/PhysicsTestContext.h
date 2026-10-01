@@ -6,7 +6,6 @@
 
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
-#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include "Layers.h"
 
 JPH_SUPPRESS_WARNINGS_STD_BEGIN
@@ -38,22 +37,17 @@ public:
 	Body &				CreateBody(const BodyCreationSettings &inSettings, EActivation inActivation);
 
 	/// Create a body and add it to the world
-	Body &				CreateBody(const ShapeSettings *inShapeSettings, RVec3Arg inPosition, QuatArg inRotation, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, EActivation inActivation);
+	Body &				CreateBody(const ShapeSettings *inShapeSettings, RVec4Arg inPosition, RotorArg inRotation, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, EActivation inActivation);
 
 	// Create a box and add it to the world
-	Body &				CreateBox(RVec3Arg inPosition, QuatArg inRotation, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, Vec3Arg inHalfExtent, EActivation inActivation = EActivation::Activate);
+	Body &				CreateBox(RVec4Arg inPosition, RotorArg inRotation, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, Vec4Arg inHalfExtent, EActivation inActivation = EActivation::Activate);
 
 	// Create a sphere and add it to the world
-	Body &				CreateSphere(RVec3Arg inPosition, float inRadius, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, EActivation inActivation = EActivation::Activate);
+	Body &				CreateSphere(RVec4Arg inPosition, float inRadius, EMotionType inMotionType, EMotionQuality inMotionQuality, ObjectLayer inLayer, EActivation inActivation = EActivation::Activate);
 
-	// Create a constraint and add it to the world
-	template <typename T>
-	T &					CreateConstraint(Body &inBody1, Body &inBody2, const TwoBodyConstraintSettings &inSettings)
-	{
-		T *constraint = static_cast<T *>(inSettings.Create(inBody1, inBody2));
-		mSystem->AddConstraint(constraint);
-		return *constraint;
-	}
+	// TODO(4D): CreateConstraint is removed for v1 - every joint constraint is cut from the build
+	// (see Jolt.cmake), so TwoBodyConstraintSettings does not exist to template over. Restore it
+	// together with the joints in v1.1.
 
 	// Call the update with zero delta time
 	EPhysicsUpdateError SimulateNoDeltaTime();
@@ -65,10 +59,11 @@ public:
 	EPhysicsUpdateError	Simulate(float inTotalTime, function<void()> inPreStepCallback = []() { });
 
 	// Predict position assuming ballistic motion using initial position, velocity acceleration and time
-	RVec3				PredictPosition(RVec3Arg inPosition, Vec3Arg inVelocity, Vec3Arg inAcceleration, float inTotalTime) const;
+	RVec4				PredictPosition(RVec4Arg inPosition, Vec4Arg inVelocity, Vec4Arg inAcceleration, float inTotalTime) const;
 
 	// Predict rotation assuming ballistic motion using initial orientation, angular velocity angular acceleration and time
-	Quat				PredictOrientation(QuatArg inRotation, Vec3Arg inAngularVelocity, Vec3Arg inAngularAcceleration, float inTotalTime) const;
+	// TODO(4D): angular velocity / acceleration are bivectors, and the step mirrors Body::AddRotationStep
+	Rotor				PredictOrientation(RotorArg inRotation, BivecArg inAngularVelocity, BivecArg inAngularAcceleration, float inTotalTime) const;
 
 	// Access to the physics system
 	PhysicsSystem *		GetSystem() const

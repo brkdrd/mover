@@ -2,6 +2,13 @@
 // SPDX-FileCopyrightText: 2025 Jorrit Rouwe
 // SPDX-License-Identifier: CC0-1.0
 // This file is in the public domain. It serves as an example to start building your own application using Jolt Physics. Feel free to copy paste without attribution!
+//
+// TODO(4D): ported to four spatial dimensions. Vec3 -> Vec4, RVec3 -> RVec4, Quat -> Rotor, and the
+// scene gained a W extent. Beyond the type swap this program is the project's end-to-end smoke test:
+// the unit tests cover each stage in isolation, but only a real Update loop exercises integration
+// order, islands, sleeping and the contact cache together. So it also drops a tesseract (a sphere
+// only ever produces a single contact point - a flat-on-flat box rest is what exercises the 4D
+// contact manifold) and ends with a block of numeric checks, returning non-zero if any fails.
 
 // The Jolt headers don't include Jolt.h. Always include Jolt.h before including any other Jolt header.
 // You can use Jolt.h in your precompiled header to speed up compilation.
@@ -23,6 +30,7 @@
 #include <iostream>
 #include <cstdarg>
 #include <thread>
+#include <cmath>
 
 // Disable common warnings triggered by Jolt, you can use JPH_SUPPRESS_WARNING_PUSH / JPH_SUPPRESS_WARNING_POP to store and restore the warning state
 JPH_SUPPRESS_WARNINGS
@@ -169,22 +177,23 @@ class MyContactListener : public ContactListener
 {
 public:
 	// See: ContactListener
-	virtual ValidateResult	OnContactValidate(const Body &inBody1, const Body &inBody2, RVec3Arg inBaseOffset, const CollideShapeResult &inCollisionResult) override
+	virtual ValidateResult	OnContactValidate(const Body &inBody1, const Body &inBody2, RVec4Arg inBaseOffset, const CollideShapeResult &inCollisionResult) override
 	{
-		cout << "Contact validate callback" << endl;
-
 		// Allows you to ignore a contact before it is created (using layers to not make objects collide is cheaper!)
 		return ValidateResult::AcceptAllContactsForThisBodyPair;
 	}
 
 	virtual void			OnContactAdded(const Body &inBody1, const Body &inBody2, const ContactManifold &inManifold, ContactSettings &ioSettings) override
 	{
-		cout << "A contact was added" << endl;
+		// TODO(4D): the point count is the interesting number here. In 4D the contact patch is a 3D
+		// polytope, so a tesseract landing flat on the floor should report a whole cell of points
+		// (reduced to at most cMaxManifoldPoints), not the single point the 3D code would give.
+		cout << "A contact was added with " << inManifold.mRelativeContactPointsOn1.size() << " point(s)" << endl;
 	}
 
 	virtual void			OnContactPersisted(const Body &inBody1, const Body &inBody2, const ContactManifold &inManifold, ContactSettings &ioSettings) override
 	{
-		cout << "A contact was persisted" << endl;
+		// Deliberately silent: a resting body persists its contacts every step and would drown the log.
 	}
 
 	virtual void			OnContactRemoved(const SubShapeIDPair &inSubShapePair) override
@@ -293,10 +302,12 @@ int main(int argc, char** argv)
 	// variant of this. We're going to use the locking version (even though we're not planning to access bodies from multiple threads)
 	BodyInterface &body_interface = physics_system.GetBodyInterface();
 
-	// Next we can create a rigid body to serve as the floor, we make a large box
+	// Next we can create a rigid body to serve as the floor, we make a large box.
+	// TODO(4D): in four dimensions the "floor" is a hyperplane - its boundary is a 3D volume, so the
+	// slab is wide in X, Z *and* W and thin only in Y.
 	// Create the settings for the collision volume (the shape).
 	// Note that for simple shapes (like boxes) you can also directly construct a BoxShape.
-	BoxShapeSettings floor_shape_settings(Vec3(100.0f, 1.0f, 100.0f));
+	BoxShapeSettings floor_shape_settings(Vec4(100.0f, 1.0f, 100.0f, 100.0f));
 	floor_shape_settings.SetEmbedded(); // A ref counted object on the stack (base class RefTarget) should be marked as such to prevent it from being freed when its reference count goes to 0.
 
 	// Create the shape
@@ -304,7 +315,8 @@ int main(int argc, char** argv)
 	ShapeRefC floor_shape = floor_shape_result.Get(); // We don't expect an error here, but you can check floor_shape_result for HasError() / GetError()
 
 	// Create the settings for the body itself. Note that here you can also set other properties like the restitution / friction.
-	BodyCreationSettings floor_settings(floor_shape, RVec3(0.0_r, -1.0_r, 0.0_r), Quat::sIdentity(), EMotionType::Static, Layers::NON_MOVING);
+	// The slab's top surface ends up at y = 0.
+	BodyCreationSettings floor_settings(floor_shape, RVec4(0.0_r, -1.0_r, 0.0_r, 0.0_r), Rotor::sIdentity(), EMotionType::Static, Layers::NON_MOVING);
 
 	// Create the actual rigid body
 	Body *floor = body_interface.CreateBody(floor_settings); // Note that if we run out of bodies this can return nullptr
@@ -314,12 +326,20 @@ int main(int argc, char** argv)
 
 	// Now create a dynamic body to bounce on the floor
 	// Note that this uses the shorthand version of creating and adding a body to the world
-	BodyCreationSettings sphere_settings(new SphereShape(0.5f), RVec3(0.0_r, 2.0_r, 0.0_r), Quat::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+	BodyCreationSettings sphere_settings(new SphereShape(0.5f), RVec4(0.0_r, 2.0_r, 0.0_r, 0.0_r), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
 	BodyID sphere_id = body_interface.CreateAndAddBody(sphere_settings, EActivation::Activate);
 
 	// Now you can interact with the dynamic body, in this case we're going to give it a velocity.
 	// (note that if we had used CreateBody then we could have set the velocity straight on the body before adding it to the physics system)
-	body_interface.SetLinearVelocity(sphere_id, Vec3(0.0f, -5.0f, 0.0f));
+	body_interface.SetLinearVelocity(sphere_id, Vec4(0.0f, -5.0f, 0.0f, 0.0f));
+
+	// TODO(4D): and a tesseract, dropped flat so that a whole cubic cell of it rests on the floor.
+	// This is the case the 4D contact manifold exists for: the patch is a 3D polytope, which needs
+	// more than the 4 points 3D Jolt reduces to in order to be stable. Put it well clear of the
+	// sphere in W so the two never interact.
+	const float cBoxHalfExtent = 0.5f;
+	BodyCreationSettings box_settings(new BoxShape(Vec4::sReplicate(cBoxHalfExtent)), RVec4(0.0_r, 2.0_r, 0.0_r, 10.0_r), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+	BodyID box_id = body_interface.CreateAndAddBody(box_settings, EActivation::Activate);
 
 	// We simulate the physics world in discrete time steps. 60 Hz is a good rate to update the physics system.
 	const float cDeltaTime = 1.0f / 60.0f;
@@ -329,17 +349,25 @@ int main(int argc, char** argv)
 	// Instead insert all new objects in batches instead of 1 at a time to keep the broad phase efficient.
 	physics_system.OptimizeBroadPhase();
 
-	// Now we're ready to simulate the body, keep simulating until it goes to sleep
+	// Now we're ready to simulate the bodies, keep simulating until they go to sleep.
+	// TODO(4D): the loop terminating is itself a check - a body that jitters, gains energy or is
+	// pushed around by a bad contact never falls below the sleep threshold. Bound it anyway so a
+	// failure is a finite run and a clear message rather than a hang.
+	const uint cMaxSteps = 600;
 	uint step = 0;
-	while (body_interface.IsActive(sphere_id))
+	while ((body_interface.IsActive(sphere_id) || body_interface.IsActive(box_id)) && step < cMaxSteps)
 	{
 		// Next step
 		++step;
 
 		// Output current position and velocity of the sphere
-		RVec3 position = body_interface.GetCenterOfMassPosition(sphere_id);
-		Vec3 velocity = body_interface.GetLinearVelocity(sphere_id);
-		cout << "Step " << step << ": Position = (" << position.GetX() << ", " << position.GetY() << ", " << position.GetZ() << "), Velocity = (" << velocity.GetX() << ", " << velocity.GetY() << ", " << velocity.GetZ() << ")" << endl;
+		RVec4 position = body_interface.GetCenterOfMassPosition(sphere_id);
+		Vec4 velocity = body_interface.GetLinearVelocity(sphere_id);
+		RVec4 box_position = body_interface.GetCenterOfMassPosition(box_id);
+		cout << "Step " << step
+			<< ": Sphere = (" << position.GetX() << ", " << position.GetY() << ", " << position.GetZ() << ", " << position.GetW() << ")"
+			<< ", Velocity = (" << velocity.GetX() << ", " << velocity.GetY() << ", " << velocity.GetZ() << ", " << velocity.GetW() << ")"
+			<< ", Tesseract = (" << box_position.GetX() << ", " << box_position.GetY() << ", " << box_position.GetZ() << ", " << box_position.GetW() << ")" << endl;
 
 		// If you take larger steps than 1 / 60th of a second you need to do multiple collision steps in order to keep the simulation stable. Do 1 collision step per 1 / 60th of a second (round up).
 		const int cCollisionSteps = 1;
@@ -348,11 +376,59 @@ int main(int argc, char** argv)
 		physics_system.Update(cDeltaTime, cCollisionSteps, &temp_allocator, &job_system);
 	}
 
+	// TODO(4D): check the result numerically rather than by eye. None of these can be read off the
+	// unit tests - they are properties of the whole loop, not of any one stage.
+	int failures = 0;
+	auto check = [&failures](bool inSucceeded, const char *inWhat)
+	{
+		cout << (inSucceeded? "  ok   " : "  FAIL ") << inWhat << endl;
+		if (!inSucceeded)
+			++failures;
+	};
+
+	RVec4 sphere_pos = body_interface.GetCenterOfMassPosition(sphere_id);
+	RVec4 box_pos = body_interface.GetCenterOfMassPosition(box_id);
+	cout << "After " << step << " steps:" << endl;
+
+	// Both bodies came to rest. If this fails everything below is measuring a moving target.
+	check(step < cMaxSteps, "both bodies went to sleep");
+
+	// They rest on top of the slab, one radius / half extent above it. The tolerance is the solver's
+	// allowed penetration, not a vague "about right" - measured 0.020 for the sphere (exactly
+	// PhysicsSettings::mPenetrationSlop) and 0.014 for the tesseract.
+	const float cAllowedPenetration = 0.05f;
+	check(abs((float)sphere_pos.GetY() - 0.5f) < cAllowedPenetration, "sphere rests one radius above the floor");
+	check(abs((float)box_pos.GetY() - cBoxHalfExtent) < cAllowedPenetration, "tesseract rests one half extent above the floor");
+
+	// Nothing in this scene acts along X, Z or W, so motion in those would be a leak from the fourth
+	// dimension being handled asymmetrically - the single most likely kind of bug in this port.
+	// Measured: the sphere is exact, the tesseract moves 9.5e-5 / 3.6e-5 / 6.0e-5 in X / Z / W, all
+	// of it in the single step where it lands. That residual is the contact solver's Gauss-Seidel
+	// ordering (it is 8e-4 of the 7.4 m/s impact and does not grow afterwards), not a bias in the
+	// manifold: the 6 points kept out of the cube cell's 8 corners are antipodal in pairs, because
+	// the two extremes along a direction perpendicular to the point1..point2 axis always are.
+	const float cNoDrift = 1.0e-3f;
+	check(abs((float)sphere_pos.GetX()) < cNoDrift && abs((float)sphere_pos.GetZ()) < cNoDrift && abs((float)sphere_pos.GetW()) < cNoDrift, "sphere did not drift in X / Z / W");
+	check(abs((float)box_pos.GetX()) < cNoDrift && abs((float)box_pos.GetZ()) < cNoDrift && abs((float)box_pos.GetW() - 10.0f) < cNoDrift, "tesseract did not drift in X / Z / W");
+
+	// A resting tesseract must not be spinning. In 4D angular velocity is a bivector with six
+	// components, so this also catches a rotation in a plane that contains W.
+	check(body_interface.GetAngularVelocity(box_id).Length() < cNoDrift, "tesseract is not spinning");
+
+	if (failures == 0)
+		cout << "4D HelloWorld: all checks passed" << endl;
+	else
+		cout << "4D HelloWorld: " << failures << " check(s) FAILED" << endl;
+
 	// Remove the sphere from the physics system. Note that the sphere itself keeps all of its state and can be re-added at any time.
 	body_interface.RemoveBody(sphere_id);
 
 	// Destroy the sphere. After this the sphere ID is no longer valid.
 	body_interface.DestroyBody(sphere_id);
+
+	// Remove and destroy the tesseract
+	body_interface.RemoveBody(box_id);
+	body_interface.DestroyBody(box_id);
 
 	// Remove and destroy the floor
 	body_interface.RemoveBody(floor->GetID());
@@ -365,5 +441,5 @@ int main(int argc, char** argv)
 	delete Factory::sInstance;
 	Factory::sInstance = nullptr;
 
-	return 0;
+	return failures == 0? 0 : 1;
 }

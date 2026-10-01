@@ -191,8 +191,8 @@ public:
 #endif // JPH_DEBUG_RENDERER
 
 	/// Set gravity value
-	void						SetGravity(Vec3Arg inGravity)								{ mGravity = inGravity; }
-	Vec3						GetGravity() const											{ return mGravity; }
+	void						SetGravity(Vec4Arg inGravity)								{ mGravity = inGravity; }
+	Vec4						GetGravity() const											{ return mGravity; }
 
 	/// Returns a locking interface that won't actually lock the body. Use with great care!
 	inline const BodyLockInterfaceNoLock &	GetBodyLockInterfaceNoLock() const				{ return mBodyLockInterfaceNoLock; }
@@ -382,7 +382,11 @@ private:
 	StepListeners				mStepListeners;
 
 	/// This is the global gravity vector
-	Vec3						mGravity = Vec3(0, -9.81f, 0);
+	// TODO(4D): gravity is a 4D vector. It was left as a Vec3 by the port, which silently prevented
+	// gravity along W and, worse, leaked Z into W: Vec3 keeps the 3D "W mirrors Z" invariant, so
+	// Vec4(Vec3(0, 0, -9.81f)) is (0, 0, -9.81, -9.81). The default happens to have Z = 0, which is
+	// why nothing noticed.
+	Vec4						mGravity = Vec4(0, -9.81f, 0, 0);
 
 	/// Previous frame's delta time of one sub step to allow scaling previous frame's constraint impulses
 	float						mPreviousStepDeltaTime = 0.0f;

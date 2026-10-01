@@ -592,13 +592,39 @@ Definition of "shipped v1": ✅ headless library builds warning-clean; ✅ UnitT
 onto a hyperplane floor, stacks of tesseracts stable, spheres bouncing) runs deterministically;
 ✅ PerformanceTest runs on a 4D scene. **v1 is met.**
 
-Measured 2026-10-01 (6 cores / 12 threads, Release, `-s=Pyramid -i=200`): 1296 tesseracts in a
-single island at **28 steps/s on 12 threads**, scaling 6.3x from one thread, and **the state hash is
-identical at 1, 2, 4, 8 and 12 threads** — Jolt's determinism guarantee holds in 4D. Where the time
-goes, once the stack has settled: the contact solver and the narrow phase are roughly 50/50, EPA is
-~9% of it, the broad phase ~4%. Known 4D cost multipliers, all structural rather than fixable: a
-`ContactConstraint` is 4128 bytes (6 manifold points, 4 constraint parts each because friction has a
-3D tangent space, bivector Jacobians), and Rotor/Bivec are still entirely scalar.
+Measured 2026-10-01 (AMD Ryzen 5 9600X, 6 cores / 12 threads, 32 MB L3, Release, `-s=Pyramid`).
+**The state hash is identical at 1, 2, 4, 8 and 12 threads** — Jolt's determinism guarantee holds in
+4D. Throughput, against pristine 3D Jolt built from `master` on the same machine and the same scene
+shape (3D: 1240 bodies, 4D: 1296):
+
+| threads | 3D Jolt | 4D before tuning | 4D now | gap |
+|---|---|---|---|---|
+| 1 | 109 steps/s | 5.7 | **10.2** | 10.7x |
+| 4 | 272 | 16.8 | **34** | 8.0x |
+| 12 | 337 | 28 | **50** | 6.7x |
+
+⚠ **Benchmark with `-DPROFILER_IN_DEBUG_AND_RELEASE=OFF`.** Jolt's own instrumenting profiler is on
+by default in Release and its cost scales with the number of profile scopes entered, which differs
+between 3D and 4D — it distorts exactly the comparison you are trying to make. Numbers above are
+with it on (so they are comparable to each other); use the off build for A/B work.
+
+**How much of the gap is structural.** Counted, not estimated (instrument
+`constraint.mContactPoints.resize` in both trees): 4D has **1.58x** the contact constraints, **1.46x**
+the manifold points each (5.21 vs 3.57), and **1.33x** the constraint rows per point (friction has a
+3D tangent space), so **3.1x the rows** — each roughly 2x the bytes, because the Jacobians are
+bivectors. That is a floor of ~6x. The rest was implementation and most of it has now been recovered.
+
+**Where the time goes now** (single thread, settled pyramid, gprofng): velocity solver 35%, EPA hull
+`AddPoint` 14%, manifold clipping 12%, contact setup 6%, `OrientedBox::Overlaps` 4%. The solver's
+working set is **50 MB against 3D's 6.7 MB**, i.e. 4D streams from DRAM where 3D fits inside this
+machine's 32 MB L3 — but adding 64 bytes per constraint part only costs 6.7% of throughput, so it is
+only partly bandwidth-bound; the rest is the dependent chain of Vec8 horizontal dot products.
+
+**Ideas not taken** (if you need more): store the four Jacobians as a packed 6-float POD rather than
+a 32-byte `Vec8` (−30% constraint bytes, est. +5%); have `GetSupportingFace` return facet planes so
+`GetClipHalfSpaces` does not enumerate C(n,3) vertex triples; SIMD for Rotor. ⚠ Lowering
+`cMaxManifoldPoints` **crashes** — the constant is coupled to something else that assumes 6; that
+coupling is a latent bug even if you do not want fewer points.
 
 **Phase A — stabilize the foundation. Steps 1, 2, 4 DONE (2026-07-22); step 3 mostly done.**
 1. DONE: repo hygiene — `build/` de-committed + gitignored, untracked 4D leaf sources tracked,

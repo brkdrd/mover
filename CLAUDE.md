@@ -21,18 +21,18 @@ got stuck.
 cmake -S Build -B build -DCMAKE_BUILD_TYPE=Release -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
 cmake --build build --target Jolt -j$(nproc)           # BUILDS CLEAN (headless v1)
 cmake --build build --target UnitTests -j$(nproc)      # builds and links
-./build/UnitTests                                     # runs: 364 cases, 364 pass, 0 fail (see below)
+./build/UnitTests                                     # runs: 371 cases, all pass
 ```
 
 **Current build status (verified 2026-08-08): the headless v1 library BUILDS CLEAN** — `libJolt.a`,
-0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 364
-cases, all 364 pass.** Build with the debug renderer OFF
+0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 371
+cases, all 371 pass.** Build with the debug renderer OFF
 (`-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF`); v1 is headless.
 
 This replaces the old standalone Math-only runner — **run the real `./build/UnitTests` from now on.**
 (The recipe for the standalone runner is kept below only as a fallback.)
 
-### ✅ UnitTests is GREEN: 364 cases, 364 pass (2026-08-08)
+### ✅ UnitTests is GREEN: 371 cases, all pass (2026-10-01)
 Verified from a clean configure + build. The last failures were numerical accuracy, not logic, and
 the tolerances they checked were inherited verbatim from 3D Jolt; each was recalibrated from a
 measurement recorded next to the check. See the commit for the full table. In short:
@@ -340,16 +340,43 @@ P1 — determinism / hygiene:
     invariant under this flip, which is why it survived a compile-clean port — only a
     velocity-residual / momentum / energy test detects it.
 
+14. **[FIXED 2026-10-01]** ~~`AABox::GetSupportingFace` returned the wrong cell.~~ Its convention is
+    NOT `GetSupport`'s: it must return the face that `inDirection` points **into**, matching 3D Jolt
+    and `ConvexHullShape::GetSupportingFace` (which picks the face most anti-parallel to the
+    direction). Callers rely on it - `sCollideConvexVsConvex` asks shape 1 for `-penetration_axis`.
+    An earlier pass through this port "corrected" it to agree with `GetSupport`, leaving the two
+    implementations inconsistent and selecting the **far** face of every box; the manifold was
+    stubbed out so nothing noticed. `TestAABoxGetSupportingFace` had been written to match the broken
+    behaviour and is corrected.
+15. **[FIXED 2026-10-01]** ~~EPA's seed completion assumed spread directions give distinct points.~~
+    3D Jolt completes a partial GJK simplex with a fixed spread of directions, which assumes each
+    yields a distinct support point. That is false for polytopes: a box's support is constant over a
+    cone of directions, so for box-vs-box several spread directions return the **same corner**. A
+    tesseract resting on a wider floor produced three identical seed points, every seed cell was
+    degenerate, and **EPA reported no collision at all** - the most common contact in any scene. It
+    only triggers when one box's footprint is strictly inside the other's in all three transverse
+    axes, which is why it survived this long. The spread directions are kept (far better conditioned
+    for curved shapes) but a candidate is now accepted only if it raises the dimension of the
+    simplex, falling back to probing perpendicular to the current span, then the coordinate axes.
+
 ## Things that do NOT trivially generalize (the real design work left)
 
-1. **Contact manifolds.** In 3D the contact patch between convex bodies is a 2D polygon; Jolt
-   clips face polygons (`ClipPoly`) and reduces to ≤4 points. In 4D the patch is a 3D
-   *polyhedron* living in the contact hyperplane. `ClipPoly.h` still clips 2D polygons.
-   Needed: supporting-face extraction returning a polyhedron (or point cloud), convex
-   polyhedron-vs-polyhedron clipping (Sutherland–Hodgman generalized to halfspace-clipping a
-   polyhedron), and manifold reduction to ~5–6 points whose hull spans the patch (4 points
-   can't stabilize a 3D patch; upstream's 4-point heuristic must be rethought, incl.
-   `ManifoldBetweenTwoFaces`). This is the hardest open problem in the project.
+1. **[SOLVED 2026-10-01] Contact manifolds.** In 3D the contact patch is a 2D polygon that Jolt
+   clips with Sutherland-Hodgman over an ordered edge loop; in 4D it is a 3D *polytope* and
+   `GetSupportingFace` returns its vertices unordered, so there is no loop to walk.
+   `ClipPolytopeVsPolytope` (`Geometry/ClipPoly.h`) builds the intersection from its definition
+   instead - vertices of P inside Q, vertices of Q inside P, and edge/facet crossings. Two things
+   make it cheap: the clip halfspaces are prisms containing the penetration axis (so
+   `sCross(e1, e2, axis)` is a facet normal directly in 4D, no basis change, and containment is
+   automatically containment of the projection), and the faces are small by construction (a cube
+   cell has 8 vertices, a hull's tetrahedral cell 4) so facets can be enumerated over vertex
+   triples. A resting tesseract now gets 8 contact points spanning its contact cell, pruned to 6.
+   Tested in `UnitTests/Geometry/ClipPolytopeTests.cpp` against independently computed geometry,
+   including the plus-shaped overlap where neither polytope has a vertex inside the other.
+   Remaining nit: the output is a superset of the intersection's vertices (a chord of one polytope
+   can cross a facet of the other, giving extra points *on* the patch boundary), which is harmless
+   because the reduction selects extremes.
+
 2. **Angular constraint math.** 4D has 6 rotational DOFs. A "hinge axis" is a bivector plane;
    the effective-mass matrix of an angular constraint part is up to 6×6; the inertia tensor is
    properly a symmetric operator on bivectors (6×6), of which the current
@@ -378,17 +405,16 @@ P1 — determinism / hygiene:
 
 ## Roadmap to a shippable v1
 
-**⏸ RESUME HERE (2026-08-08):** **The headless v1 library builds clean and `UnitTests` is fully
-green (364/364).** Geometry, the Body layer, the shape set, the contact solver and the stepping loop
-are all ported and tested. Next: (1) write the **4D HelloWorld** — a tesseract falling onto a
-hyperplane floor. The stepping loop compiles and the collision stack is green, so this is the first
-chance to watch the engine actually simulate, and it will flush out runtime bugs the unit tests
-cannot (integration order, sleeping, islands). (2) The **contact manifold pipeline**:
-`ManifoldBetweenTwoFaces` is still a reduced single-point fallback — the ≥5-point reduction is done
-and correct, the face *clipping* is not, so a resting box gets one contact instead of a patch and
-stacks will be less stable than 3D Jolt. (3) Re-enable the 33 de-registered unit-test files as each
-area is ported. (4) Phase C: whole-body conservation/determinism tests, then PerformanceTest.
-**Read the 🔑 torque-convention box below before touching any dynamics code** — the naive `r ∧ F`
+**⏸ RESUME HERE (2026-10-01):** **All four blocking pieces are done: the headless v1 library builds,
+`UnitTests` is green at 371/371, and the contact manifold pipeline (conceptual gap 1) is solved** -
+a resting tesseract gets a real 8-point patch, not a single point. Next: **write the 4D HelloWorld**
+(`HelloWorld/HelloWorld.cpp` is a console program with no rendering - upstream's has zero renderer
+references, so no visualization work is needed; port it to RVec4/Vec4 and print the W component).
+Assert on numbers rather than eyeballing: the tesseract settles at the expected height, goes to
+sleep (the loop terminating catches jitter and energy injection), does not drift in w when dropped
+along -y, loses energy monotonically after impact, and re-runs bit-identically. Then Phase C
+(conservation/determinism tests, PerformanceTest) and re-enabling the 33 de-registered test files.
+**Read the 🔑 torque-convention box below before touching any dynamics code** - the naive `r ∧ F`
 transliteration is wrong and an effective-mass test cannot detect it.
 
 **Phase B step 6(b) is COMPLETE — the v1 shape layer compiles clean at the per-TU level (15/15 TUs).**

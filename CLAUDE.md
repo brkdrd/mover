@@ -21,20 +21,22 @@ got stuck.
 cmake -S Build -B build -DCMAKE_BUILD_TYPE=Release -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
 cmake --build build --target Jolt -j$(nproc)           # BUILDS CLEAN (headless v1)
 cmake --build build --target UnitTests -j$(nproc)      # builds and links
-./build/UnitTests                                     # runs: 378 cases, all pass
+./build/UnitTests                                     # runs: 379 cases, all pass
 cmake --build build --target HelloWorld -j$(nproc)    # add -DTARGET_HELLO_WORLD=ON when configuring
 ./build/HelloWorld                                    # 4D smoke test; non-zero exit if a check fails
+cmake --build build --target PerformanceTest -j$(nproc)   # add -DTARGET_PERFORMANCE_TEST=ON
+./build/PerformanceTest -s=Pyramid -t=max -i=200      # scenes: Pyramid, MaxBodies
 ```
 
 **Current build status (verified 2026-08-08): the headless v1 library BUILDS CLEAN** — `libJolt.a`,
-0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 378
-cases, all 378 pass.** Build with the debug renderer OFF
+0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 379
+cases, all 379 pass.** Build with the debug renderer OFF
 (`-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF`); v1 is headless.
 
 This replaces the old standalone Math-only runner — **run the real `./build/UnitTests` from now on.**
 (The recipe for the standalone runner is kept below only as a fallback.)
 
-### ✅ UnitTests is GREEN: 378 cases, all pass (2026-10-01)
+### ✅ UnitTests is GREEN: 379 cases, all pass (2026-10-01)
 Verified from a clean configure + build. The last failures were numerical accuracy, not logic, and
 the tolerances they checked were inherited verbatim from 3D Jolt; each was recalibrated from a
 measurement recorded next to the check. See the commit for the full table. In short:
@@ -43,9 +45,11 @@ measurement recorded next to the check. See the commit for the full table. In sh
   its error is set by hull cell angular size: ~V⁻¹ on S² but **~V^(−2/3) on S³**. Measured on two
   coincident spheres: 96 points → 0.269, 192 → 0.171, 384 → 0.109, 768 → 0.069, matching the law.
   Meeting the 3D numbers would need ~768 points and ~836 KB of stack (we use 96 / ~104 KB).
-  ⚠ **This does not affect the engine**: `ConvexShape::sCollideConvexVsConvex` shrinks both shapes by
-  their convex radius and adds it back analytically, so a sphere becomes a *point* and only polytopes
-  (which EPA resolves in a few iterations) ever reach it. The tests pass convex radius 0 on purpose.
+  ⚠ **This was documented as "does not affect the engine" — that was wrong, see #17.** The convex
+  radius really is shrunk away before EPA (a sphere becomes a *point*), but `sCollideConvexVsConvex`
+  then inflated shape 1 by the **speculative contact distance**, which is a sphere sweep and rounds
+  every edge of a tesseract. So the curved-surface error law *did* reach the engine, on the most
+  common contact there is. Fixed 2026-10-01; EPA now runs on the un-inflated polytope pair.
 - **One case was ill-posed, not inaccurate**: "sphere just touching face of box" used a penetration of
   0.01 while handing EPA a collision tolerance of 1e-2. It happened to land right in 3D; in 4D it
   lands wrong and flips between `-O2` and `-O3 -flto`. The radius is now 2.1 so the penetration is
@@ -381,6 +385,21 @@ P1 — determinism / hygiene:
     is converted to `Vec4` - audit the remaining ones (`grep -n 'Vec3' Jolt/Physics Jolt/Geometry`)
     rather than assuming they are inert.
 
+17. **[FIXED 2026-10-01]** ~~EPA ran against a sphere-rounded shape on every overlapping contact.~~
+    Upstream `sCollideConvexVsConvex` inflates shape 1 by `mMaxSeparationDistance` (the speculative
+    contact distance, 0.02 by default) before EPA and subtracts it again afterwards — a numerical
+    guard so that a pair GJK called overlapping cannot come out of EPA separated. The inflation is a
+    **sphere sweep**, so it rounds every edge and corner, and EPA's error on a curved surface falls
+    off as V^(−2/3) on S³ against V⁻¹ on S² (see the accuracy section). Measured on a 1296-tesseract
+    pyramid: EPA averaged **62 support points and 330 hull cells per call and hit its 96-point cap on
+    57% of calls** — at the cap it returns the best facet it happened to find, not a converged
+    answer. Against the un-inflated pair it averages 9.8 points / 25.4 cells and never caps.
+    Skipping the inflation is sound, not a tolerance trade: reaching EPA means the shapes *excluding*
+    convex radius already overlap, so the real penetration is positive and the margin was never part
+    of the result; speculative contacts come out of the GJK branch. The margin is kept as a fallback
+    for exactly the case it was written for (6.5% of calls). ⚠ **Generalizable:** any 3D trick that
+    rounds a shape to buy numerical slack is far more expensive in 4D. Prefer exact polytope paths.
+
 ## Things that do NOT trivially generalize (the real design work left)
 
 1. **[SOLVED 2026-10-01] Contact manifolds.** In 3D the contact patch is a 2D polygon that Jolt
@@ -427,23 +446,22 @@ P1 — determinism / hygiene:
 
 ## Roadmap to a shippable v1
 
-**⏸ RESUME HERE (2026-10-01):** **The engine simulates.** The headless v1 library builds clean
-(0 warnings), `UnitTests` is 378/378, the contact manifold pipeline is solved, and **the 4D
-HelloWorld runs**: a tesseract and a sphere fall onto a hyperplane floor, settle at the right
-height, induce no spin, drift nowhere in X / Z / W, and go to sleep in 63 steps, bit-identically
-across repeats. Build it with `-DTARGET_HELLO_WORLD=ON`; it exits non-zero if a check fails.
-Remaining for v1, in order: (1) **PerformanceTest on a 4D scene** - the last item in the shipped-v1
-definition, and the first thing that will say whether the 4D structures are usably fast (a
-`ContactConstraint` is 4128 bytes against a few hundred in 3D). (2) **Re-enable the de-registered
-unit-test files** one area at a time; `PhysicsTestContext` is ported and registered again, which is
-what most of the `Physics/*` ones need. (3) The remaining open bugs: #5 `MortonCode` (still a 3D
-bit-spread - degrades BVH quality silently), #6 `DVec4` Z==W invariant (blocks the
-double-precision build), #9 `Mat44::sRotationXY..` C-library trig (determinism), #11 lossy inertia
-round-trip, and `SphereShape::GetMassProperties` storing `mass*r²/3` where the 4-ball second moment
-is `mass*r²/6`. (4) v1.1: the rotational constraint parts, SoftBody/Character/Vehicle, SIMD for
-Rotor/Bivec, a real 4D viewer.
-**Read the 🔑 torque-convention box below before touching any dynamics code** - the naive `r ∧ F`
-transliteration is wrong and an effective-mass test cannot detect it.
+**⏸ RESUME HERE (2026-10-01):** **v1 is met.** All four items in the definition above are done:
+the headless library builds warning-clean, UnitTests is 379/379, the 4D HelloWorld runs
+deterministically, and PerformanceTest runs a 1296-tesseract pyramid at 28 steps/s with a
+thread-count-independent hash. What is left is no longer blocking — pick by what you want next:
+- **Re-enable the de-registered unit-test files**, one area at a time. `PhysicsTestContext` is ported
+  and registered again, which is what most of the `Physics/*` ones need. Highest value per hour.
+- **The remaining open bugs**: #5 `MortonCode` (still a 3D bit-spread — silently degrades BVH
+  quality, and the perf numbers above were measured with it), #6 `DVec4` Z==W invariant (blocks the
+  double-precision build), #9 `Mat44::sRotationXY..` C-library trig (determinism), #11 lossy inertia
+  round-trip, and `SphereShape::GetMassProperties` storing `mass*r²/3` where the 4-ball second moment
+  is `mass*r²/6`.
+- **v1.1**: the rotational constraint parts (Hinge/Angle/SwingTwist — conceptual gap 2), SIMD for
+  Rotor/Bivec, the cut subsystems (SoftBody/Character/Vehicle/Ragdoll), a real 4D viewer.
+**Read the 🔑 torque-convention box below before touching any dynamics code** — the naive `r ∧ F`
+transliteration is wrong and an effective-mass test cannot detect it. And see #17: a 3D trick that
+rounds a shape to buy numerical slack costs far more in 4D.
 
 **Phase B step 6(b) is COMPLETE — the v1 shape layer compiles clean at the per-TU level (15/15 TUs).**
 Verified via a per-TU `-fsyntax-only` check with the Jolt build flags (helper `cc.sh`; recreate from
@@ -572,7 +590,15 @@ silently edit it.
 Definition of "shipped v1": ✅ headless library builds warning-clean; ✅ UnitTests all green
 (including the Rotor/Bivec and dynamics conservation tests); ✅ a 4D HelloWorld (tesseract falling
 onto a hyperplane floor, stacks of tesseracts stable, spheres bouncing) runs deterministically;
-⬜ PerformanceTest runs on a 4D scene — **the only item left.**
+✅ PerformanceTest runs on a 4D scene. **v1 is met.**
+
+Measured 2026-10-01 (6 cores / 12 threads, Release, `-s=Pyramid -i=200`): 1296 tesseracts in a
+single island at **28 steps/s on 12 threads**, scaling 6.3x from one thread, and **the state hash is
+identical at 1, 2, 4, 8 and 12 threads** — Jolt's determinism guarantee holds in 4D. Where the time
+goes, once the stack has settled: the contact solver and the narrow phase are roughly 50/50, EPA is
+~9% of it, the broad phase ~4%. Known 4D cost multipliers, all structural rather than fixable: a
+`ContactConstraint` is 4128 bytes (6 manifold points, 4 constraint parts each because friction has a
+3D tangent space, bivector Jacobians), and Rotor/Bivec are still entirely scalar.
 
 **Phase A — stabilize the foundation. Steps 1, 2, 4 DONE (2026-07-22); step 3 mostly done.**
 1. DONE: repo hygiene — `build/` de-committed + gitignored, untracked 4D leaf sources tracked,

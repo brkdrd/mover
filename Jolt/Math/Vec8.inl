@@ -240,6 +240,36 @@ Vec8 Vec8::operator - () const
 #endif
 }
 
+Vec8 Vec8::sAnd(Vec8Arg inV1, Vec8Arg inV2)
+{
+#if defined(JPH_USE_AVX)
+	return _mm256_and_ps(inV1.mValue, inV2.mValue);
+#elif defined(JPH_USE_SSE)
+	Vec8 v;
+	v.mValue.mLow = _mm_and_ps(inV1.mValue.mLow, inV2.mValue.mLow);
+	v.mValue.mHigh = _mm_and_ps(inV1.mValue.mHigh, inV2.mValue.mHigh);
+	return v;
+#elif defined(JPH_USE_NEON)
+	Vec8 v;
+	v.mValue.mLow = vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(inV1.mValue.mLow), vreinterpretq_u32_f32(inV2.mValue.mLow)));
+	v.mValue.mHigh = vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(inV1.mValue.mHigh), vreinterpretq_u32_f32(inV2.mValue.mHigh)));
+	return v;
+#else
+	// No vector type to bit-and, so go through integers. memcpy, not a reinterpret_cast: punning a
+	// float * through a uint32 * is strict-aliasing UB and gets miscompiled at -O2.
+	Vec8 v;
+	for (int i = 0; i < 8; i++)
+	{
+		uint32 a, b;
+		memcpy(&a, &inV1.mF32[i], sizeof(uint32));
+		memcpy(&b, &inV2.mF32[i], sizeof(uint32));
+		uint32 r = a & b;
+		memcpy(&v.mF32[i], &r, sizeof(uint32));
+	}
+	return v;
+#endif
+}
+
 Vec8 Vec8::operator * (Vec8Arg inV2) const
 {
 #if defined(JPH_USE_AVX)

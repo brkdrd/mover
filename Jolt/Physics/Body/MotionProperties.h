@@ -18,6 +18,43 @@ JPH_NAMESPACE_BEGIN
 
 class StateRecorder;
 
+/// TODO(4D): the world-space inverse inertia, as the 6x6 symmetric operator on bivectors that it
+/// actually is. Upstream caches the world-space inverse inertia as a Mat44 once per constraint and
+/// reuses it for every row and every solver iteration; the 4D port replaced that with a rotor-based
+/// recomputation inside MultiplyWorldSpaceInverseInertiaByVector, which costs four full Cl(4,0)
+/// sandwich products plus a rotor multiply - a few hundred scalar flops - *per constraint row per
+/// body*. A contact has 24 rows (6 manifold points x normal + 3 friction), so that was ~50x more
+/// work than building the operator once. This is the 4D analog of upstream's cached Mat44.
+///
+/// Stored as the 6 images of the basis bivectors, i.e. the columns of Ad(R) D^-1 Ad(R)^T. The
+/// operator is symmetric positive semi-definite; the columns are kept rather than a packed upper
+/// triangle so that applying it is 6 Vec8 multiply-adds.
+class InverseInertiaOperator
+{
+public:
+							InverseInertiaOperator() = default;
+
+	/// All-zero operator, for static / kinematic bodies
+	static JPH_INLINE InverseInertiaOperator sZero()
+	{
+		InverseInertiaOperator op;
+		for (int i = 0; i < 6; ++i)
+			op.mColumn[i] = Bivec::sZero();
+		return op;
+	}
+
+	/// Apply the operator to a bivector
+	JPH_INLINE Bivec		Multiply(BivecArg inV) const
+	{
+		Vec8 result = mColumn[0].GetVec8() * Vec8::sReplicate(inV[0]);
+		for (int i = 1; i < 6; ++i)
+			result = result + mColumn[i].GetVec8() * Vec8::sReplicate(inV[i]);
+		return Bivec(result);
+	}
+
+	Bivec					mColumn[6];
+};
+
 /// Enum that determines if an object can go to sleep
 enum class ECanSleep
 {
@@ -114,6 +151,11 @@ public:
 	/// Multiply a bivector with the inverse world space inertia tensor (\f$I_{world}^{-1}\f$). Zero if object is static or kinematic.
 	JPH_INLINE Bivec		MultiplyWorldSpaceInverseInertiaByVector(RotorArg inBodyRotation, BivecArg inV) const;
 
+	/// Build the world-space inverse inertia operator for a given body rotation, optionally scaled.
+	/// Build this once per body per constraint and apply it with Multiply(), rather than calling
+	/// MultiplyWorldSpaceInverseInertiaByVector per row - see InverseInertiaOperator.
+	JPH_INLINE InverseInertiaOperator GetInverseInertiaForRotation(RotorArg inBodyRotation, float inInvInertiaScale = 1.0f) const;
+
 	/// Velocity of point inPoint (in center of mass space) of the body (unit: m/s)
 	/// In 4D: v = v_linear + Omega._|_r (contraction of angular velocity bivector with position)
 	JPH_INLINE Vec4			GetPointVelocityCOM(Vec4Arg inPointRelativeToCOM) const			{ return mLinearVelocity + mAngularVelocity.Contract(inPointRelativeToCOM); }
@@ -157,21 +199,19 @@ public:
 	/// Component order: [e12(XY), e13(XZ), e14(XW), e23(YZ), e24(YW), e34(ZW)]
 	JPH_INLINE Bivec		GetAngularDOFsBivecMask() const
 	{
-		uint16 dofs = uint16(mAllowedDOFs);
-		auto bit_to_mask = [](uint16 val, uint16 bit) -> float {
-			uint32 m = (val & bit) ? 0xffffffffu : 0u;
-			float f;
-			memcpy(&f, &m, sizeof(f));
-			return f;
-		};
-		return Bivec(Vec8(
-			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationXY)),
-			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationXZ)),
-			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationXW)),
-			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationYZ)),
-			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationYW)),
-			bit_to_mask(dofs, uint16(EAllowedDOFs::RotationZW)),
-			0.0f, 0.0f));
+		// TODO(4D): built the same way as GetLinearDOFsMask, in two UVec4 halves recombined into a
+		// Vec8. The scalar version this replaces round-tripped eight floats through memory on every
+		// call, and this is called twice per MultiplyWorldSpaceInverseInertiaByVector - i.e. twice
+		// per constraint row per body per solver iteration.
+		UVec4 dofs = UVec4::sReplicate(uint32(mAllowedDOFs));
+		UVec4 mask_lo(uint32(EAllowedDOFs::RotationXY), uint32(EAllowedDOFs::RotationXZ), uint32(EAllowedDOFs::RotationXW), uint32(EAllowedDOFs::RotationYZ));
+		UVec4 mask_hi(uint32(EAllowedDOFs::RotationYW), uint32(EAllowedDOFs::RotationZW), 0, 0);
+		Lane4 lo = UVec4::sEquals(UVec4::sAnd(dofs, mask_lo), mask_lo).ReinterpretAsFloat();
+
+		// The last two lanes are unused by Bivec and must stay zero; sEquals would report 0 == 0 as
+		// a match, so mask them off explicitly
+		Lane4 hi = UVec4::sAnd(UVec4::sEquals(UVec4::sAnd(dofs, mask_hi), mask_hi), UVec4(0xffffffff, 0xffffffff, 0, 0)).ReinterpretAsFloat();
+		return Bivec(Vec8(lo, hi));
 	}
 
 	/// Takes an angular velocity / torque bivector inV and returns one where the components that are not allowed by mAllowedDOFs are set to 0

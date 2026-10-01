@@ -339,10 +339,54 @@ public:
 			sLinkCell(nc, 3, r.mNonFacingCell, r.mNonFacingRidge);
 		}
 
-		// Link new cells to each other (ridges 0-2)
-		for (int i = 0; i < (int)outCells.size(); ++i)
-			for (int j = i + 1; j < (int)outCells.size(); ++j)
-				sTryLinkCells(outCells[i], outCells[j]);
+		// Link new cells to each other (ridges 0-2).
+		//
+		// This used to call sTryLinkCells on every pair, which compares every unlinked ridge of one
+		// cell against every unlinked ridge of the other by counting shared vertices - 16 ridge
+		// pairs of 9 index comparisons each, for every pair of new cells. In 4D a single point can
+		// open a horizon of tens of ridges, so that quadratic term with a heavy constant was 15% of
+		// the whole simulation.
+		//
+		// Every new cell is (horizon triangle, new point), so two of them share a ridge exactly when
+		// their horizon triangles share an *edge*, and the shared ridge is that edge plus the new
+		// point. Ridge r of a new cell omits vertex r, so for r < 3 it is identified by the pair of
+		// horizon vertices other than r. Key each unlinked ridge by that pair and match on the key:
+		// the comparison becomes one integer test.
+		struct RidgeKey
+		{
+			uint64		mKey;
+			Cell *		mCell;
+			int			mRidge;
+		};
+		StaticArray<RidgeKey, 3 * cMaxRidgeLength> ridge_keys;
+		for (Cell *c : outCells)
+			for (int r = 0; r < 3; ++r)
+			{
+				if (c->mNeighbour[r] != nullptr)
+					continue;
+				int a = c->mIdx[(r + 1) % 3];
+				int b = c->mIdx[(r + 2) % 3];
+				uint64 lo = uint64(uint32(min(a, b)));
+				uint64 hi = uint64(uint32(max(a, b)));
+				if (ridge_keys.size() < ridge_keys.capacity())
+					ridge_keys.push_back({ (hi << 32) | lo, c, r });
+			}
+
+		for (uint i = 0; i < ridge_keys.size(); ++i)
+		{
+			RidgeKey &ki = ridge_keys[i];
+			if (ki.mCell->mNeighbour[ki.mRidge] != nullptr)
+				continue;
+			for (uint j = i + 1; j < ridge_keys.size(); ++j)
+			{
+				RidgeKey &kj = ridge_keys[j];
+				if (kj.mKey == ki.mKey && kj.mCell->mNeighbour[kj.mRidge] == nullptr)
+				{
+					sLinkCell(ki.mCell, ki.mRidge, kj.mCell, kj.mRidge);
+					break;
+				}
+			}
+		}
 
 #ifdef JPH_EPA_CONVEX_BUILDER_VALIDATE
 		ValidateCells();

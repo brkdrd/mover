@@ -85,6 +85,10 @@ public:
 	JPH_INLINE Vec8				operator - () const;
 
 	/// Multiply (component wise)
+	/// Bitwise AND of two vectors, for masking. TODO(4D): added for Bivec DOF masking, which is on
+	/// the hot path of every constraint solve; the scalar version it replaces went through memory.
+	static JPH_INLINE Vec8		sAnd(Vec8Arg inV1, Vec8Arg inV2);
+
 	JPH_INLINE Vec8				operator * (Vec8Arg inV2) const;
 
 	/// Multiply by scalar

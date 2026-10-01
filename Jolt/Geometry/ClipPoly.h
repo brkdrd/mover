@@ -26,7 +26,12 @@ struct ClipHalfSpace
 	float			mDistance;								///< Inside is mNormal . x <= mDistance
 };
 
-using ClipHalfSpaces = StaticArray<ClipHalfSpace, 64>;
+/// Upper bounds for the scratch tables in ClipPolytopeVsPolytope. A supporting face in the v1 shape
+/// set has at most 8 vertices (a tesseract's cubic cell), so these are generous.
+static constexpr int cMaxClipHalfSpaces = 64;
+static constexpr int cMaxClipVertices = 32;
+
+using ClipHalfSpaces = StaticArray<ClipHalfSpace, cMaxClipHalfSpaces>;
 
 /// Derive the supporting halfspaces of the convex hull of inVertices, within the hyperplane
 /// perpendicular to inAxis.
@@ -70,10 +75,30 @@ void GetClipHalfSpaces(const VERTEX_ARRAY &inVertices, Vec4Arg inAxis, ClipHalfS
 				float normal_len_sq = normal.LengthSq();
 				if (normal_len_sq < FLT_EPSILON)
 					continue; // Degenerate triple (collinear, or the facet contains the axis)
+
+				// Discard a plane we already have before doing anything expensive with it. Many
+				// triples describe the same facet - a cube cell has 8 vertices and C(8,3) = 56
+				// triples but at most 12 facets - so both the normalization (a square root) and the
+				// support scan below are wasted on most of them. The stored normals are unit, so a
+				// candidate is parallel to one when dot^2 is |candidate|^2, and then the plane's
+				// distance can be read off the stored normal without normalizing the candidate.
+				bool duplicate = false;
+				for (const ClipHalfSpace &h : outHalfSpaces)
+				{
+					float dot = h.mNormal.Dot(normal);
+					if (dot * dot > 0.998f * normal_len_sq && abs(h.mNormal.Dot(origin) - h.mDistance) < dist_tolerance)
+					{
+						duplicate = true;
+						break;
+					}
+				}
+				if (duplicate)
+					continue;
+
 				normal = normal / sqrt(normal_len_sq);
+				float d = normal.Dot(origin);
 
 				// Keep the triple only if it supports the whole set
-				float d = normal.Dot(origin);
 				bool all_below = true, all_above = true;
 				for (int m = 0; m < n; ++m)
 				{
@@ -93,15 +118,7 @@ void GetClipHalfSpaces(const VERTEX_ARRAY &inVertices, Vec4Arg inAxis, ClipHalfS
 					d = -d;
 				}
 
-				// Several triples describe the same facet, so skip one we already have
-				bool duplicate = false;
-				for (const ClipHalfSpace &h : outHalfSpaces)
-					if (h.mNormal.Dot(normal) > 0.999f && abs(h.mDistance - d) < dist_tolerance)
-					{
-						duplicate = true;
-						break;
-					}
-				if (!duplicate && outHalfSpaces.size() < outHalfSpaces.capacity())
+				if (outHalfSpaces.size() < outHalfSpaces.capacity())
 					outHalfSpaces.push_back({ normal, d });
 			}
 }
@@ -175,9 +192,8 @@ void ClipPolytopeVsPolytope(const VERTEX_ARRAY &inPolytopeToClip, const VERTEX_A
 	if (n_clip == 0 || n_clipper == 0)
 		return;
 
-	ClipHalfSpaces clipper_planes, to_clip_planes;
+	ClipHalfSpaces clipper_planes;
 	GetClipHalfSpaces(inClippingPolytope, inAxis, clipper_planes);
-	GetClipHalfSpaces(inPolytopeToClip, inAxis, to_clip_planes);
 	if (clipper_planes.empty())
 		return;
 
@@ -190,6 +206,35 @@ void ClipPolytopeVsPolytope(const VERTEX_ARRAY &inPolytopeToClip, const VERTEX_A
 	for (int i = 0; i < n_clip; ++i)
 		extent = max(extent, (inPolytopeToClip[i] - centroid).Length());
 	float tolerance = 1.0e-4f * max(extent, FLT_EPSILON);
+
+	// Fast path: the polytope is entirely inside the clipper, so the intersection is the polytope
+	// itself. This is the common case in a resting stack - a box face landing inside a larger face,
+	// or two equal boxes flush - and it skips the clipper's facet enumeration for the second
+	// polytope plus every segment test. It is exact, not an approximation: if P is contained in Q
+	// then no vertex of Q lies strictly inside P (a vertex of Q is extreme in Q, so it cannot be
+	// interior to a subset of it) and no segment of P crosses the boundary of Q.
+	bool all_inside = true;
+	for (int i = 0; i < n_clip && all_inside; ++i)
+		all_inside = IsInsideClipHalfSpaces(inPolytopeToClip[i], clipper_planes, tolerance);
+	if (all_inside)
+	{
+		for (int i = 0; i < n_clip && outClippedPolytope.size() < outClippedPolytope.capacity(); ++i)
+		{
+			bool duplicate = false;
+			for (const Vec4 &existing : outClippedPolytope)
+				if ((existing - inPolytopeToClip[i]).LengthSq() < Square(tolerance))
+				{
+					duplicate = true;
+					break;
+				}
+			if (!duplicate)
+				outClippedPolytope.push_back(inPolytopeToClip[i]);
+		}
+		return;
+	}
+
+	ClipHalfSpaces to_clip_planes;
+	GetClipHalfSpaces(inPolytopeToClip, inAxis, to_clip_planes);
 
 	// The 3-flat of the polytope being clipped, so results can be lifted back onto it along the axis
 	Vec4 plane_origin = inPolytopeToClip[0];
@@ -222,41 +267,94 @@ void ClipPolytopeVsPolytope(const VERTEX_ARRAY &inPolytopeToClip, const VERTEX_A
 		outClippedPolytope.push_back(p);
 	};
 
-	// Vertices of the clipped polytope that are inside the clipper
-	for (int i = 0; i < n_clip; ++i)
-		if (IsInsideClipHalfSpaces(inPolytopeToClip[i], clipper_planes, tolerance))
-			add_point(inPolytopeToClip[i]);
+	// Vertices of one polytope that are inside the other, plus the crossings of all vertex pairs.
+	// Each vertex's signed distance to each halfspace is computed once up front: the planes are
+	// affine, so a segment's entry/exit parameters follow from its endpoints' distances alone
+	// (n . (B - A) is just dist_B - dist_A), which takes every dot product out of the O(n^2)
+	// segment loop below. For a cube cell against a cube cell that is 28 segments x 6 planes of
+	// arithmetic instead of 28 x 6 x 2 dot products.
+	auto clip_against = [&](const VERTEX_ARRAY &inVerts, int inNumVerts, const ClipHalfSpaces &inPlanes, const ClipHalfSpaces &inOwnPlanes)
+	{
+		if (inPlanes.empty())
+			return;
 
-	// Vertices of the clipper that are inside the clipped polytope
-	if (!to_clip_planes.empty())
-		for (int i = 0; i < n_clipper; ++i)
-			if (IsInsideClipHalfSpaces(inClippingPolytope[i], to_clip_planes, tolerance))
-				add_point(inClippingPolytope[i]);
+		int n_planes = int(inPlanes.size());
+		float dist[cMaxClipVertices][cMaxClipHalfSpaces];
+		int n = min(inNumVerts, int(cMaxClipVertices));
+		for (int i = 0; i < n; ++i)
+			for (int h = 0; h < n_planes; ++h)
+				dist[i][h] = inPlanes[h].mNormal.Dot(inVerts[i]) - inPlanes[h].mDistance;
 
-	// Crossings: clip every segment of one polytope against the other
-	for (int i = 0; i < n_clip; ++i)
-		for (int j = i + 1; j < n_clip; ++j)
+		for (int i = 0; i < n; ++i)
 		{
-			float t0, t1;
-			if (ClipSegmentVsHalfSpaces(inPolytopeToClip[i], inPolytopeToClip[j], clipper_planes, tolerance, t0, t1))
-			{
-				Vec4 d = inPolytopeToClip[j] - inPolytopeToClip[i];
-				if (t0 > 0.0f) add_point(inPolytopeToClip[i] + t0 * d);
-				if (t1 < 1.0f) add_point(inPolytopeToClip[i] + t1 * d);
-			}
+			bool inside = true;
+			for (int h = 0; h < n_planes && inside; ++h)
+				inside = dist[i][h] <= tolerance;
+			if (inside)
+				add_point(inVerts[i]);
 		}
-	if (!to_clip_planes.empty())
-		for (int i = 0; i < n_clipper; ++i)
-			for (int j = i + 1; j < n_clipper; ++j)
+
+		// Which of this polytope's own facets each vertex lies on. Two vertices of a convex polytope
+		// span an edge exactly when they share at least two facets, so this picks the real edges out
+		// of the n^2 vertex pairs - 12 instead of 28 for a cube cell. It is not only cheaper: a
+		// chord that is not an edge can cross the other polytope's boundary at points that are not
+		// vertices of the intersection, which is where the spurious extra points came from.
+		uint64 facet_mask[cMaxClipVertices];
+		int n_own = min(int(inOwnPlanes.size()), 64);
+		bool have_edges = n_own >= 2;
+		if (have_edges)
+			for (int i = 0; i < n; ++i)
 			{
-				float t0, t1;
-				if (ClipSegmentVsHalfSpaces(inClippingPolytope[i], inClippingPolytope[j], to_clip_planes, tolerance, t0, t1))
+				uint64 m = 0;
+				for (int h = 0; h < n_own; ++h)
+					if (abs(inOwnPlanes[h].mNormal.Dot(inVerts[i]) - inOwnPlanes[h].mDistance) <= tolerance)
+						m |= uint64(1) << h;
+				facet_mask[i] = m;
+			}
+
+		for (int i = 0; i < n; ++i)
+			for (int j = i + 1; j < n; ++j)
+			{
+				if (have_edges && CountBits(uint32(facet_mask[i] & facet_mask[j])) + CountBits(uint32((facet_mask[i] & facet_mask[j]) >> 32)) < 2)
+					continue;
+
+				float t0 = 0.0f, t1 = 1.0f;
+				bool keep = true;
+				for (int h = 0; h < n_planes; ++h)
 				{
-					Vec4 d = inClippingPolytope[j] - inClippingPolytope[i];
-					if (t0 > 0.0f) add_point(inClippingPolytope[i] + t0 * d);
-					if (t1 < 1.0f) add_point(inClippingPolytope[i] + t1 * d);
+					float da = dist[i][h];
+					float dd = dist[j][h] - da;
+					if (abs(dd) < FLT_EPSILON)
+					{
+						if (da > tolerance)
+						{
+							keep = false;
+							break;
+						}
+						continue;
+					}
+					float t = -da / dd;
+					if (dd > 0.0f)
+						t1 = min(t1, t);	// Leaving the halfspace
+					else
+						t0 = max(t0, t);	// Entering it
+					if (t0 > t1)
+					{
+						keep = false;
+						break;
+					}
+				}
+				if (keep)
+				{
+					Vec4 d = inVerts[j] - inVerts[i];
+					if (t0 > 0.0f) add_point(inVerts[i] + t0 * d);
+					if (t1 < 1.0f) add_point(inVerts[i] + t1 * d);
 				}
 			}
+	};
+
+	clip_against(inPolytopeToClip, n_clip, clipper_planes, to_clip_planes);
+	clip_against(inClippingPolytope, n_clipper, to_clip_planes, clipper_planes);
 }
 
 #ifdef JPH_ENABLE_2D_POLY_CLIPPING

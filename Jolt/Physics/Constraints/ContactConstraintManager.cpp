@@ -20,6 +20,18 @@
 #endif // JPH_DEBUG_RENDERER
 
 JPH_NAMESPACE_BEGIN
+#ifdef JPH_WORK_COUNTERS
+#include <atomic>
+#include <cstdio>
+struct WC { std::atomic<unsigned long long> mConstraints{0}, mPoints{0};
+  ~WC(){ if(mConstraints.load()) fprintf(stderr,"\nWORK: contact constraints=%llu manifold points=%llu (%.2f pts/constraint)\n",
+    (unsigned long long)mConstraints.load(),(unsigned long long)mPoints.load(),double(mPoints.load())/mConstraints.load()); } };
+inline WC gWC;
+#define JPH_WC(n) { gWC.mConstraints++; gWC.mPoints += (n); }
+#else
+#define JPH_WC(n)
+#endif
+
 
 using namespace literals;
 
@@ -47,7 +59,7 @@ void ContactConstraintManager::WorldContactPoint::CalculateNonPenetrationConstra
 }
 
 template <EMotionType Type1, EMotionType Type2>
-JPH_INLINE void ContactConstraintManager::WorldContactPoint::TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(float inDeltaTime, Vec4Arg inGravity, const Body &inBody1, const Body &inBody2, float inInvM1, float inInvM2, RotorArg inRotation1, float inInvInertiaScale1, RotorArg inRotation2, float inInvInertiaScale2, RVec4Arg inWorldSpacePosition1, RVec4Arg inWorldSpacePosition2, Vec4Arg inWorldSpaceNormal, Vec4Arg inWorldSpaceTangent1, Vec4Arg inWorldSpaceTangent2, Vec4Arg inWorldSpaceTangent3, const ContactSettings &inSettings, float inMinVelocityForRestitution)
+JPH_INLINE void ContactConstraintManager::WorldContactPoint::TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(float inDeltaTime, Vec4Arg inGravity, const Body &inBody1, const Body &inBody2, float inInvM1, float inInvM2, const InverseInertiaOperator &inInvI1, const InverseInertiaOperator &inInvI2, RVec4Arg inWorldSpacePosition1, RVec4Arg inWorldSpacePosition2, Vec4Arg inWorldSpaceNormal, Vec4Arg inWorldSpaceTangent1, Vec4Arg inWorldSpaceTangent2, Vec4Arg inWorldSpaceTangent3, const ContactSettings &inSettings, float inMinVelocityForRestitution)
 {
 	JPH_DET_LOG("TemplatedCalculateFrictionAndNonPenetrationConstraintProperties: p1: " << inWorldSpacePosition1 << " p2: " << inWorldSpacePosition2
 		<< " normal: " << inWorldSpaceNormal << " tangent1: " << inWorldSpaceTangent1 << " tangent2: " << inWorldSpaceTangent2 << " tangent3: " << inWorldSpaceTangent3
@@ -142,7 +154,7 @@ JPH_INLINE void ContactConstraintManager::WorldContactPoint::TemplatedCalculateF
 		normal_velocity_bias = speculative_contact_velocity_bias;
 	}
 
-	mNonPenetrationConstraint.TemplatedCalculateConstraintProperties<Type1, Type2>(inInvM1, inRotation1, mp1, inInvInertiaScale1, r1, inInvM2, inRotation2, mp2, inInvInertiaScale2, r2, inWorldSpaceNormal, normal_velocity_bias);
+	mNonPenetrationConstraint.TemplatedCalculateConstraintProperties<Type1, Type2>(inInvM1, inInvI1, r1, inInvM2, inInvI2, r2, inWorldSpaceNormal, normal_velocity_bias);
 
 	// Calculate friction part
 	if (inSettings.mCombinedFriction > 0.0f)
@@ -156,9 +168,9 @@ JPH_INLINE void ContactConstraintManager::WorldContactPoint::TemplatedCalculateF
 
 		// TODO(4D): implement friction as 3 AxisConstraintParts -- the tangent space of a 4D contact is
 		// 3 dimensional, so Coulomb friction needs 3 directions instead of 2.
-		mFrictionConstraint1.TemplatedCalculateConstraintProperties<Type1, Type2>(inInvM1, inRotation1, mp1, inInvInertiaScale1, r1, inInvM2, inRotation2, mp2, inInvInertiaScale2, r2, inWorldSpaceTangent1, surface_velocity1);
-		mFrictionConstraint2.TemplatedCalculateConstraintProperties<Type1, Type2>(inInvM1, inRotation1, mp1, inInvInertiaScale1, r1, inInvM2, inRotation2, mp2, inInvInertiaScale2, r2, inWorldSpaceTangent2, surface_velocity2);
-		mFrictionConstraint3.TemplatedCalculateConstraintProperties<Type1, Type2>(inInvM1, inRotation1, mp1, inInvInertiaScale1, r1, inInvM2, inRotation2, mp2, inInvInertiaScale2, r2, inWorldSpaceTangent3, surface_velocity3);
+		mFrictionConstraint1.TemplatedCalculateConstraintProperties<Type1, Type2>(inInvM1, inInvI1, r1, inInvM2, inInvI2, r2, inWorldSpaceTangent1, surface_velocity1);
+		mFrictionConstraint2.TemplatedCalculateConstraintProperties<Type1, Type2>(inInvM1, inInvI1, r1, inInvM2, inInvI2, r2, inWorldSpaceTangent2, surface_velocity2);
+		mFrictionConstraint3.TemplatedCalculateConstraintProperties<Type1, Type2>(inInvM1, inInvI1, r1, inInvM2, inInvI2, r2, inWorldSpaceTangent3, surface_velocity3);
 	}
 	else
 	{
@@ -733,16 +745,16 @@ void ContactConstraintManager::PrepareConstraintBuffer(PhysicsUpdateContext *inC
 template <EMotionType Type1, EMotionType Type2>
 JPH_INLINE void ContactConstraintManager::TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(ContactConstraint &ioConstraint, const ContactSettings &inSettings, float inDeltaTime, Vec4Arg inGravity, RMat44Arg inTransformBody1, RMat44Arg inTransformBody2, const Body &inBody1, const Body &inBody2)
 {
-	// Calculate scaled mass. TODO(4D): the world space inverse inertia is no longer a Mat44 that can be
-	// precomputed here -- it is a 6x6 operator on bivectors, applied through the body's rotor by
-	// MotionProperties::MultiplyWorldSpaceInverseInertiaByVector. We pass the rotor + scale instead.
-	Rotor rotation1 = inTransformBody1.GetRotor();
+	// Calculate scaled mass and the world space inverse inertia. TODO(4D): the inverse inertia is a
+	// 6x6 operator on bivectors rather than upstream's Mat44, but like upstream's it is built once
+	// here and reused by all 24 rows of the contact - see InverseInertiaOperator.
+	InverseInertiaOperator inv_i1 = Type1 == EMotionType::Dynamic? inBody1.GetMotionPropertiesUnchecked()->GetInverseInertiaForRotation(inTransformBody1.GetRotor(), inSettings.mInvInertiaScale1) : InverseInertiaOperator::sZero();
 	if constexpr (Type1 == EMotionType::Dynamic)
 		ioConstraint.mInvMass1 = inSettings.mInvMassScale1 * inBody1.GetMotionPropertiesUnchecked()->GetInverseMass();
 	else
 		ioConstraint.mInvMass1 = 0.0f;
 
-	Rotor rotation2 = inTransformBody2.GetRotor();
+	InverseInertiaOperator inv_i2 = Type2 == EMotionType::Dynamic? inBody2.GetMotionPropertiesUnchecked()->GetInverseInertiaForRotation(inTransformBody2.GetRotor(), inSettings.mInvInertiaScale2) : InverseInertiaOperator::sZero();
 	if constexpr (Type2 == EMotionType::Dynamic)
 		ioConstraint.mInvMass2 = inSettings.mInvMassScale2 * inBody2.GetMotionPropertiesUnchecked()->GetInverseMass();
 	else
@@ -760,7 +772,7 @@ JPH_INLINE void ContactConstraintManager::TemplatedCalculateFrictionAndNonPenetr
 	{
 		RVec4 p1 = inTransformBody1 * Vec4::sLoadFloat4(&wcp.mContactPoint->mPosition1);
 		RVec4 p2 = inTransformBody2 * Vec4::sLoadFloat4(&wcp.mContactPoint->mPosition2);
-		wcp.TemplatedCalculateFrictionAndNonPenetrationConstraintProperties<Type1, Type2>(inDeltaTime, inGravity, inBody1, inBody2, ioConstraint.mInvMass1, ioConstraint.mInvMass2, rotation1, inSettings.mInvInertiaScale1, rotation2, inSettings.mInvInertiaScale2, p1, p2, ws_normal, t1, t2, t3, inSettings, min_velocity_for_restitution);
+		wcp.TemplatedCalculateFrictionAndNonPenetrationConstraintProperties<Type1, Type2>(inDeltaTime, inGravity, inBody1, inBody2, ioConstraint.mInvMass1, ioConstraint.mInvMass2, inv_i1, inv_i2, p1, p2, ws_normal, t1, t2, t3, inSettings, min_velocity_for_restitution);
 	}
 }
 
@@ -964,11 +976,12 @@ void ContactConstraintManager::GetContactsFromCache(ContactAllocator &ioContactA
 			constraint.mBody1 = body1;
 			constraint.mBody2 = body2;
 			constraint.mSortKey = input_hash;
-			world_space_normal.StoreFloat4(&constraint.mWorldSpaceNormal);
+			constraint.SetWorldSpaceNormal(world_space_normal);
 			constraint.mCombinedFriction = settings.mCombinedFriction;
 			constraint.mInvInertiaScale1 = settings.mInvInertiaScale1;
 			constraint.mInvInertiaScale2 = settings.mInvInertiaScale2;
 			constraint.mContactPoints.resize(output_cm->mNumContactPoints);
+			JPH_WC(output_cm->mNumContactPoints)
 			for (uint32 i = 0; i < output_cm->mNumContactPoints; ++i)
 			{
 				CachedContactPoint &ccp = output_cm->mContactPoints[i];
@@ -1144,7 +1157,7 @@ bool ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 		constraint.mBody1 = &inBody1;
 		constraint.mBody2 = &inBody2;
 		constraint.mSortKey = key_hash;
-		inManifold.mWorldSpaceNormal.StoreFloat4(&constraint.mWorldSpaceNormal);
+		constraint.SetWorldSpaceNormal(inManifold.mWorldSpaceNormal);
 		constraint.mCombinedFriction = settings.mCombinedFriction;
 		constraint.mInvInertiaScale1 = settings.mInvInertiaScale1;
 		constraint.mInvInertiaScale2 = settings.mInvInertiaScale2;
@@ -1158,16 +1171,15 @@ bool ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 		float delta_time = mUpdateContext->mStepDeltaTime;
 		Vec4 gravity = mUpdateContext->mPhysicsSystem->GetGravity();
 
-		// Calculate scaled mass. TODO(4D): see the note in
-		// TemplatedCalculateFrictionAndNonPenetrationConstraintProperties -- the world space inverse
-		// inertia is a 6x6 bivector operator applied through the body rotor, not a precomputable Mat44.
-		Rotor rotation1 = inBody1.GetRotation();
+		// Calculate scaled mass and the world space inverse inertia; see the note in
+		// TemplatedCalculateFrictionAndNonPenetrationConstraintProperties
+		InverseInertiaOperator inv_i1 = Type1 == EMotionType::Dynamic? inBody1.GetMotionPropertiesUnchecked()->GetInverseInertiaForRotation(inBody1.GetRotation(), settings.mInvInertiaScale1) : InverseInertiaOperator::sZero();
 		if constexpr (Type1 == EMotionType::Dynamic)
 			constraint.mInvMass1 = settings.mInvMassScale1 * inBody1.GetMotionPropertiesUnchecked()->GetInverseMass();
 		else
 			constraint.mInvMass1 = 0.0f;
 
-		Rotor rotation2 = inBody2.GetRotation();
+		InverseInertiaOperator inv_i2 = Type2 == EMotionType::Dynamic? inBody2.GetMotionPropertiesUnchecked()->GetInverseInertiaForRotation(inBody2.GetRotation(), settings.mInvInertiaScale2) : InverseInertiaOperator::sZero();
 		if constexpr (Type2 == EMotionType::Dynamic)
 			constraint.mInvMass2 = settings.mInvMassScale2 * inBody2.GetMotionPropertiesUnchecked()->GetInverseMass();
 		else
@@ -1178,6 +1190,7 @@ bool ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 		constraint.GetTangents(t1, t2, t3);
 
 		constraint.mContactPoints.resize(num_contact_points);
+		JPH_WC(num_contact_points)
 		for (int i = 0; i < num_contact_points; ++i)
 		{
 			// Convert to world space and set positions
@@ -1218,7 +1231,7 @@ bool ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 			wcp.mContactPoint = &cp;
 
 			// Setup velocity constraint
-			wcp.TemplatedCalculateFrictionAndNonPenetrationConstraintProperties<Type1, Type2>(delta_time, gravity, inBody1, inBody2, constraint.mInvMass1, constraint.mInvMass2, rotation1, settings.mInvInertiaScale1, rotation2, settings.mInvInertiaScale2, p1_ws, p2_ws, inManifold.mWorldSpaceNormal, t1, t2, t3, settings, mPhysicsSettings.mMinVelocityForRestitution);
+			wcp.TemplatedCalculateFrictionAndNonPenetrationConstraintProperties<Type1, Type2>(delta_time, gravity, inBody1, inBody2, constraint.mInvMass1, constraint.mInvMass2, inv_i1, inv_i2, p1_ws, p2_ws, inManifold.mWorldSpaceNormal, t1, t2, t3, settings, mPhysicsSettings.mMinVelocityForRestitution);
 		}
 
 	#ifdef JPH_DEBUG_RENDERER

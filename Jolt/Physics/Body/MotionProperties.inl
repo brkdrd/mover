@@ -82,6 +82,43 @@ Bivec MotionProperties::MultiplyWorldSpaceInverseInertiaByVector(RotorArg inBody
 	return Bivec::sAnd(result, angular_dofs_mask);
 }
 
+InverseInertiaOperator MotionProperties::GetInverseInertiaForRotation(RotorArg inBodyRotation, float inInvInertiaScale) const
+{
+	JPH_ASSERT(mCachedMotionType == EMotionType::Dynamic);
+
+	// I_world^-1 = Ad(R) D^-1 Ad(R)^T with R = body_rotation * inertia_rotation. Ad(R) is orthogonal,
+	// so Ad(R)^-1 = Ad(R)^T and the operator is symmetric:
+	//   col_k = Ad(R) D^-1 Ad(R)^T e_k = sum_j d_j * (A_j . e_k) * A_j,   A_j = Ad(R) e_j
+	// Ad(R)(e_i ^ e_j) is (R e_i ~R) ^ (R e_j ~R), so all six A_j come from the same four sandwich
+	// products - the whole cost of RotateBivec, paid once for the entire operator.
+	Rotor combined = inBodyRotation * mInertiaRotation;
+	Vec4 f1 = combined * Vec4::sAxisX();
+	Vec4 f2 = combined * Vec4::sAxisY();
+	Vec4 f3 = combined * Vec4::sAxisZ();
+	Vec4 f4 = combined * Vec4::sAxisW();
+
+	Bivec a[6] = { Bivec::sWedge(f1, f2), Bivec::sWedge(f1, f3), Bivec::sWedge(f1, f4),
+				   Bivec::sWedge(f2, f3), Bivec::sWedge(f2, f4), Bivec::sWedge(f3, f4) };
+
+	// Mask and scale the diagonal once rather than masking every result
+	Bivec mask = GetAngularDOFsBivecMask();
+	Bivec inv_d = Bivec::sAnd(mInvInertiaDiagonal, mask) * inInvInertiaScale;
+
+	InverseInertiaOperator op;
+	for (int k = 0; k < 6; ++k)
+	{
+		Vec8 col = Vec8::sZero();
+		for (int j = 0; j < 6; ++j)
+			col = col + a[j].GetVec8() * Vec8::sReplicate(inv_d[j] * a[j][k]);
+
+		// Rows of locked DOFs have to come out zero too; the operator is symmetric, so masking the
+		// column is what masking the row would do
+		op.mColumn[k] = Bivec::sAnd(Bivec(col), mask);
+	}
+
+	return op;
+}
+
 void MotionProperties::ApplyGyroscopicForceInternal(RotorArg inBodyRotation, float inDeltaTime)
 {
 	JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite));

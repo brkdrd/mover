@@ -30,10 +30,12 @@ JPH_NAMESPACE_BEGIN
 /// u = p2 - p1, x1/x2 = center of mass. v = [v1, w1, v2, w2] with w1/w2 bivector angular velocities.
 class AxisConstraintPart
 {
-	/// Apply the world-space inverse inertia (scaled) to a bivector.
-	static JPH_INLINE Bivec		sApplyInvInertia(RotorArg inRotation, const MotionProperties *inMP, float inInvInertiaScale, BivecArg inV)
+	/// Build the world-space inverse inertia operator for a body, or a zero operator if it has none.
+	/// TODO(4D): the operator is built once per body here and reused for every row; see
+	/// InverseInertiaOperator for why that matters far more in 4D than it does in 3D.
+	static JPH_INLINE InverseInertiaOperator sGetInvInertia(const Body &inBody, float inInvInertiaScale)
 	{
-		return inInvInertiaScale * inMP->MultiplyWorldSpaceInverseInertiaByVector(inRotation, inV);
+		return inBody.IsDynamic()? inBody.GetMotionPropertiesUnchecked()->GetInverseInertiaForRotation(inBody.GetRotation(), inInvInertiaScale) : InverseInertiaOperator::sZero();
 	}
 
 	/// Internal helper function to update velocities of bodies after Lagrange multiplier is calculated
@@ -62,7 +64,7 @@ class AxisConstraintPart
 
 	/// Internal helper function to calculate the inverse effective mass
 	template <EMotionType Type1, EMotionType Type2>
-	JPH_INLINE float			TemplatedCalculateInverseEffectiveMass(float inInvMass1, RotorArg inRotation1, const MotionProperties *inMP1, float inInvInertiaScale1, Vec4Arg inR1PlusU, float inInvMass2, RotorArg inRotation2, const MotionProperties *inMP2, float inInvInertiaScale2, Vec4Arg inR2, Vec4Arg inWorldSpaceAxis)
+	JPH_INLINE float			TemplatedCalculateInverseEffectiveMass(float inInvMass1, const InverseInertiaOperator &inInvI1, Vec4Arg inR1PlusU, float inInvMass2, const InverseInertiaOperator &inInvI2, Vec4Arg inR2, Vec4Arg inWorldSpaceAxis)
 	{
 		JPH_ASSERT(inWorldSpaceAxis.IsNormalized(1.0e-5f));
 
@@ -79,7 +81,7 @@ class AxisConstraintPart
 
 		if constexpr (Type1 == EMotionType::Dynamic)
 		{
-			mInvI1_R1PlusUxAxis = sApplyInvInertia(inRotation1, inMP1, inInvInertiaScale1, mR1PlusUxAxis);
+			mInvI1_R1PlusUxAxis = inInvI1.Multiply(mR1PlusUxAxis);
 			inv_effective_mass = inInvMass1 + mInvI1_R1PlusUxAxis.Dot(mR1PlusUxAxis);
 		}
 		else
@@ -89,7 +91,7 @@ class AxisConstraintPart
 
 		if constexpr (Type2 == EMotionType::Dynamic)
 		{
-			mInvI2_R2xAxis = sApplyInvInertia(inRotation2, inMP2, inInvInertiaScale2, mR2xAxis);
+			mInvI2_R2xAxis = inInvI2.Multiply(mR2xAxis);
 			inv_effective_mass += inInvMass2 + mInvI2_R2xAxis.Dot(mR2xAxis);
 		}
 
@@ -105,10 +107,9 @@ class AxisConstraintPart
 	/// Internal helper function to calculate the inverse effective mass, version that supports mass scaling
 	JPH_INLINE float			CalculateInverseEffectiveMassWithMassOverride(const Body &inBody1, float inInvMass1, float inInvInertiaScale1, Vec4Arg inR1PlusU, const Body &inBody2, float inInvMass2, float inInvInertiaScale2, Vec4Arg inR2, Vec4Arg inWorldSpaceAxis)
 	{
-		Rotor rot1 = inBody1.GetRotation();
-		const MotionProperties *mp1 = inBody1.GetMotionPropertiesUnchecked();
-		Rotor rot2 = inBody2.GetRotation();
-		const MotionProperties *mp2 = inBody2.GetMotionPropertiesUnchecked();
+		InverseInertiaOperator inv_i1 = sGetInvInertia(inBody1, inInvInertiaScale1);
+		InverseInertiaOperator inv_i2 = sGetInvInertia(inBody2, inInvInertiaScale2);
+		InverseInertiaOperator zero = InverseInertiaOperator::sZero();
 
 		// Dispatch to the correct templated form
 		switch (inBody1.GetMotionType())
@@ -117,13 +118,13 @@ class AxisConstraintPart
 			switch (inBody2.GetMotionType())
 			{
 			case EMotionType::Dynamic:
-				return TemplatedCalculateInverseEffectiveMass<EMotionType::Dynamic, EMotionType::Dynamic>(inInvMass1, rot1, mp1, inInvInertiaScale1, inR1PlusU, inInvMass2, rot2, mp2, inInvInertiaScale2, inR2, inWorldSpaceAxis);
+				return TemplatedCalculateInverseEffectiveMass<EMotionType::Dynamic, EMotionType::Dynamic>(inInvMass1, inv_i1, inR1PlusU, inInvMass2, inv_i2, inR2, inWorldSpaceAxis);
 
 			case EMotionType::Kinematic:
-				return TemplatedCalculateInverseEffectiveMass<EMotionType::Dynamic, EMotionType::Kinematic>(inInvMass1, rot1, mp1, inInvInertiaScale1, inR1PlusU, 0.0f, Rotor::sIdentity(), nullptr, 0.0f, inR2, inWorldSpaceAxis);
+				return TemplatedCalculateInverseEffectiveMass<EMotionType::Dynamic, EMotionType::Kinematic>(inInvMass1, inv_i1, inR1PlusU, 0.0f, zero, inR2, inWorldSpaceAxis);
 
 			case EMotionType::Static:
-				return TemplatedCalculateInverseEffectiveMass<EMotionType::Dynamic, EMotionType::Static>(inInvMass1, rot1, mp1, inInvInertiaScale1, inR1PlusU, 0.0f, Rotor::sIdentity(), nullptr, 0.0f, inR2, inWorldSpaceAxis);
+				return TemplatedCalculateInverseEffectiveMass<EMotionType::Dynamic, EMotionType::Static>(inInvMass1, inv_i1, inR1PlusU, 0.0f, zero, inR2, inWorldSpaceAxis);
 
 			default:
 				break;
@@ -132,11 +133,11 @@ class AxisConstraintPart
 
 		case EMotionType::Kinematic:
 			JPH_ASSERT(inBody2.IsDynamic());
-			return TemplatedCalculateInverseEffectiveMass<EMotionType::Kinematic, EMotionType::Dynamic>(0.0f, Rotor::sIdentity(), nullptr, 0.0f, inR1PlusU, inInvMass2, rot2, mp2, inInvInertiaScale2, inR2, inWorldSpaceAxis);
+			return TemplatedCalculateInverseEffectiveMass<EMotionType::Kinematic, EMotionType::Dynamic>(0.0f, zero, inR1PlusU, inInvMass2, inv_i2, inR2, inWorldSpaceAxis);
 
 		case EMotionType::Static:
 			JPH_ASSERT(inBody2.IsDynamic());
-			return TemplatedCalculateInverseEffectiveMass<EMotionType::Static, EMotionType::Dynamic>(0.0f, Rotor::sIdentity(), nullptr, 0.0f, inR1PlusU, inInvMass2, rot2, mp2, inInvInertiaScale2, inR2, inWorldSpaceAxis);
+			return TemplatedCalculateInverseEffectiveMass<EMotionType::Static, EMotionType::Dynamic>(0.0f, zero, inR1PlusU, inInvMass2, inv_i2, inR2, inWorldSpaceAxis);
 
 		default:
 			break;
@@ -149,9 +150,9 @@ class AxisConstraintPart
 public:
 	/// Templated form of CalculateConstraintProperties with the motion types baked in
 	template <EMotionType Type1, EMotionType Type2>
-	JPH_INLINE void				TemplatedCalculateConstraintProperties(float inInvMass1, RotorArg inRotation1, const MotionProperties *inMP1, float inInvInertiaScale1, Vec4Arg inR1PlusU, float inInvMass2, RotorArg inRotation2, const MotionProperties *inMP2, float inInvInertiaScale2, Vec4Arg inR2, Vec4Arg inWorldSpaceAxis, float inBias = 0.0f)
+	JPH_INLINE void				TemplatedCalculateConstraintProperties(float inInvMass1, const InverseInertiaOperator &inInvI1, Vec4Arg inR1PlusU, float inInvMass2, const InverseInertiaOperator &inInvI2, Vec4Arg inR2, Vec4Arg inWorldSpaceAxis, float inBias = 0.0f)
 	{
-		float inv_effective_mass = TemplatedCalculateInverseEffectiveMass<Type1, Type2>(inInvMass1, inRotation1, inMP1, inInvInertiaScale1, inR1PlusU, inInvMass2, inRotation2, inMP2, inInvInertiaScale2, inR2, inWorldSpaceAxis);
+		float inv_effective_mass = TemplatedCalculateInverseEffectiveMass<Type1, Type2>(inInvMass1, inInvI1, inR1PlusU, inInvMass2, inInvI2, inR2, inWorldSpaceAxis);
 
 		if (inv_effective_mass == 0.0f)
 			Deactivate();

@@ -427,7 +427,7 @@ private:
 		void					CalculateNonPenetrationConstraintProperties(const Body &inBody1, float inInvMass1, float inInvInertiaScale1, const Body &inBody2, float inInvMass2, float inInvInertiaScale2, RVec4Arg inWorldSpacePosition1, RVec4Arg inWorldSpacePosition2, Vec4Arg inWorldSpaceNormal);
 
 		template <EMotionType Type1, EMotionType Type2>
-		JPH_INLINE void			TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(float inDeltaTime, Vec4Arg inGravity, const Body &inBody1, const Body &inBody2, float inInvM1, float inInvM2, RotorArg inRotation1, float inInvInertiaScale1, RotorArg inRotation2, float inInvInertiaScale2, RVec4Arg inWorldSpacePosition1, RVec4Arg inWorldSpacePosition2, Vec4Arg inWorldSpaceNormal, Vec4Arg inWorldSpaceTangent1, Vec4Arg inWorldSpaceTangent2, Vec4Arg inWorldSpaceTangent3, const ContactSettings &inSettings, float inMinVelocityForRestitution);
+		JPH_INLINE void			TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(float inDeltaTime, Vec4Arg inGravity, const Body &inBody1, const Body &inBody2, float inInvM1, float inInvM2, const InverseInertiaOperator &inInvI1, const InverseInertiaOperator &inInvI2, RVec4Arg inWorldSpacePosition1, RVec4Arg inWorldSpacePosition2, Vec4Arg inWorldSpaceNormal, Vec4Arg inWorldSpaceTangent1, Vec4Arg inWorldSpaceTangent2, Vec4Arg inWorldSpaceTangent3, const ContactSettings &inSettings, float inMinVelocityForRestitution);
 
 		/// The constraint parts
 		AxisConstraintPart		mNonPenetrationConstraint;
@@ -459,15 +459,37 @@ private:
 		/// Get the tangents for this contact constraint.
 		/// TODO(4D): there are 3 of them -- the space perpendicular to a 4D contact normal is a
 		/// hyperplane, so Coulomb friction acts in a 3D tangent space instead of a 2D one.
+		/// TODO(4D): cached rather than derived on the fly. In 3D a tangent frame is one
+		/// GetNormalizedPerpendicular plus a cross product; in 4D it is an orthonormal 3-frame,
+		/// which costs three square roots and a conditioning search. The solver asks for it once
+		/// per constraint per iteration, and the normal does not change within a step, so the frame
+		/// is built once when the normal is stored. The three Float4s cost 48 bytes against three
+		/// square roots x ten velocity iterations.
 		JPH_INLINE void			GetTangents(Vec4 &outTangent1, Vec4 &outTangent2, Vec4 &outTangent3) const
 		{
-			GetWorldSpaceNormal().GetNormalizedPerpendicularBasis(outTangent1, outTangent2, outTangent3);
+			outTangent1 = Vec4::sLoadFloat4(&mWorldSpaceTangent1);
+			outTangent2 = Vec4::sLoadFloat4(&mWorldSpaceTangent2);
+			outTangent3 = Vec4::sLoadFloat4(&mWorldSpaceTangent3);
+		}
+
+		/// Store the contact normal and derive the tangent frame from it
+		JPH_INLINE void			SetWorldSpaceNormal(Vec4Arg inNormal)
+		{
+			inNormal.StoreFloat4(&mWorldSpaceNormal);
+			Vec4 t1, t2, t3;
+			inNormal.GetNormalizedPerpendicularBasis(t1, t2, t3);
+			t1.StoreFloat4(&mWorldSpaceTangent1);
+			t2.StoreFloat4(&mWorldSpaceTangent2);
+			t3.StoreFloat4(&mWorldSpaceTangent3);
 		}
 
 		Body *					mBody1;
 		Body *					mBody2;
 		uint64					mSortKey;
 		Float4					mWorldSpaceNormal;
+		Float4					mWorldSpaceTangent1;
+		Float4					mWorldSpaceTangent2;
+		Float4					mWorldSpaceTangent3;
 		float					mCombinedFriction;
 		float					mInvMass1;
 		float					mInvInertiaScale1;

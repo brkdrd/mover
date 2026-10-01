@@ -118,20 +118,7 @@ public:
 	/// component = 0x00000000, result = 0.
 	JPH_INLINE static Bivec		sAnd(const Bivec &inV1, const Bivec &inV2)
 	{
-		// Bit-and per component through memcpy. A reinterpret_cast<uint32 *>(float *) here is
-		// strict-aliasing UB and is miscompiled at -O2/-O3 (the masked write is dropped).
-		Float8 f1, f2, out;
-		inV1.mValue.StoreFloat8(&f1);
-		inV2.mValue.StoreFloat8(&f2);
-		for (int i = 0; i < 8; ++i)
-		{
-			uint32 a, b;
-			memcpy(&a, &f1.mValue[i], sizeof(uint32));
-			memcpy(&b, &f2.mValue[i], sizeof(uint32));
-			uint32 r = a & b;
-			memcpy(&out.mValue[i], &r, sizeof(uint32));
-		}
-		return Bivec(out);
+		return Bivec(Vec8::sAnd(inV1.mValue, inV2.mValue));
 	}
 
 	///@}

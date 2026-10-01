@@ -21,18 +21,20 @@ got stuck.
 cmake -S Build -B build -DCMAKE_BUILD_TYPE=Release -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
 cmake --build build --target Jolt -j$(nproc)           # BUILDS CLEAN (headless v1)
 cmake --build build --target UnitTests -j$(nproc)      # builds and links
-./build/UnitTests                                     # runs: 371 cases, all pass
+./build/UnitTests                                     # runs: 378 cases, all pass
+cmake --build build --target HelloWorld -j$(nproc)    # add -DTARGET_HELLO_WORLD=ON when configuring
+./build/HelloWorld                                    # 4D smoke test; non-zero exit if a check fails
 ```
 
 **Current build status (verified 2026-08-08): the headless v1 library BUILDS CLEAN** — `libJolt.a`,
-0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 371
-cases, all 371 pass.** Build with the debug renderer OFF
+0 errors, down from ~2,790 at the start of Phase B. **`UnitTests` also builds, links and runs: 378
+cases, all 378 pass.** Build with the debug renderer OFF
 (`-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF`); v1 is headless.
 
 This replaces the old standalone Math-only runner — **run the real `./build/UnitTests` from now on.**
 (The recipe for the standalone runner is kept below only as a fallback.)
 
-### ✅ UnitTests is GREEN: 371 cases, all pass (2026-10-01)
+### ✅ UnitTests is GREEN: 378 cases, all pass (2026-10-01)
 Verified from a clean configure + build. The last failures were numerical accuracy, not logic, and
 the tolerances they checked were inherited verbatim from 3D Jolt; each was recalibrated from a
 measurement recorded next to the check. See the commit for the full table. In short:
@@ -258,10 +260,22 @@ g++ -O2 -std=c++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -pthr
 Once the library links, delete the standalone runner and run these through the normal
 `UnitTests` binary. The committed `build/UnitTests` binary predates all 4D tests; never cite it.
 
+Added 2026-10-01 (whole-scene dynamics): `UnitTests/Physics/WholeBodySimulationTests.cpp` drives the
+real `PhysicsSystem` update loop - free fall run once per axis (the W case is what catches an
+asymmetric fourth dimension; it found bug #16), free rotation vs the integrator, a tesseract at
+rest, a 5-high stack, and momentum / angular momentum (bivector `L = I·Ω + m(v ∧ x)`) / energy
+across a collision, plus bit-exact determinism. **Mutation-checked**: forcing
+`ManifoldBetweenTwoFaces` back to its single-point fallback fails 4 of the 7 cases (the loaded
+tesseract tips through 1.07 rad), so these really do test the manifold and not just the integrator.
+`PhysicsTestContext` is ported to RVec4/Rotor/Bivec and **registered again** - `PredictOrientation`
+mirrors `Body::AddRotationStep` rather than reimplementing it, and its temp allocator went 4 → 32 MB
+because a 4D `ContactConstraint` is 4128 bytes.
+
 Still missing: `Mat44Tests`/`Vec3Tests`/`QuatTests` test removed/legacy APIs and need rewriting
 or deletion (`DMat44Tests.cpp` was de-registered from cmake — its `DMat44.h` is gone); Lane4 has
 no dedicated suite (it is exercised transitively through Vec4Tests); no *whole-body* dynamics tests
-yet (integrator + solver over many steps, gyroscopic term, determinism — Phase C).
+beyond the above (gyroscopic term / 4D Dzhanibekov, restitution and friction coefficients,
+double-precision determinism — the rest of Phase C).
 
 ## Verified bugs (fix before building anything on top)
 
@@ -359,6 +373,14 @@ P1 — determinism / hygiene:
     for curved shapes) but a candidate is now accepted only if it raises the dimension of the
     simplex, falling back to probing perpendicular to the current span, then the coordinate axes.
 
+16. **[FIXED 2026-10-01]** ~~`PhysicsSystem::mGravity` was still a `Vec3`.~~ That made gravity along
+    W impossible, and worse, leaked Z into W: `Vec3` keeps the 3D "W mirrors Z" invariant (bug #6),
+    so `Vec4(Vec3(0, 0, -9.81f))` is `(0, 0, -9.81, -9.81)`. The default gravity has Z = 0, which is
+    the only reason nothing noticed. Now `Vec4`. Pinned by `TestFreeFallAlongEachAxis`, which runs
+    the same scene once per axis. ⚠ The same trap applies anywhere a `Vec3` survives in the port and
+    is converted to `Vec4` - audit the remaining ones (`grep -n 'Vec3' Jolt/Physics Jolt/Geometry`)
+    rather than assuming they are inert.
+
 ## Things that do NOT trivially generalize (the real design work left)
 
 1. **[SOLVED 2026-10-01] Contact manifolds.** In 3D the contact patch is a 2D polygon that Jolt
@@ -405,15 +427,21 @@ P1 — determinism / hygiene:
 
 ## Roadmap to a shippable v1
 
-**⏸ RESUME HERE (2026-10-01):** **All four blocking pieces are done: the headless v1 library builds,
-`UnitTests` is green at 371/371, and the contact manifold pipeline (conceptual gap 1) is solved** -
-a resting tesseract gets a real 8-point patch, not a single point. Next: **write the 4D HelloWorld**
-(`HelloWorld/HelloWorld.cpp` is a console program with no rendering - upstream's has zero renderer
-references, so no visualization work is needed; port it to RVec4/Vec4 and print the W component).
-Assert on numbers rather than eyeballing: the tesseract settles at the expected height, goes to
-sleep (the loop terminating catches jitter and energy injection), does not drift in w when dropped
-along -y, loses energy monotonically after impact, and re-runs bit-identically. Then Phase C
-(conservation/determinism tests, PerformanceTest) and re-enabling the 33 de-registered test files.
+**⏸ RESUME HERE (2026-10-01):** **The engine simulates.** The headless v1 library builds clean
+(0 warnings), `UnitTests` is 378/378, the contact manifold pipeline is solved, and **the 4D
+HelloWorld runs**: a tesseract and a sphere fall onto a hyperplane floor, settle at the right
+height, induce no spin, drift nowhere in X / Z / W, and go to sleep in 63 steps, bit-identically
+across repeats. Build it with `-DTARGET_HELLO_WORLD=ON`; it exits non-zero if a check fails.
+Remaining for v1, in order: (1) **PerformanceTest on a 4D scene** - the last item in the shipped-v1
+definition, and the first thing that will say whether the 4D structures are usably fast (a
+`ContactConstraint` is 4128 bytes against a few hundred in 3D). (2) **Re-enable the de-registered
+unit-test files** one area at a time; `PhysicsTestContext` is ported and registered again, which is
+what most of the `Physics/*` ones need. (3) The remaining open bugs: #5 `MortonCode` (still a 3D
+bit-spread - degrades BVH quality silently), #6 `DVec4` Z==W invariant (blocks the
+double-precision build), #9 `Mat44::sRotationXY..` C-library trig (determinism), #11 lossy inertia
+round-trip, and `SphereShape::GetMassProperties` storing `mass*r²/3` where the 4-ball second moment
+is `mass*r²/6`. (4) v1.1: the rotational constraint parts, SoftBody/Character/Vehicle, SIMD for
+Rotor/Bivec, a real 4D viewer.
 **Read the 🔑 torque-convention box below before touching any dynamics code** - the naive `r ∧ F`
 transliteration is wrong and an effective-mass test cannot detect it.
 
@@ -541,10 +569,10 @@ and reduces to `mass*r^2/6` as height→0. Fix SphereShape to `mass*r^2/6` (and 
 properties reference test) — deferred because SphereShape is marked "done" and I didn't want to
 silently edit it.
 
-Definition of "shipped v1": headless library builds warning-clean; UnitTests all green
-(including new Rotor/Bivec/dynamics conservation tests); a 4D HelloWorld (tesseract falling
+Definition of "shipped v1": ✅ headless library builds warning-clean; ✅ UnitTests all green
+(including the Rotor/Bivec and dynamics conservation tests); ✅ a 4D HelloWorld (tesseract falling
 onto a hyperplane floor, stacks of tesseracts stable, spheres bouncing) runs deterministically;
-PerformanceTest runs on a 4D scene.
+⬜ PerformanceTest runs on a 4D scene — **the only item left.**
 
 **Phase A — stabilize the foundation. Steps 1, 2, 4 DONE (2026-07-22); step 3 mostly done.**
 1. DONE: repo hygiene — `build/` de-committed + gitignored, untracked 4D leaf sources tracked,

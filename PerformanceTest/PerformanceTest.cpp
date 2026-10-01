@@ -31,6 +31,7 @@ JPH_SUPPRESS_WARNINGS_STD_BEGIN
 #include <memory>
 #include <cstdarg>
 #include <filesystem>
+#include <fstream>	// TODO(4D): came in transitively via the now-cut scene headers
 JPH_SUPPRESS_WARNINGS_STD_END
 
 using namespace JPH;
@@ -41,11 +42,12 @@ using namespace std;
 JPH_SUPPRESS_WARNINGS
 
 // Local includes
-#include "RagdollScene.h"
-#include "ConvexVsMeshScene.h"
+// TODO(4D): RagdollScene / ConvexVsMeshScene / LargeMeshScene / CharacterVirtualScene need
+// subsystems that are cut from v1 (Ragdoll, Character, the Mesh shape). The two that survive are
+// the two that matter most for a first 4D measurement anyway: Pyramid is a single large island of
+// stacked tesseracts, which is the heaviest possible load on the new contact manifold and solver,
+// and MaxBodies is the broad phase at scale.
 #include "PyramidScene.h"
-#include "LargeMeshScene.h"
-#include "CharacterVirtualScene.h"
 #include "MaxBodiesScene.h"
 
 // Time step for physics
@@ -78,11 +80,8 @@ int main(int argc, char** argv)
 	RegisterDefaultAllocator();
 
 	// Helper function that creates the default scene
-#ifdef JPH_OBJECT_STREAM
-	auto create_ragdoll_scene = []{ return unique_ptr<PerformanceTestScene>(new RagdollScene(4, 10, 0.6f)); };
-#else
-	auto create_ragdoll_scene = []{ return unique_ptr<PerformanceTestScene>(new ConvexVsMeshScene); };
-#endif // JPH_OBJECT_STREAM
+	// TODO(4D): was the ragdoll scene, which is cut for v1
+	auto create_default_scene = []{ return unique_ptr<PerformanceTestScene>(new PyramidScene); };
 
 	// Parse command line parameters
 	int specified_quality = -1;
@@ -106,20 +105,8 @@ int main(int argc, char** argv)
 		if (strncmp(arg, "-s=", 3) == 0)
 		{
 			// Parse scene
-			if (strcmp(arg + 3, "Ragdoll") == 0)
-				scene = create_ragdoll_scene();
-#ifdef JPH_OBJECT_STREAM
-			else if (strcmp(arg + 3, "RagdollSinglePile") == 0)
-				scene = unique_ptr<PerformanceTestScene>(new RagdollScene(1, 160, 0.4f));
-#endif // JPH_OBJECT_STREAM
-			else if (strcmp(arg + 3, "ConvexVsMesh") == 0)
-				scene = unique_ptr<PerformanceTestScene>(new ConvexVsMeshScene);
-			else if (strcmp(arg + 3, "Pyramid") == 0)
+			if (strcmp(arg + 3, "Pyramid") == 0)
 				scene = unique_ptr<PerformanceTestScene>(new PyramidScene);
-			else if (strcmp(arg + 3, "LargeMesh") == 0)
-				scene = unique_ptr<PerformanceTestScene>(new LargeMeshScene);
-			else if (strcmp(arg + 3, "CharacterVirtual") == 0)
-				scene = unique_ptr<PerformanceTestScene>(new CharacterVirtualScene);
 			else if (strcmp(arg + 3, "MaxBodies") == 0)
 				scene = unique_ptr<MaxBodiesScene>(new MaxBodiesScene);
 			else
@@ -195,7 +182,7 @@ int main(int argc, char** argv)
 		{
 			// Print usage
 			Trace("Usage:\n"
-				  "-s=<scene>: Select scene (Ragdoll, RagdollSinglePile, ConvexVsMesh, Pyramid)\n"
+				  "-s=<scene>: Select scene (Pyramid, MaxBodies)\n"
 				  "-i=<num physics steps>: Number of physics steps to simulate (default 500)\n"
 				  "-q=<quality>: Test only with specified quality (Discrete, LinearCast)\n"
 				  "-t=<num threads>: Test only with N threads (default is to iterate over 1 .. num hardware threads)\n"
@@ -223,7 +210,7 @@ int main(int argc, char** argv)
 
 	// If no scene was specified use the default scene
 	if (scene == nullptr)
-		scene = create_ragdoll_scene();
+		scene = create_default_scene();
 
 	// Output scene we're running
 	Trace("Running scene: %s", scene->GetName());
@@ -457,10 +444,11 @@ int main(int argc, char** argv)
 				physics_system.GetBodies(body_ids);
 				for (BodyID id : body_ids)
 				{
-					RVec3 pos = bi.GetPosition(id);
-					hash = HashBytes(&pos, 3 * sizeof(Real), hash);
-					Quat rot = bi.GetRotation(id);
-					hash = HashBytes(&rot, sizeof(Quat), hash);
+					// TODO(4D): four position components and an 8-float rotor
+					RVec4 pos = bi.GetPosition(id);
+					hash = HashBytes(&pos, 4 * sizeof(Real), hash);
+					Rotor rot = bi.GetRotation(id);
+					hash = HashBytes(&rot, sizeof(Rotor), hash);
 				}
 
 				// Let the scene hash its own state
@@ -510,7 +498,7 @@ int main(int argc, char** argv)
 void android_main(struct android_app *ioApp)
 {
 	// Run the regular main function
-	const char *args[] = { "Unused", "-s=ConvexVsMesh", "-t=max" };
+	const char *args[] = { "Unused", "-s=Pyramid", "-t=max" };
 	main(size(args), (char **)args);
 }
 

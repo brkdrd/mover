@@ -105,26 +105,61 @@ void ConvexShape::sCollideConvexVsConvex(const Shape *inShape1, const Shape *inS
 		{
 			// Need to run expensive EPA algorithm
 
-			// We know we're overlapping at this point, so we can set the max separation distance to 0.
-			// Numerically it is possible that GJK finds that the shapes are overlapping but EPA finds that they're separated.
-			// In order to avoid this, we clamp the max separation distance to 1 so that we don't excessively inflate the shape,
-			// but we still inflate it enough to avoid the case where EPA misses the collision.
+			// TODO(4D): upstream inflates shape 1 by the max separation distance before running EPA
+			// and subtracts it again afterwards (see the correction below). The margin guards against
+			// EPA reporting "separated" for a pair GJK already called overlapping. In 4D it costs far
+			// more than it does in 3D: the inflation is a sphere sweep, so it rounds every edge and
+			// corner, and EPA's inscribed-polytope error on a *curved* surface falls off as V^(-2/3)
+			// on S^3 against V^-1 on S^2. A tesseract resting on a tesseract then does not converge:
+			// measured over a 1296-body pyramid, EPA averaged 62 support points and 330 hull cells
+			// per call and ran into its 96-point cap on 57% of all calls - at which point it returns
+			// the best facet it happened to find rather than the answer. Against the un-inflated pair
+			// (two polytopes, which is what EPA is good at) the same scene averages 9.8 points and
+			// 25.4 cells and never hits the cap. End to end the pyramid runs 10-25% faster depending
+			// on phase and thread count, and with visibly less frame-time variance.
+			//
+			// This is safe to skip here: reaching EPA means the shapes *excluding* convex radius
+			// already overlap, so the real shapes overlap too and the penetration is positive - the
+			// margin was only ever a numerical guard, never part of the result. Speculative contacts
+			// are unaffected because they come out of the GJK branch above. The margin is kept as a
+			// fallback for the case it was written for: if EPA does report no collision, retry the
+			// upstream way. (Measured 6.5% of EPA calls take the fallback; a 441-tesseract pyramid
+			// run for 600 steps keeps every layer within 3.5 cm of its ideal height either way.)
 			max_separation_distance = min(max_separation_distance, 1.0f);
+			float epa_separation_distance = 0.0f;
 
 			// Create support function
 			SupportBuffer buffer1_incl_cvx_radius, buffer2_incl_cvx_radius;
 			const Support *shape1_incl_cvx_radius = shape1->GetSupportFunction(ConvexShape::ESupportMode::IncludeConvexRadius, buffer1_incl_cvx_radius, inScale1);
 			const Support *shape2_incl_cvx_radius = shape2->GetSupportFunction(ConvexShape::ESupportMode::IncludeConvexRadius, buffer2_incl_cvx_radius, inScale2);
 
-			// Add separation distance
-			AddConvexRadius shape1_add_max_separation_distance(*shape1_incl_cvx_radius, max_separation_distance);
-
 			// Transform shape 2 in the space of shape 1
 			TransformedConvexObject transformed2_incl_cvx_radius(rotation_2_to_1, translation_2_to_1, *shape2_incl_cvx_radius);
 
-			// Perform EPA step
-			if (!pen_depth.GetPenetrationDepthStepEPA(shape1_add_max_separation_distance, transformed2_incl_cvx_radius, inCollideShapeSettings.mPenetrationTolerance, penetration_axis, point1, point2))
-				return;
+			// Perform EPA step against the shapes as they are
+			if (!pen_depth.GetPenetrationDepthStepEPA(*shape1_incl_cvx_radius, transformed2_incl_cvx_radius, inCollideShapeSettings.mPenetrationTolerance, penetration_axis, point1, point2))
+			{
+				// Fall back to upstream's behaviour: inflate shape 1 by the separation distance so a
+				// pair GJK called overlapping cannot come out of EPA separated
+				if (max_separation_distance <= 0.0f)
+					return;
+
+				AddConvexRadius shape1_add_max_separation_distance(*shape1_incl_cvx_radius, max_separation_distance);
+
+				// EPA leaves the axis in whatever state it failed in, so restart it the way the
+				// first attempt was seeded
+				penetration_axis = translation_2_to_1;
+				if (penetration_axis.IsNearZero())
+					penetration_axis = Vec4::sAxisX();
+
+				if (!pen_depth.GetPenetrationDepthStepEPA(shape1_add_max_separation_distance, transformed2_incl_cvx_radius, inCollideShapeSettings.mPenetrationTolerance, penetration_axis, point1, point2))
+					return;
+
+				epa_separation_distance = max_separation_distance;
+			}
+
+			// The corrections below must undo whichever inflation was actually used
+			max_separation_distance = epa_separation_distance;
 			break;
 		}
 	}

@@ -15,7 +15,11 @@ public:
 	virtual const char *	GetName() const = 0;
 
 	// Get the number of MB that the temp allocator should preallocate
-	virtual size_t			GetTempAllocatorSizeMB() const						{ return 32; }
+	// TODO(4D): was 32 MB. A 4D ContactConstraint is 4128 bytes (6 manifold points instead of 4,
+	// 4 constraint parts each because friction has a 3D tangent space, bivector Jacobians of 8
+	// floats), so the default 20480 constraints are 84.5 MB in a single allocation - more than the
+	// whole 3D pool. Anything sized from 3D Jolt needs rechecking the same way.
+	virtual size_t			GetTempAllocatorSizeMB() const						{ return 256; }
 
 	// Get the max number of bodies to support in the physics system
 	virtual uint			GetMaxBodies() const								{ return 10240; }

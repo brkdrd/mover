@@ -56,23 +56,25 @@ public:
 		uint num_constraints = 0;
 		BodyIDVector body_ids;
 		body_ids.reserve(num_bodies);
-		uint num_per_axis = uint(pow(float(num_bodies), 1.0f / 3.0f)) + 1;
-		Vec3 half_extent = Vec3::sReplicate(0.5f);
-		BodyCreationSettings bcs(new BoxShape(half_extent), RVec3::sZero(), Quat::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+		// TODO(4D): the grid has four axes, so the per-axis count is the fourth root
+		uint num_per_axis = uint(pow(float(num_bodies), 1.0f / 4.0f)) + 1;
+		Vec4 half_extent = Vec4::sReplicate(0.5f);
+		BodyCreationSettings bcs(new BoxShape(half_extent), RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
 		bcs.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
 		bcs.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(2.0f * half_extent, 1000.0f);
-		for (uint z = 0; z < num_per_axis && body_ids.size() < num_bodies; ++z)
-			for (uint y = 0; y < num_per_axis && body_ids.size() < num_bodies; ++y)
-				for (uint x = 0; x < num_per_axis && body_ids.size() < num_bodies; ++x)
-				{
-					// When we reach the limit of contact constraints, start placing the boxes further apart so they don't collide
-					bcs.mPosition = RVec3(num_constraints < PhysicsSystem::cMaxContactConstraintsLimit? Real(x) : 2.0_r * x, 2.0_r * y, 2.0_r * z);
-					body_ids.push_back(bi.CreateBody(bcs)->GetID());
+		for (uint w = 0; w < num_per_axis && body_ids.size() < num_bodies; ++w)
+			for (uint z = 0; z < num_per_axis && body_ids.size() < num_bodies; ++z)
+				for (uint y = 0; y < num_per_axis && body_ids.size() < num_bodies; ++y)
+					for (uint x = 0; x < num_per_axis && body_ids.size() < num_bodies; ++x)
+					{
+						// When we reach the limit of contact constraints, start placing the boxes further apart so they don't collide
+						bcs.mPosition = RVec4(num_constraints < PhysicsSystem::cMaxContactConstraintsLimit? Real(x) : 2.0_r * x, 2.0_r * y, 2.0_r * z, 2.0_r * w);
+						body_ids.push_back(bi.CreateBody(bcs)->GetID());
 
-					// From the 2nd box onwards in a row, we will get a contact constraint
-					if (x > 0)
-						++num_constraints;
-				}
+						// From the 2nd box onwards in a row, we will get a contact constraint
+						if (x > 0)
+							++num_constraints;
+					}
 
 		// Add the bodies to the simulation
 		BodyInterface::AddState state = bi.AddBodiesPrepare(body_ids.data(), num_bodies);

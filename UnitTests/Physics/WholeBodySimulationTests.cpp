@@ -202,6 +202,51 @@ TEST_SUITE("WholeBodySimulationTests")
 		}
 	}
 
+	// A 4D pyramid. The 5-high column above is one contact per interface; a pyramid is a single
+	// large island where every body is held by several neighbours at once, which is what shakes out
+	// a manifold that spans the patch unevenly, and it is the only test here that drives EPA hard
+	// enough to reach its fallback path (see sCollideConvexVsConvex).
+	TEST_CASE("TestTesseractPyramidIsStable")
+	{
+		PhysicsTestContext c;
+		c.CreateFloor();
+
+		// A 4D pyramid has three horizontal axes, so its body count is a sum of cubes: height 4
+		// gives (4*5/2)^2 = 100 bodies, which is enough to be a real island and still quick
+		const float cHalfExtent = 0.5f;
+		const float cSize = 2.0f * cHalfExtent;
+		const int cHeight = 4;
+
+		Array<Body *> bodies;
+		Array<int> level;
+		for (int i = 0; i < cHeight; ++i)
+			for (int j = i / 2; j < cHeight - (i + 1) / 2; ++j)
+				for (int k = i / 2; k < cHeight - (i + 1) / 2; ++k)
+					for (int l = i / 2; l < cHeight - (i + 1) / 2; ++l)
+					{
+						float offset = (i & 1)? cHalfExtent : 0.0f;
+						// A small vertical gap so they settle onto each other rather than starting interpenetrating
+						RVec4 pos(Real(-cHeight + cSize * j + offset), Real(cHalfExtent + (cSize + 0.01f) * i), Real(-cHeight + cSize * k + offset), Real(-cHeight + cSize * l + offset));
+						bodies.push_back(&c.CreateBox(pos, Rotor::sIdentity(), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4::sReplicate(cHalfExtent)));
+						level.push_back(i);
+					}
+		CHECK(bodies.size() == 100);
+
+		c.Simulate(3.0f);
+
+		const float cSlop = c.GetSystem()->GetPhysicsSettings().mPenetrationSlop;
+		for (size_t n = 0; n < bodies.size(); ++n)
+		{
+			RVec4 pos = bodies[n]->GetPosition();
+
+			// Nothing sank through the floor or through the body below it. Allow the solver's
+			// penetration at each of the interfaces underneath, plus a little settling.
+			float expected_y = cHalfExtent + level[n] * cSize;
+			CHECK(float(pos.GetY()) > expected_y - (level[n] + 1) * 2.0f * cSlop);
+			CHECK(float(pos.GetY()) < expected_y + cSlop);
+		}
+	}
+
 	// Conservation laws across a real collision. These cannot be checked at the level of a single
 	// constraint part: they are statements about the whole solve.
 	TEST_CASE("TestCollisionConservesMomentum")

@@ -620,6 +620,34 @@ working set is **50 MB against 3D's 6.7 MB**, i.e. 4D streams from DRAM where 3D
 machine's 32 MB L3 — but adding 64 bytes per constraint part only costs 6.7% of throughput, so it is
 only partly bandwidth-bound; the rest is the dependent chain of Vec8 horizontal dot products.
 
+**What ratio *should* we be aiming at?** Estimated 2026-10-03 by weighting **3D Jolt's own measured
+phase split** (profiled on the same scene: velocity+position solver 63.5%, contact cache + contact
+sort + islands 24%, broad phase 4.7%, actual GJK/EPA/manifold **0.7%** — with a 90% contact-cache
+hit rate 3D barely does collision detection at all) by a per-phase dimensional multiplier:
+
+| phase | 3D share | 4D multiplier | why |
+|---|---|---|---|
+| solver | 63.5% | **3.5x** | 1.5x contacts/body (measured; a d-cube has 2d facets) x 1.25x points per contact (a body on a hyperplane has 1 normal force + (d−1) tilt torques, so it needs ≥ d points; Jolt uses d+1, i.e. 4 in 3D and 5 in 4D) x 1.33x rows per point (1 normal + (d−1) friction) x ~1.4x per row (the linear Jacobian is free — Vec3 and Vec4 are the same register — but the angular one is a bivector, 3 → 6 components, so one 4-wide register becomes one 8-wide one: same op count on AVX, one more shuffle in the reduction, 2x the bytes) |
+| cache/sort/islands | 24% | **2x** | 1.5x pairs, ~1.4x bytes per cached manifold |
+| broad phase | 4.7% | **1.7x** | the AABB test itself is free (4 lanes either way), but a d-box bounds a body more loosely as d grows (ball/box volume 0.524 → 0.308), so more false positives: measured 2.07x broad-phase pairs against 1.51x real contacts |
+| narrow phase | 0.7% | **7.5x** | GJK: 2^(d+1) simplex subsets x (d/(d−1))³ per Gram determinant ≈ 5x. EPA: a simplicial (d−1)-polytope with V vertices has 2V−4 facets in 3D but up to V(V−3)/2 in 4D — **linear becomes quadratic** — measured 25.4 cells per call against ~8 triangles, x ~2x per facet (closest-point-on-tetrahedron vs on-triangle) |
+
+Weighted total: **~3x for a stacking scene.** Flip the weights for a collision-heavy scene (narrow
+phase ~50% of 3D's frame) and it is **~5-6x**. So **3-6x is the honest target band**, and it is
+8-wide-SIMD specific: on SSE-only a bivector needs two registers and the solver multiplier rises to
+~5, putting the total near 4x. Note the ideal 4D solver working set is ~29 MB — it still fits this
+machine's 32 MB L3, where ours at 50 MB does not.
+
+**We are at 10.7x, so ~3x of implementation cost remains.** Largest known piece, found 2026-10-03:
+**the contact cache collapses.** 3D hits it 90.2% of the time; 4D only **36.5%**, so the narrow phase
+runs **14x** more often (2.13M times per 200 steps against 153k). The cause is not the cache logic —
+read and write sides match 3D exactly — it is that a settled 4D stack jitters more: mean per-step
+relative motion of a contacting pair is **1.6 mm settled against 3D's 0.48 mm**, straddling the
+*absolute* 1 mm `mBodyPairCacheMaxDeltaPositionSq`. Part of that is dimensional (more neighbours ⇒
+Gauss-Seidel converges slower per sweep) and part is a threshold tuned for 3D's residual. Closing it
+would take 10.7x → **~7.5x** on its own; the rest is the 6-vs-5 manifold points and the 32-byte
+`Vec8` bivector storage pushing the solver out of L3.
+
 **Ideas not taken** (if you need more): store the four Jacobians as a packed 6-float POD rather than
 a 32-byte `Vec8` (−30% constraint bytes, est. +5%); have `GetSupportingFace` return facet planes so
 `GetClipHalfSpaces` does not enumerate C(n,3) vertex triples; SIMD for Rotor. ⚠ Lowering

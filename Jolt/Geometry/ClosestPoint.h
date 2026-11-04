@@ -620,61 +620,70 @@ namespace ClosestPoint
 		// Edge vectors from A
 		Vec4 e1 = inB - inA, e2 = inC - inA, e3 = inD - inA, e4 = inE - inA;
 
+		// The Gram/cofactor expansion can cancel enough float precision to reverse an interior
+		// barycentric sign, even above the degeneracy threshold. Promote coordinates BEFORE the
+		// dot products, not just their rounded float results, and retain double through the sign tests.
+		// Keep the existing float-input degeneracy threshold and barycentric slop unchanged.
+		auto dot_double = [](Vec4Arg inU, Vec4Arg inV) {
+			return (double(inU.GetX()) * double(inV.GetX()) + double(inU.GetY()) * double(inV.GetY()))
+				+ (double(inU.GetZ()) * double(inV.GetZ()) + double(inU.GetW()) * double(inV.GetW()));
+		};
+
 		// 4x4 Gram matrix G: G_ij = e_i . e_j (symmetric, 10 unique entries)
-		float d00 = e1.Dot(e1), d01 = e1.Dot(e2), d02 = e1.Dot(e3), d03 = e1.Dot(e4);
-		float d11 = e2.Dot(e2), d12 = e2.Dot(e3), d13 = e2.Dot(e4);
-		float d22 = e3.Dot(e3), d23 = e3.Dot(e4);
-		float d33 = e4.Dot(e4);
+		double d00 = dot_double(e1, e1), d01 = dot_double(e1, e2), d02 = dot_double(e1, e3), d03 = dot_double(e1, e4);
+		double d11 = dot_double(e2, e2), d12 = dot_double(e2, e3), d13 = dot_double(e2, e4);
+		double d22 = dot_double(e3, e3), d23 = dot_double(e3, e4);
+		double d33 = dot_double(e4, e4);
 
 		// RHS: b_i = -A . e_i
-		float b0 = -inA.Dot(e1), b1 = -inA.Dot(e2), b2 = -inA.Dot(e3), b3 = -inA.Dot(e4);
+		double b0 = -dot_double(inA, e1), b1 = -dot_double(inA, e2), b2 = -dot_double(inA, e3), b3 = -dot_double(inA, e4);
 
 		// 2x2 sub-determinants from rows 2,3 of G (6 values)
-		float s23_01 = d02 * d13 - d12 * d03;
-		float s23_02 = d02 * d23 - d22 * d03;
-		float s23_03 = d02 * d33 - d23 * d03;
-		float s23_12 = d12 * d23 - d22 * d13;
-		float s23_13 = d12 * d33 - d23 * d13;
-		float s23_23 = d22 * d33 - d23 * d23;
+		double s23_01 = d02 * d13 - d12 * d03;
+		double s23_02 = d02 * d23 - d22 * d03;
+		double s23_03 = d02 * d33 - d23 * d03;
+		double s23_12 = d12 * d23 - d22 * d13;
+		double s23_13 = d12 * d33 - d23 * d13;
+		double s23_23 = d22 * d33 - d23 * d23;
 
 		// 3x3 cofactors of G — first row (C0j) and second row (C1j)
-		float C00 =  d11 * s23_23 - d12 * s23_13 + d13 * s23_12;
-		float C01 = -(d01 * s23_23 - d12 * s23_03 + d13 * s23_02);
-		float C02 =  d01 * s23_13 - d11 * s23_03 + d13 * s23_01;
-		float C03 = -(d01 * s23_12 - d11 * s23_02 + d12 * s23_01);
+		double C00 =  d11 * s23_23 - d12 * s23_13 + d13 * s23_12;
+		double C01 = -(d01 * s23_23 - d12 * s23_03 + d13 * s23_02);
+		double C02 =  d01 * s23_13 - d11 * s23_03 + d13 * s23_01;
+		double C03 = -(d01 * s23_12 - d11 * s23_02 + d12 * s23_01);
 
-		float C11 =  d00 * s23_23 - d02 * s23_03 + d03 * s23_02;
-		float C12 = -(d00 * s23_13 - d01 * s23_03 + d03 * s23_01);
-		float C13 =  d00 * s23_12 - d01 * s23_02 + d02 * s23_01;
+		double C11 =  d00 * s23_23 - d02 * s23_03 + d03 * s23_02;
+		double C12 = -(d00 * s23_13 - d01 * s23_03 + d03 * s23_01);
+		double C13 =  d00 * s23_12 - d01 * s23_02 + d02 * s23_01;
 
 		// 2x2 sub-determinants from rows 1,3 of G (5 values)
-		float s13_01 = d01 * d13 - d11 * d03;
-		float s13_02 = d01 * d23 - d12 * d03;
-		float s13_03 = d01 * d33 - d13 * d03;
-		float s13_12 = d11 * d23 - d12 * d13;
-		float s13_13 = d11 * d33 - d13 * d13;
+		double s13_01 = d01 * d13 - d11 * d03;
+		double s13_02 = d01 * d23 - d12 * d03;
+		double s13_03 = d01 * d33 - d13 * d03;
+		double s13_12 = d11 * d23 - d12 * d13;
+		double s13_13 = d11 * d33 - d13 * d13;
 
 		// Third row cofactors
-		float C22 =  d00 * s13_13 - d01 * s13_03 + d03 * s13_01;
-		float C23 = -(d00 * s13_12 - d01 * s13_02 + d02 * s13_01);
+		double C22 =  d00 * s13_13 - d01 * s13_03 + d03 * s13_01;
+		double C23 = -(d00 * s13_12 - d01 * s13_02 + d02 * s13_01);
 
 		// 2x2 sub-determinants from rows 1,2 of G (3 values)
-		float s12_01 = d01 * d12 - d11 * d02;
-		float s12_02 = d01 * d22 - d12 * d02;
-		float s12_12 = d11 * d22 - d12 * d12;
+		double s12_01 = d01 * d12 - d11 * d02;
+		double s12_02 = d01 * d22 - d12 * d02;
+		double s12_12 = d11 * d22 - d12 * d12;
 
 		// Fourth row cofactor
-		float C33 = d00 * s12_12 - d01 * s12_02 + d02 * s12_01;
+		double C33 = d00 * s12_12 - d01 * s12_02 + d02 * s12_01;
 
 		// Gram determinant (expansion along first row)
-		float det_G = d00 * C00 + d01 * C01 + d02 * C02 + d03 * C03;
+		double det_G = d00 * C00 + d01 * C01 + d02 * C02 + d03 * C03;
 
 		// Cramer's rule: barycentric coordinate numerators = adj(G) * b
-		float num_B = b0 * C00 + b1 * C01 + b2 * C02 + b3 * C03;
-		float num_C = b0 * C01 + b1 * C11 + b2 * C12 + b3 * C13;
-		float num_D = b0 * C02 + b1 * C12 + b2 * C22 + b3 * C23;
-		float num_E = b0 * C03 + b1 * C13 + b2 * C23 + b3 * C33;
-		float num_A = det_G - num_B - num_C - num_D - num_E;
+		double num_B = b0 * C00 + b1 * C01 + b2 * C02 + b3 * C03;
+		double num_C = b0 * C01 + b1 * C11 + b2 * C12 + b3 * C13;
+		double num_D = b0 * C02 + b1 * C12 + b2 * C22 + b3 * C23;
+		double num_E = b0 * C03 + b1 * C13 + b2 * C23 + b3 * C33;
+		double num_A = det_G - num_B - num_C - num_D - num_E;
 
 		// Origin is outside the face opposite vertex V iff lambda_V < 0, and det_G >= 0 (Gram), so
 		// iff num_V < 0. TODO(4D): the slop must be relative to det_G - see OriginOutsideOfPlane. An
@@ -686,7 +695,7 @@ namespace ClosestPoint
 		if (det_G <= 1.0e-6f * d00 * d11 * d22 * d33)
 			return 0x1f;
 
-		float slop = FLT_EPSILON * det_G;
+		double slop = FLT_EPSILON * det_G;
 		uint32 result = 0;
 		if (num_E < slop) result |= 0x01;	// face ABCD, opposite E
 		if (num_A < slop) result |= 0x02;	// face BCDE, opposite A

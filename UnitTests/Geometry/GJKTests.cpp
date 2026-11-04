@@ -86,6 +86,99 @@ TEST_SUITE("GJKTests")
 		}
 	}
 
+	TEST_CASE("TestGJKSphereVsBoxKnownFalseNegative")
+	{
+		// Exact bits from the Windows performance sample: analytic overlap is about 0.105954.
+		// Float pentachoron cofactors flipped the sign of an interior barycentric coordinate.
+		Sphere sphere(UVec4(1054393960u, 3216155450u, 1030375168u, 3176957120u).ReinterpretAsFloat(),
+			UVec4::sReplicate(1066813470u).ReinterpretAsFloat().GetX());
+		AABox box(UVec4(1026589376u, 3198869184u, 3220510732u, 3203257008u).ReinterpretAsFloat(),
+			UVec4(1050975312u, 1053999968u, 1062061676u, 3185378432u).ReinterpretAsFloat());
+		CHECK(sphere.Overlaps(box));
+		double distance_sq = 0.0;
+		for (int i = 0; i < 4; ++i)
+		{
+			double delta = double(sphere.GetCenter()[i]) - Clamp(double(sphere.GetCenter()[i]), double(box.mMin[i]), double(box.mMax[i]));
+			distance_sq += delta * delta;
+		}
+		CHECK(double(sphere.GetRadius()) - sqrt(distance_sq) > 0.1);
+
+		const Vec4 initial_axes[] = { Vec4::sZero(), Vec4::sAxisX(), Vec4::sAxisW(), Vec4(-1, 2, -3, 4) };
+		for (Vec4 initial_axis : initial_axes)
+		{
+			CAPTURE(initial_axis);
+			for (bool reverse : { false, true })
+			{
+				CAPTURE(reverse);
+				GJKClosestPoint gjk;
+				Vec4 v = initial_axis;
+				CHECK((reverse? gjk.Intersects(box, sphere, 1.0e-4f, v) : gjk.Intersects(sphere, box, 1.0e-4f, v)));
+				v = initial_axis;
+				Vec4 pa, pb;
+				float closest_sq = reverse? gjk.GetClosestPoints(box, sphere, 1.0e-4f, cLargeFloat, v, pa, pb)
+					: gjk.GetClosestPoints(sphere, box, 1.0e-4f, cLargeFloat, v, pa, pb);
+				CHECK(closest_sq <= Square(1.0e-4f));
+			}
+		}
+	}
+
+	TEST_CASE("TestGJKSeededRotationsAndScalesAgainstAnalyticIntersections")
+	{
+		UnitTestRandom random(0x4d6a6bu);
+		const Vec4 initial_axes[] = { Vec4::sZero(), Vec4::sAxisX(), Vec4::sAxisW(), Vec4(-1, 2, -3, 4) };
+		for (int sample = 0; sample < 64; ++sample)
+		{
+			CAPTURE(sample);
+			float angles[6];
+			for (float &a : angles)
+				a = float(int(random() & 1023u) - 512) / 512.0f;
+			Rotor rotor = Rotor::sExp(Bivec(angles[0], angles[1], angles[2], angles[3], angles[4], angles[5]));
+			Mat44 rotation = Mat44::sRotation(rotor);
+			Vec4 extent, center;
+			double corner_distance_sq = 0;
+			for (int i = 0; i < 4; ++i)
+			{
+				extent[i] = 0.5f + float(random() & 31u) / 32.0f;
+				float delta = 0.25f + float(random() & 15u) / 64.0f;
+				center[i] = (random() & 1u? 1.0f : -1.0f) * (extent[i] + delta);
+				corner_distance_sq += double(delta) * double(delta);
+			}
+			// The broader 0.01-scale sphere-box probe still fails outside this predicate repair;
+			// see Docs/CollisionPredicateRepair.md for the preserved diagnostic and scope limits.
+			for (float scale : { 0.1f, 1.0f, 100.0f })
+			{
+				CAPTURE(scale);
+				AABox local_box(-extent * scale, extent * scale);
+				TransformedConvexObject<AABox> box(rotation, Vec4::sZero(), local_box);
+				for (bool intersect : { false, true })
+				{
+					CAPTURE(intersect);
+					// Prescribed corner distance gives an independent sphere-box reference.
+					// Stay 0.125 * scale from contact: this does not excuse any disagreements.
+					float margin = intersect? 0.125f : -0.125f;
+					Sphere sphere(rotor * (center * scale), float(sqrt(corner_distance_sq) + double(margin)) * scale);
+					Sphere sphere_a(Vec4::sZero(), scale);
+					Sphere sphere_b(rotor * (center.Normalized() * ((1.5f - margin) * scale)), 0.5f * scale);
+					CHECK(sphere_a.Overlaps(sphere_b) == intersect);
+					for (Vec4 initial_axis : initial_axes)
+					{
+						CAPTURE(initial_axis);
+						auto check_pair = [&](const auto &inA, const auto &inB, const char *inPair) {
+							CAPTURE(std::string(inPair));
+							GJKClosestPoint gjk;
+							Vec4 v = initial_axis;
+							CHECK(gjk.Intersects(inA, inB, 1.0e-4f * scale, v) == intersect);
+							v = initial_axis;
+							CHECK(gjk.Intersects(inB, inA, 1.0e-4f * scale, v) == intersect);
+						};
+						check_pair(sphere, box, "sphere-box");
+						check_pair(sphere_a, sphere_b, "sphere-sphere");
+					}
+				}
+			}
+		}
+	}
+
 	/// TODO(4D): see the note in TestIntersect - these bound the measured precision floor of 4D GJK on
 	/// grazing contacts rather than requiring exact agreement.
 	static constexpr float	cCompareTolerance = 0.05f;		///< Worst measured missed overlap is 0.029

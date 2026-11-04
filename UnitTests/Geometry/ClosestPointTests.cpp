@@ -4,6 +4,7 @@
 
 #include "UnitTestFramework.h"
 #include <Jolt/Geometry/ClosestPoint.h>
+#include <algorithm>
 #include <random>
 
 TEST_SUITE("ClosestPointTests")
@@ -36,6 +37,105 @@ TEST_SUITE("ClosestPointTests")
 			}
 		}
 		CHECK(ClosestPoint::OriginOutsideOfPentachoronPlanes(Vec4::sZero(), Vec4::sAxisX(), Vec4::sAxisY(), Vec4::sAxisZ(), Vec4(0, 0, 1, 1.0e-5f)) == 0x1f);
+	}
+
+	TEST_CASE("TestPentachoronKnownInteriorCancellation")
+	{
+		// Iteration 6 of TestGJKSphereVsBoxKnownFalseNegative, preserved without decimal rounding.
+		// Independent high-precision solve gives barycentrics
+		// [0.29662915, 0.30951689, 0.28358813, 0.09363796, 0.01662787]: all strictly inside.
+		const Vec4 fixture[] = {
+			UVec4(1025978056u, 1018103232u, 1075501340u, 1018264664u).ReinterpretAsFloat(),
+			UVec4(1021253184u, 3175558144u, 3215635887u, 1013765576u).ReinterpretAsFloat(),
+			UVec4(3197819333u, 1016904320u, 3208892514u, 3190056164u).ReinterpretAsFloat(),
+			UVec4(1057573245u, 1036647744u, 3208960858u, 1056745198u).ReinterpretAsFloat(),
+			UVec4(1063728008u, 3199673500u, 3212183460u, 3207743627u).ReinterpretAsFloat()
+		};
+		for (float scale : { 0.01f, 1.0f, 100.0f })
+		{
+			CAPTURE(scale);
+			int permutation[] = { 0, 1, 2, 3, 4 };
+			int count = 0;
+			do
+			{
+				CAPTURE(count);
+				Vec4 a = fixture[permutation[0]] * scale, b = fixture[permutation[1]] * scale;
+				Vec4 c = fixture[permutation[2]] * scale, d = fixture[permutation[3]] * scale, e = fixture[permutation[4]] * scale;
+				CHECK(ClosestPoint::OriginOutsideOfPentachoronPlanes(a, b, c, d, e) == 0);
+				uint32 set = 0;
+				Vec4 closest = ClosestPoint::GetClosestPointOnPentachoron(a, b, c, d, e, set);
+				CHECK(set == 0x1f);
+				CHECK(closest == Vec4::sZero());
+				closest = ClosestPoint::GetClosestPointOnPentachoron<true>(a, b, c, d, e, set);
+				CHECK(set == 0x1f);
+				CHECK(closest == Vec4::sZero());
+				++count;
+			} while (std::next_permutation(permutation, permutation + 5));
+			CHECK(count == 120);
+		}
+	}
+
+	TEST_CASE("TestPentachoronSliversAgainstKnownBarycentrics")
+	{
+		float boundary_weight = 0.03125f;
+		SUBCASE("Interior and exterior") { boundary_weight = 0.03125f; }
+		SUBCASE("Near face interior and exterior") { boundary_weight = 1.0f / 32768.0f; }
+		UnitTestRandom random(0x4d51a7u);
+		for (int sample = 0; sample < 48; ++sample)
+		{
+			CAPTURE(sample);
+			// Nearly parallel edges: the Gram determinant/Hadamard ratio is about 3.6e-6,
+			// just above the existing 1e-6 degeneracy threshold, not a rank-deficient simplex.
+			const Vec4 basis[] = { Vec4::sZero(), Vec4(1, 0, 0, 0), Vec4(1, 0.125f, 0, 0),
+				Vec4(1, 0, 0.125f, 0), Vec4(1, 0, 0, 0.125f) };
+			float bary[5] = { 1, 0, 0, 0, 0 };
+			for (int i = 1; i < 5; ++i)
+			{
+				bary[i] = float(1 + (random() & 7u)) / 64.0f;
+				bary[0] -= bary[i];
+			}
+			// Exercise every outside-face bit as well as strict interior containment.
+			int outside = sample % 6;
+			int near_face = outside < 5? outside : 4;
+			float near_weight = outside < 5? -boundary_weight : boundary_weight;
+			bary[(near_face + 1) % 5] += bary[near_face] - near_weight;
+			bary[near_face] = near_weight;
+			Vec4 query = Vec4::sZero();
+			for (int i = 0; i < 5; ++i)
+				query += bary[i] * basis[i];
+			float angles[6];
+			for (float &a : angles)
+				a = float(int(random() & 1023u) - 512) / 512.0f;
+			Rotor rotation = Rotor::sExp(Bivec(angles[0], angles[1], angles[2], angles[3], angles[4], angles[5]));
+			for (float scale : { 0.001f, 0.01f, 1.0f, 100.0f, 1000.0f })
+			{
+				CAPTURE(scale);
+				Vec4 vertices[5];
+				for (int i = 0; i < 5; ++i)
+					vertices[i] = rotation * ((basis[i] - query) * scale);
+				int permutation[] = { 0, 1, 2, 3, 4 };
+				int count = 0;
+				do
+				{
+					CAPTURE(count);
+					Vec4 a = vertices[permutation[0]], b = vertices[permutation[1]], c = vertices[permutation[2]];
+					Vec4 d = vertices[permutation[3]], e = vertices[permutation[4]];
+					// The oracle is the prescribed barycentrics, not another Gram/cofactor solve.
+					uint32 expected = (bary[permutation[4]] < 0? 1u : 0u) | (bary[permutation[0]] < 0? 2u : 0u)
+						| (bary[permutation[1]] < 0? 4u : 0u) | (bary[permutation[2]] < 0? 8u : 0u)
+						| (bary[permutation[3]] < 0? 16u : 0u);
+					CHECK(ClosestPoint::OriginOutsideOfPentachoronPlanes(a, b, c, d, e) == expected);
+					if (expected == 0)
+					{
+						uint32 set = 0;
+						CHECK(ClosestPoint::GetClosestPointOnPentachoron<true>(a, b, c, d, e, set) == Vec4::sZero());
+						CHECK(set == 0x1f);
+					}
+					++count;
+				} while (std::next_permutation(permutation, permutation + 5));
+				CHECK(count == 120);
+			}
+		}
 	}
 
 	// Test closest point from inPoint to triangle (inA, inB, inC) in 4D

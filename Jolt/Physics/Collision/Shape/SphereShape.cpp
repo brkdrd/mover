@@ -148,13 +148,10 @@ MassProperties SphereShape::GetMassProperties() const
 	float r4 = r2 * r2;
 	p.mMass = (0.5f * JPH_PI * JPH_PI) * r4 * GetDensity();
 
-	// Calculate moment of inertia about each bivector plane.
-	// For an n-ball the planar moment of inertia is mass * r^2 * 2/(n+2); for n=4 that gives mass * r^2 / 3.
-	// Since the 4D inertia operator maps bivectors to bivectors and here the sphere is rotationally isotropic,
-	// the inertia is diagonal in the bivector basis with equal components.
-	// TODO(4D): MassProperties currently stores inertia as a Mat44 for legacy reasons. Revisit when
-	// the full 6-component bivector inertia representation is finalized.
-	float inertia = (1.0f / 3.0f) * p.mMass * r2;
+	// MassProperties stores the second moment M_ij = integral rho*x_i*x_j dV,
+	// not planar inertia. A solid 4-ball has M_ii = mass*r^2/6; the
+	// bivector moment for plane ij is M_ii + M_jj = mass*r^2/3.
+	float inertia = (1.0f / 6.0f) * p.mMass * r2;
 	Mat44 m = Mat44::sZero();
 	m(0, 0) = inertia;
 	m(1, 1) = inertia;

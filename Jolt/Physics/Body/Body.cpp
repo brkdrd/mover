@@ -385,33 +385,58 @@ BodyCreationSettings Body::GetBodyCreationSettings() const
 	result.mNumPositionStepsOverride = mMotionProperties != nullptr? mMotionProperties->GetNumPositionStepsOverride() : 0;
 	result.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
 
-	// Invert inertia and mass
+	// Supported inputs are finite physical mass properties (including zero
+	// planar moments), as installed by body creation or SetMassProperties.
+	// Arbitrary inverse-mass/inertia setter overrides need not have such a
+	// representation and cannot in general round-trip through MassProperties.
+	// Export finite mass properties. Static bodies without motion properties do
+	// not retain mass/inertia; fully locked sectors discard that information too.
+	// Use canonical finite values for those unobservable sectors, preserving the
+	// allowed DOFs rather than fabricating FLT_MAX moments (which can overflow).
+	result.mMassPropertiesOverride.mMass = 1.0f;
+	result.mMassPropertiesOverride.mInertia = Mat44::sZero();
 	if (mMotionProperties != nullptr)
 	{
 		float inv_mass = mMotionProperties->GetInverseMassUnchecked();
+		if ((result.mAllowedDOFs & EAllowedDOFs::AllTranslation) != EAllowedDOFs::None)
+		{
+			JPH_ASSERT(inv_mass > 0.0f, "Export requires finite positive mass for unlocked translation");
+			if (inv_mass > 0.0f)
+				result.mMassPropertiesOverride.mMass = 1.0f / inv_mass;
+		}
 
-		// Get mass
-		result.mMassPropertiesOverride.mMass = inv_mass != 0.0f? 1.0f / inv_mass : FLT_MAX;
-
-		// Get inertia — in 4D, inertia is a 6×6 diagonal (Bivec). Store as diagonal Mat44 for backward compat.
-		// TODO: Full 6×6 inertia storage in MassProperties
-		Bivec inv_diag = mMotionProperties->GetInverseInertiaDiagonal();
-		// Invert the diagonal, clamping to avoid division by zero
-		auto safe_invert = [](float v) { return v != 0.0f ? 1.0f / v : FLT_MAX; };
-		result.mMassPropertiesOverride.mInertia = Mat44(
-			Lane4(safe_invert(inv_diag.GetE12()), 0, 0, 0),
-			Lane4(0, safe_invert(inv_diag.GetE13()), 0, 0),
-			Lane4(0, 0, safe_invert(inv_diag.GetE23()), 0),
-			Lane4(0, 0, 0, 1));
-	}
-	else
-	{
-		result.mMassPropertiesOverride.mMass = FLT_MAX;
-		result.mMassPropertiesOverride.mInertia = Mat44(
-			Lane4(FLT_MAX, 0, 0, 0),
-			Lane4(0, FLT_MAX, 0, 0),
-			Lane4(0, 0, FLT_MAX, 0),
-			Lane4(0, 0, 0, 1));
+		if ((result.mAllowedDOFs & EAllowedDOFs::AllRotation) != EAllowedDOFs::None)
+		{
+			// Body is a friend of MotionProperties: read the stored principal
+			// diagonal directly, also for static/kinematic bodies that retain it
+			// for later motion-type changes. The public getter is dynamic-only.
+			Bivec inv_diag = mMotionProperties->mInvInertiaDiagonal;
+			double moment[6];
+			double trace = 0.0;
+			for (int plane = 0; plane < 6; ++plane)
+			{
+				// SetMassProperties maps a zero planar moment to zero inverse
+				// inertia. Preserve this finite, degenerate-particle convention.
+				// Arbitrary infinite-inertia overrides are not representable by
+				// the finite second-moment MassProperties API.
+				JPH_ASSERT(inv_diag[plane] >= 0.0f, "Invalid inverse inertia");
+				moment[plane] = inv_diag[plane] > 0.0f? 1.0 / inv_diag[plane] : 0.0;
+				trace += moment[plane];
+			}
+			// I_ij = d_i + d_j. Each d_i occurs in three of the six
+			// moments, so trace(M) = sum(I_ij)/3 and
+			// d_i = (sum of the three incident moments - trace(M))/2.
+			trace /= 3.0;
+			Mat44 second = Mat44::sZero();
+			second(0, 0) = float(0.5 * (moment[0] + moment[1] + moment[2] - trace));
+			second(1, 1) = float(0.5 * (moment[0] + moment[3] + moment[4] - trace));
+			second(2, 2) = float(0.5 * (moment[1] + moment[3] + moment[5] - trace));
+			second(3, 3) = float(0.5 * (moment[2] + moment[4] + moment[5] - trace));
+			// This is body-local inertia, not world-space inertia: the body
+			// rotation is exported separately. Restore all W terms/couplings.
+			Mat44 rotation = Mat44::sRotation(mMotionProperties->GetInertiaRotation());
+			result.mMassPropertiesOverride.mInertia = rotation * second * rotation.Transposed();
+		}
 	}
 
 	result.SetShape(GetShape());

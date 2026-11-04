@@ -42,7 +42,7 @@ struct WorldImpulseIntegral
 };
 
 enum class BridgeResult { Success, InvalidConfiguration, InvalidDelivery, InvalidBody, PhysicsFailure, FailedStopped, NumericalFailure };
-enum class BridgeNumericalError { None, LinearVelocityClamped, AngularVelocityClamped, NonFiniteState, LinearSpeedLimitExceeded, AngularSpeedLimitExceeded };
+enum class BridgeNumericalError { None, LinearVelocityClamped, AngularVelocityClamped, NonFiniteState, LinearSpeedLimitExceeded, AngularSpeedLimitExceeded, ImpulseDeliveryMismatch };
 
 /// Serial boundary adapter, not a second integrator. The coordinator must own the
 /// world exclusively during Step, including validation, delivery and Update. No
@@ -117,18 +117,7 @@ public:
         // Inspect every dynamic body before predictions, diagnostic reset or
         // Update. Active gyro integration can replace a NaN with zero, erasing
         // both the invalid input and the old sticky diagnostic.
-        mSystem.GetBodies(mBodyIDs);
-        for (BodyID id : mBodyIDs)
-        {
-            BodyLockRead lock(mSystem.GetBodyLockInterface(), id);
-            if (lock.Succeeded() && lock.GetBody().IsDynamic() && !IsFiniteState(lock.GetBody()))
-            {
-                mLastNumericalError = BridgeNumericalError::NonFiniteState;
-                mLastNumericalBody = id;
-                mFailed = true;
-                return BridgeResult::NumericalFailure;
-            }
-        }
+        if (ValidateBoundary() != BridgeResult::Success) return BridgeResult::NumericalFailure;
         // Validate the ENTIRE batch before the first world mutation.
         for (size_t i = 0; i < inCount; ++i)
         {
@@ -183,51 +172,92 @@ public:
             mSystem.GetBodyInterface().AddForceAndTorque(inDeliveries[i].mBody,
                 mPrepared[i].mLinear, mPrepared[i].mAngular, EActivation::Activate);
         mLastError = mSystem.Update(mFixedStep, 1, &mAllocator, &mJobs);
-        // Inspect ALL dynamic bodies, not only recipients. Gyro, gravity and
-        // contacts can clamp an undelivered body, or later reduce a clamped speed.
-        mSystem.GetBodies(mBodyIDs);
-        for (BodyID id : mBodyIDs)
-        {
-            BodyLockRead lock(mSystem.GetBodyLockInterface(), id);
-            if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) continue;
-            const Body &body = lock.GetBody();
-            const MotionProperties &motion = *body.GetMotionProperties();
-            BridgeNumericalError error = BridgeNumericalError::None;
-            if (motion.WasLinearVelocityClamped()) error = BridgeNumericalError::LinearVelocityClamped;
-            if (motion.WasAngularVelocityClamped()) error = BridgeNumericalError::AngularVelocityClamped;
-            if (motion.HadNonFiniteVelocity() || !IsFiniteState(body)) error = BridgeNumericalError::NonFiniteState;
-            // Conservative gyro drift runs after the velocity kick/clamp. Its
-            // physically valid endpoint can exceed the declared speed envelope
-            // without activating a clamp. Never publish that as an admitted step.
-            if (error == BridgeNumericalError::None)
-            {
-                const Vec4 linear = body.GetLinearVelocity();
-                const Bivec angular = body.GetAngularVelocity();
-                double linear_sq = 0, angular_sq = 0;
-                for (int axis = 0; axis < 4; ++axis) linear_sq += double(linear[axis]) * linear[axis];
-                for (int axis = 0; axis < 6; ++axis) angular_sq += double(angular[axis]) * angular[axis];
-                if (linear_sq > double(motion.GetMaxLinearVelocity()) * motion.GetMaxLinearVelocity())
-                    error = BridgeNumericalError::LinearSpeedLimitExceeded;
-                if (angular_sq > double(motion.GetMaxAngularVelocity()) * motion.GetMaxAngularVelocity())
-                    error = BridgeNumericalError::AngularSpeedLimitExceeded;
-            }
-            if (error != BridgeNumericalError::None && mLastNumericalError == BridgeNumericalError::None)
-            {
-                mLastNumericalError = error;
-                mLastNumericalBody = id;
-            }
-        }
-        if (mLastNumericalError != BridgeNumericalError::None)
-        {
-            mFailed = true;
-            return BridgeResult::NumericalFailure;
-        }
+        // Inspect ALL dynamic bodies, not only recipients: contacts/gyro/gravity
+        // can clamp an undelivered body or leave an endpoint beyond its limits.
+        if (ValidateBoundary() != BridgeResult::Success) return BridgeResult::NumericalFailure;
         if (mLastError != EPhysicsUpdateError::None)
         {
             mFailed = true;
             return BridgeResult::PhysicsFailure;
         }
         ++mTick;
+        return BridgeResult::Success;
+    }
+
+    /// Validate immediately before publication as well as before Step. Sticky
+    /// diagnostics are evidence of an unacknowledged numerical failure, NOT reset
+    /// permission. Recovery requires restoring a complete world and a new bridge.
+    BridgeResult ValidateBoundary()
+    {
+        if (mFailed) return BridgeResult::FailedStopped;
+        mSystem.GetBodies(mBodyIDs);
+        for (BodyID id : mBodyIDs)
+        {
+            BodyLockRead lock(mSystem.GetBodyLockInterface(), id);
+            if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) continue;
+            const Body &body = lock.GetBody();
+            const auto &motion = *body.GetMotionProperties();
+            BridgeNumericalError error = BridgeNumericalError::None;
+            if (motion.WasLinearVelocityClamped()) error = BridgeNumericalError::LinearVelocityClamped;
+            if (motion.WasAngularVelocityClamped()) error = BridgeNumericalError::AngularVelocityClamped;
+            // Check finite state before speed arithmetic and before any reset.
+            if (motion.HadNonFiniteVelocity() || !IsFiniteState(body)) error = BridgeNumericalError::NonFiniteState;
+            if (error == BridgeNumericalError::None)
+            {
+                if (!SpeedFits(body.GetLinearVelocity(), 4, motion.GetMaxLinearVelocity())) error = BridgeNumericalError::LinearSpeedLimitExceeded;
+                if (!SpeedFits(body.GetAngularVelocity(), 6, motion.GetMaxAngularVelocity())) error = BridgeNumericalError::AngularSpeedLimitExceeded;
+            }
+            if (error != BridgeNumericalError::None)
+            {
+                mLastNumericalError = error;
+                mLastNumericalBody = id;
+                mFailed = true;
+                return BridgeResult::NumericalFailure;
+            }
+        }
+        return BridgeResult::Success;
+    }
+
+    /// Tick-end instantaneous query response; NOT a second physics integration.
+    /// ImpactBatch owns event identity/exactly-once dispatch. Predict the exact core
+    /// SIMD operations with the installed inverse mass/inertia, before either kick.
+    /// InvalidDelivery leaves the body unchanged; any post-write discrepancy is a
+    /// fail-stop numerical error and must never be published by the coordinator.
+    BridgeResult ApplyBoundaryImpulse(const WorldImpulseIntegral &delivery)
+    {
+        if (mFailed) return BridgeResult::FailedStopped;
+        if (!mValid) return BridgeResult::InvalidConfiguration;
+        if (ValidateBoundary() != BridgeResult::Success) return BridgeResult::NumericalFailure;
+        Vec4 linear;
+        Bivec angular;
+        {
+            BodyLockRead lock(mSystem.GetBodyLockInterface(), delivery.mBody);
+            if (!lock.Succeeded() || !lock.GetBody().IsDynamic() || !lock.GetBody().IsInBroadPhase()) return BridgeResult::InvalidBody;
+            const Body &body = lock.GetBody();
+            const auto &motion = *body.GetMotionProperties();
+            for (uint i = 0; i < 4; ++i) if (!std::isfinite(delivery.mLinear[i])) return BridgeResult::InvalidDelivery;
+            for (uint i = 0; i < 6; ++i) if (!std::isfinite(delivery.mAngular[i])) return BridgeResult::InvalidDelivery;
+            {
+                // Only pure preview arithmetic is masked. Never mask delivery or Update.
+                [[maybe_unused]] FPExceptionDisableOverflow overflow;
+                [[maybe_unused]] FPExceptionDisableInvalid invalid;
+                linear = body.GetLinearVelocity() + delivery.mLinear * motion.GetInverseMass();
+                angular = body.GetAngularVelocity() + motion.MultiplyWorldSpaceInverseInertiaByVector(body.GetRotation(), delivery.mAngular);
+            }
+            if (!SpeedFits(linear, 4, motion.GetMaxLinearVelocity()) || !SpeedFits(angular, 6, motion.GetMaxAngularVelocity())
+                || !DeliveredImpulseFits(body, delivery, linear, angular)) return BridgeResult::InvalidDelivery;
+        }
+        auto &bi = mSystem.GetBodyInterface();
+        bi.AddImpulse(delivery.mBody, delivery.mLinear);
+        bi.AddAngularImpulse(delivery.mBody, delivery.mAngular);
+        if (ValidateBoundary() != BridgeResult::Success) return BridgeResult::NumericalFailure;
+        if (bi.GetLinearVelocity(delivery.mBody) != linear || bi.GetAngularVelocity(delivery.mBody) != angular)
+        {
+            mLastNumericalError = BridgeNumericalError::ImpulseDeliveryMismatch;
+            mLastNumericalBody = delivery.mBody;
+            mFailed = true;
+            return BridgeResult::NumericalFailure;
+        }
         return BridgeResult::Success;
     }
 
@@ -239,6 +269,57 @@ public:
     BodyID GetLastNumericalBody() const { return mLastNumericalBody; }
 
 private:
+    // Declared impulse-ledger budget: 1e-5 absolute per lane, or 1e-5 relative
+    // for larger kicks. Even below that error budget, a nonzero integral may
+    // NEVER be reported delivered when the entire kick rounded away.
+    static bool DeliveredImpulseFits(const Body &body, const WorldImpulseIntegral &delivery, Vec4Arg linear, BivecArg angular)
+    {
+        const auto &motion = *body.GetMotionProperties();
+        double inverse_mass = motion.GetInverseMass();
+        if (!std::isfinite(inverse_mass) || inverse_mass <= 0) return false;
+        if ((delivery.mLinear != Vec4::sZero() && linear == body.GetLinearVelocity())
+            || (delivery.mAngular != Bivec::sZero() && angular == body.GetAngularVelocity())) return false;
+        for (uint i = 0; i < 4; ++i)
+        {
+            double actual = (double(linear[i]) - body.GetLinearVelocity()[i]) / inverse_mass;
+            if (std::abs(actual - delivery.mLinear[i]) > 1e-5 * std::max(1.0, std::abs(double(delivery.mLinear[i])))) return false;
+        }
+        Rotor principal = body.GetRotation() * motion.GetInertiaRotation();
+        Bivec local_delta = principal.InverseRotateBivec(angular - body.GetAngularVelocity());
+        double actual[6] = {};
+        for (uint i = 0; i < 6; ++i)
+        {
+            double inverse = motion.GetInverseInertiaDiagonal()[i];
+            if (!std::isfinite(inverse) || inverse <= 0) return false;
+            double momentum = double(local_delta[i]) / inverse;
+            float lane[6] = {}; lane[i] = 1;
+            Bivec column = principal.RotateBivec(Bivec(lane[0], lane[1], lane[2], lane[3], lane[4], lane[5]));
+            for (uint j = 0; j < 6; ++j) actual[j] += double(column[j]) * momentum;
+        }
+        for (uint i = 0; i < 6; ++i)
+            if (!std::isfinite(actual[i]) || std::abs(actual[i] - delivery.mAngular[i]) > 1e-5 * std::max(1.0, std::abs(double(delivery.mAngular[i])))) return false;
+        return true;
+    }
+    template <class V> static bool SpeedFits(const V &velocity, uint lanes, float limit)
+    {
+        if (!std::isfinite(limit) || limit <= 0 || double(limit) * limit >= double(std::numeric_limits<float>::max())) return false;
+        double squared = 0;
+        for (uint i = 0; i < lanes; ++i)
+        {
+            if (!std::isfinite(velocity[i])) return false;
+            squared += double(velocity[i]) * velocity[i];
+        }
+        // Core clamp arithmetic squares/reduces in float. A double norm can
+        // admit a lane combination which the exact SIMD predicate will clamp.
+        if (squared > double(limit) * limit || squared >= double(std::numeric_limits<float>::max())) return false;
+        float native_squared;
+        {
+            [[maybe_unused]] FPExceptionDisableOverflow overflow;
+            [[maybe_unused]] FPExceptionDisableInvalid invalid;
+            native_squared = velocity.LengthSq();
+        }
+        return std::isfinite(native_squared) && native_squared <= limit * limit;
+    }
     static bool IsFiniteState(const Body &inBody)
     {
         const auto position = inBody.GetCenterOfMassPosition();

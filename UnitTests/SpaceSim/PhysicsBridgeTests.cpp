@@ -271,7 +271,7 @@ TEST_SUITE("SpaceSimPhysicsBridge")
         CHECK(bridge.Step(batch, 1) == JPH::SpaceSim::BridgeResult::Success);
     }
 
-    TEST_CASE("ClampDiagnosticsAreStickyButResetBeforeTheNextOwnedStep")
+    TEST_CASE("UnacknowledgedClampDiagnosticsFailStopBeforeTheNextOwnedStep")
     {
         PhysicsTestContext context;
         context.ZeroGravity();
@@ -288,11 +288,13 @@ TEST_SUITE("SpaceSimPhysicsBridge")
         CHECK(motion.WasAngularVelocityClamped());
         JPH::SpaceSim::PhysicsBridge bridge(*context.GetSystem(), *context.GetTempAllocator(),
             *context.GetJobSystem(), context.GetDeltaTime());
-        CHECK(bridge.Step(nullptr, 0) == JPH::SpaceSim::BridgeResult::Success);
-        CHECK_FALSE(motion.WasLinearVelocityClamped());
-        CHECK_FALSE(motion.WasAngularVelocityClamped());
+        CHECK(bridge.Step(nullptr, 0) == JPH::SpaceSim::BridgeResult::NumericalFailure);
+        CHECK(motion.WasLinearVelocityClamped());
+        CHECK(motion.WasAngularVelocityClamped());
         CHECK_FALSE(motion.HadNonFiniteVelocity());
-        CHECK(bridge.GetLastNumericalError() == JPH::SpaceSim::BridgeNumericalError::None);
+        CHECK(bridge.GetLastNumericalError() == JPH::SpaceSim::BridgeNumericalError::AngularVelocityClamped);
+        CHECK(bridge.GetTick() == 0);
+        CHECK(bridge.IsFailedStopped());
     }
 
     TEST_CASE("GravityClampStillFailStopsAfterContactReducesTheSpeed")

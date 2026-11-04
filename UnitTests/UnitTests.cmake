@@ -4,6 +4,7 @@ set(UNIT_TESTS_ROOT ${PHYSICS_REPO_ROOT}/UnitTests)
 # Source files
 set(UNIT_TESTS_SRC_FILES
 	${UNIT_TESTS_ROOT}/SpaceSim/CombatTests.cpp
+	${UNIT_TESTS_ROOT}/SpaceSim/PhysicsBridgeTests.cpp
 #	${UNIT_TESTS_ROOT}/Compute/ComputeTests.cpp	# TODO(4D): still 3D (Mat44 SetColumn3/Multiply3x3), rewrite for 4D
 	${UNIT_TESTS_ROOT}/SpaceSim/PropulsionTests.cpp
 	${UNIT_TESTS_ROOT}/Core/ArrayTest.cpp

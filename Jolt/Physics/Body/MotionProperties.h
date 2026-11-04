@@ -114,6 +114,13 @@ public:
 	inline void				ClampLinearVelocity();
 	inline void				ClampAngularVelocity();
 
+	/// Sticky, non-authoritative diagnostics. The exclusive step owner resets these
+	/// before Update; they are deliberately not part of saved/serialized state.
+	bool WasLinearVelocityClamped() const { return mLinearVelocityClamped; }
+	bool WasAngularVelocityClamped() const { return mAngularVelocityClamped; }
+	bool HadNonFiniteVelocity() const { return mNonFiniteVelocity; }
+	void ResetVelocityDiagnostics() { mLinearVelocityClamped = mAngularVelocityClamped = mNonFiniteVelocity = false; }
+
 	/// Get linear damping: dv/dt = -c * v. c. Value should be zero or positive and is usually close to 0.
 	inline float			GetLinearDamping() const										{ return mLinearDamping; }
 	void					SetLinearDamping(float inLinearDamping)							{ JPH_ASSERT(inLinearDamping >= 0.0f); mLinearDamping = inLinearDamping; }
@@ -331,6 +338,9 @@ private:
 	uint32					mIslandIndex = cInactiveIndex;									///< Index of the island that this body is part of
 
 	// 1 byte aligned
+	bool                    mLinearVelocityClamped = false;
+	bool                    mAngularVelocityClamped = false;
+	bool                    mNonFiniteVelocity = false;
 	EMotionQuality			mMotionQuality;													///< Motion quality, or how well it detects collisions when it has a high velocity
 	bool					mAllowSleeping;													///< If this body can go to sleep
 	EAllowedDOFs			mAllowedDOFs = EAllowedDOFs::All;								///< Allowed degrees of freedom for this body (uint16)

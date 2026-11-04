@@ -33,9 +33,13 @@ void MotionProperties::ClampLinearVelocity()
 	JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite));
 
 	float len_sq = mLinearVelocity.LengthSq();
-	JPH_ASSERT(isfinite(len_sq));
+	if (!isfinite(len_sq))
+		mNonFiniteVelocity = true;
 	if (len_sq > Square(mMaxLinearVelocity))
+	{
+		mLinearVelocityClamped = true;
 		mLinearVelocity *= mMaxLinearVelocity / sqrt(len_sq);
+	}
 }
 
 void MotionProperties::ClampAngularVelocity()
@@ -43,9 +47,13 @@ void MotionProperties::ClampAngularVelocity()
 	JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite));
 
 	float len_sq = mAngularVelocity.LengthSq();
-	JPH_ASSERT(isfinite(len_sq));
+	if (!isfinite(len_sq))
+		mNonFiniteVelocity = true;
 	if (len_sq > Square(mMaxAngularVelocity))
+	{
+		mAngularVelocityClamped = true;
 		mAngularVelocity *= mMaxAngularVelocity / sqrt(len_sq);
+	}
 }
 
 inline void MotionProperties::ScaleToMass(float inMass)

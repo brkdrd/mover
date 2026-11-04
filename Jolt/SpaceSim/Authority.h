@@ -190,6 +190,8 @@ enum class CommandResult { Accepted, Invalid, Authority, Sequence, Late, Future,
 // Late policy: reject every command at or before the last committed tick.
 // A gap is allowed (packet loss); an older reordered sequence is rejected. Rejections
 // never consume a sequence number. Acknowledgements distinguish accepted from applied.
+// Ingress MUST bind inCommand.client to the authenticated connection identity before
+// calling: the entity-owner check authorizes a claimed ID, it does not authenticate it.
 inline CommandResult SubmitCommand(Checkpoint &ioState, const Limits &inLimits, const Command &inCommand)
 {
 	if (!ValidCommand(inCommand)) return CommandResult::Invalid;
@@ -574,6 +576,10 @@ enum class ReconcileResult { Applied, Stale, Invalid, TooFar, ReplayFailed };
 // advances one full fixed tick, including ticks with no input. This does not
 // rewind the coupled world, resources of other ships or solver caches. Pending
 // inputs at/before the server cutoff are discarded under the server late policy.
+// Pending() merges authoritative future inputs with local sequences above accepted;
+// replaying an input does not remove it before the server confirms its disposition.
+// A merged queue exceeding the Queue count/allocation bounds returns Invalid before
+// replay. All failed reconciliations leave the prediction and queue frontiers intact.
 class PredictionBuffer
 {
 public:
@@ -605,13 +611,26 @@ public:
 		for (const StreamState &s : server.streams)
 			if (s.entity == mEntity && s.client == mClient) { applied = s.applied; accepted = s.accepted; }
 		std::vector<Command> pending;
+		size_t capacity = std::min(mLimits.commands, mLimits.allocation_bytes / sizeof(Command));
+		auto append = [&](const Command &c)
+		{
+			if (pending.size() >= capacity) return false;
+			pending.push_back(c);
+			return true;
+		};
 		size_t late = 0;
+		// accepted is a sequence high-water mark, not proof that every earlier
+		// packet arrived. Only the authoritative queue confirms accepted inputs
+		// still awaiting execution, and its payload replaces any local copy.
+		for (const Command &c : server.commands)
+			if (c.client == mClient && c.entity == mEntity && !append(c)) return ReconcileResult::Invalid;
 		for (const Command &c : mPending)
 			if (c.sequence > applied)
 			{
 				if (c.tick <= server.tick) ++late;
-				else pending.push_back(c);
+				else if (c.sequence > accepted && !append(c)) return ReconcileResult::Invalid;
 			}
+		std::sort(pending.begin(), pending.end(), [](const Command &a, const Command &b) { return std::tie(a.tick, a.sequence) < std::tie(b.tick, b.sequence); });
 		EntityState predicted = *entity;
 		// Count up by a bounded delta, not tick <= target, which wraps at UINT64_MAX.
 		for (Tick delta = 0; delta < inTargetTick - server.tick; ++delta)
@@ -631,6 +650,7 @@ public:
 		mPending = std::move(pending);
 		mServerTick = server.tick;
 		mLastSequence = std::max(mLastSequence, accepted);
+		for (const Command &c : mPending) mLastIntendedTick = std::max(mLastIntendedTick, c.tick);
 		mLateDiscarded = late;
 		mReady = true;
 		return ReconcileResult::Applied;

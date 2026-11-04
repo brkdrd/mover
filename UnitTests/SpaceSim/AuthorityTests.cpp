@@ -243,6 +243,195 @@ TEST_SUITE("SpaceSimAuthority")
 		CHECK(SubmitCommand(s, l, cmd) == CommandResult::Accepted);
 	}
 
+	TEST_CASE("Prediction rejects reordered sequence gaps before their intended ticks")
+	{
+		Checkpoint initial; EntityState ship; ship.id = 7; ship.owner = 3; initial.entities.push_back(ship);
+		Limits limits;
+		Coordinator server(initial, limits);
+		PredictionBuffer client(3, 7, 1, limits);
+		Command rejected; rejected.client = 3; rejected.entity = 7; rejected.sequence = 1; rejected.tick = 2; rejected.translation[3] = 1;
+		Command accepted = rejected; accepted.sequence = 2; accepted.tick = 3; accepted.translation[3] = 0;
+		AUTH_REQUIRE(client.Queue(rejected));
+		AUTH_REQUIRE(client.Queue(accepted));
+		AUTH_REQUIRE(server.Submit(accepted) == CommandResult::Accepted);
+		CHECK(server.Submit(rejected) == CommandResult::Sequence);
+		Callbacks cb;
+		cb.reserve = [](const Checkpoint &, const TickContext &) { return true; };
+		cb.stage = [](Stage stage, Checkpoint &s, const TickContext &ctx)
+		{
+			if (stage == Stage::Boundary) for (const Command &c : ctx.commands) s.entities[0].velocity[3] = c.translation[3];
+			return true;
+		};
+		cb.physics_update = [](float dt, Checkpoint &s) { s.entities[0].position[3] += s.entities[0].velocity[3] * dt; return uint32(0); };
+		AUTH_REQUIRE(server.Advance(25000000, 1, cb).steps == 1);
+		CHECK(server.Published()->streams[0].accepted == 2);
+		CHECK(server.Published()->streams[0].applied == 0);
+		auto replay = [](EntityState &e, Tick, float dt, const std::vector<Command> &commands)
+		{
+			for (const Command &c : commands) e.velocity[3] = c.translation[3];
+			e.position[3] += e.velocity[3] * dt;
+			return true;
+		};
+		AUTH_REQUIRE(client.Reconcile(*server.Published(), 2, replay) == ReconcileResult::Applied);
+		AUTH_REQUIRE(server.Advance(0, 1, cb).steps == 1);
+		CHECK(client.Predicted().position == server.Published()->entities[0].position);
+		CHECK(client.LateDiscarded() == 0);
+		AUTH_REQUIRE(client.Pending().size() == 1);
+		CHECK(client.Pending()[0].sequence == 2);
+	}
+
+	TEST_CASE("Prediction merges authoritative future commands with only truly unacknowledged local inputs")
+	{
+		Checkpoint snapshot; snapshot.tick = 1;
+		EntityState ship; ship.id = 7; ship.owner = 3; snapshot.entities.push_back(ship);
+		EntityState other = ship; other.id = 8; snapshot.entities.push_back(other);
+		Command first; first.client = 3; first.entity = 7; first.sequence = 2; first.tick = 3; first.translation[3] = 0.25f;
+		Command last = first; last.sequence = 4; last.translation[3] = 0.5f;
+		AUTH_REQUIRE(SubmitCommand(snapshot, Limits {}, first) == CommandResult::Accepted);
+		AUTH_REQUIRE(SubmitCommand(snapshot, Limits {}, last) == CommandResult::Accepted);
+		Command unrelated = last; unrelated.entity = 8; unrelated.sequence = 99; unrelated.tick = 10;
+		AUTH_REQUIRE(SubmitCommand(snapshot, Limits {}, unrelated) == CommandResult::Accepted);
+		std::reverse(snapshot.commands.begin(), snapshot.commands.end());
+		for (bool has_local_history : { false, true })
+			for (Tick target : { Tick(2), Tick(4) })
+			{
+				PredictionBuffer client(3, 7, 1, Limits {});
+				if (has_local_history)
+					for (uint64 sequence = 1; sequence <= 4; ++sequence)
+					{
+						Command local = first; local.sequence = sequence; local.tick = sequence == 1 ? 2 : 3; local.translation[3] = -1;
+						AUTH_REQUIRE(client.Queue(local));
+					}
+				Command unacked = last; unacked.sequence = 5; unacked.tick = 4; unacked.translation[3] = 0.75f;
+				AUTH_REQUIRE(client.Queue(unacked));
+				std::vector<uint64> replayed;
+				auto replay = [&](EntityState &e, Tick, float dt, const std::vector<Command> &commands)
+				{
+					for (const Command &c : commands) { replayed.push_back(c.sequence); e.velocity[3] = c.translation[3]; }
+					e.position[3] += e.velocity[3] * dt;
+					return true;
+				};
+				AUTH_REQUIRE(client.Reconcile(snapshot, target, replay) == ReconcileResult::Applied);
+				if (target == 2) { CHECK(replayed.empty()); CHECK(client.Predicted().position[3] == 0); }
+				else
+				{
+					CHECK(replayed == std::vector<uint64> { 2, 4, 5 });
+					CHECK_APPROX_EQUAL(client.Predicted().position[3], double(1.25f / 120.0f));
+				}
+				AUTH_REQUIRE(client.Pending().size() == 3);
+				CHECK(client.Pending()[0].sequence == 2);
+				CHECK(client.Pending()[0].translation == first.translation);
+				CHECK(client.Pending()[1].sequence == 4);
+				CHECK(client.Pending()[1].translation == last.translation);
+				CHECK(client.Pending()[2].sequence == 5);
+				CHECK(client.LateDiscarded() == 0);
+			}
+	}
+
+	TEST_CASE("Prediction restores intended time ordering from authoritative pending commands")
+	{
+		Checkpoint snapshot; snapshot.tick = 1;
+		EntityState ship; ship.id = 7; ship.owner = 3; snapshot.entities.push_back(ship);
+		EntityState other = ship; other.id = 8; snapshot.entities.push_back(other);
+		Command pending; pending.client = 3; pending.entity = 7; pending.sequence = 10; pending.tick = 20;
+		AUTH_REQUIRE(SubmitCommand(snapshot, Limits {}, pending) == CommandResult::Accepted);
+		Command unrelated = pending; unrelated.entity = 8; unrelated.tick = 100;
+		AUTH_REQUIRE(SubmitCommand(snapshot, Limits {}, unrelated) == CommandResult::Accepted);
+		auto replay = [](EntityState &, Tick, float, const std::vector<Command> &) { return true; };
+		for (bool has_local_pending : { false, true })
+		{
+			PredictionBuffer client(3, 7, 1, Limits {});
+			Command next = pending; next.sequence = 11; next.tick = 21;
+			if (has_local_pending) AUTH_REQUIRE(client.Queue(next));
+			AUTH_REQUIRE(client.Reconcile(snapshot, 1, replay) == ReconcileResult::Applied);
+			Checkpoint admission = snapshot;
+			if (has_local_pending) AUTH_REQUIRE(SubmitCommand(admission, Limits {}, next) == CommandResult::Accepted);
+			next.sequence = has_local_pending ? 12 : 11;
+			next.tick = has_local_pending ? 20 : 2;
+			CHECK(SubmitCommand(admission, Limits {}, next) == CommandResult::Sequence);
+			CHECK_FALSE(client.Queue(next));
+			next.tick = has_local_pending ? 21 : 20;
+			CHECK(client.Queue(next));
+			CHECK(SubmitCommand(admission, Limits {}, next) == CommandResult::Accepted);
+		}
+	}
+
+	TEST_CASE("Prediction rejects merged queue overflow before replay without changing client state")
+	{
+		for (bool allocation_bound : { false, true })
+		{
+			Limits limits; limits.commands = allocation_bound ? 16 : 2;
+			if (allocation_bound) limits.allocation_bytes = sizeof(EntityState) + 8 * sizeof(Command) + sizeof(StreamState);
+			Checkpoint initial; EntityState ship; ship.id = 7; ship.owner = 3; ship.position[3] = 7; initial.entities.push_back(ship);
+			PredictionBuffer client(3, 7, 1, limits);
+			auto replay = [](EntityState &, Tick, float, const std::vector<Command> &) { return true; };
+			AUTH_REQUIRE(client.Reconcile(initial, 0, replay) == ReconcileResult::Applied);
+			size_t local_count = allocation_bound ? 8 : 1;
+			for (size_t i = 0; i < local_count; ++i)
+			{
+				Command local; local.client = 3; local.entity = 7; local.sequence = 20 + i; local.tick = 20 + i;
+				AUTH_REQUIRE(client.Queue(local));
+			}
+			Checkpoint snapshot = initial; snapshot.tick = 1;
+			for (uint64 i = 1; i <= (allocation_bound ? 8U : 2U); ++i)
+			{
+				Command authoritative; authoritative.client = 3; authoritative.entity = 7; authoritative.sequence = i; authoritative.tick = i + 1;
+				AUTH_REQUIRE(SubmitCommand(snapshot, limits, authoritative) == CommandResult::Accepted);
+			}
+			AUTH_REQUIRE(ValidCheckpoint(snapshot, limits));
+			uint32 replay_calls = 0;
+			CHECK(client.Reconcile(snapshot, 2, [&](EntityState &, Tick, float, const std::vector<Command> &) { ++replay_calls; return true; }) == ReconcileResult::Invalid);
+			CHECK(replay_calls == 0);
+			CHECK(client.PredictedTick() == 0);
+			CHECK(client.Predicted().position == ship.position);
+			CHECK(client.LateDiscarded() == 0);
+			CHECK(client.Pending().size() == local_count);
+			if (client.Pending().size() == local_count)
+				for (size_t i = 0; i < local_count; ++i) CHECK(client.Pending()[i].sequence == 20 + i);
+			// A smaller merge at the same cutoff succeeds: failure did not consume it.
+			snapshot.commands.resize(1); snapshot.streams[0].accepted = 1;
+			CHECK(client.Reconcile(snapshot, 1, replay) == ReconcileResult::Applied);
+			CHECK(client.Pending().size() == local_count + 1);
+		}
+	}
+
+	TEST_CASE("Prediction replay failure preserves authoritative merge and ordering frontiers atomically")
+	{
+		for (bool invalid_result : { false, true })
+		{
+			Checkpoint initial; EntityState ship; ship.id = 7; ship.owner = 3; initial.entities.push_back(ship);
+			PredictionBuffer client(3, 7, 1, Limits {});
+			auto replay = [](EntityState &, Tick, float, const std::vector<Command> &) { return true; };
+			AUTH_REQUIRE(client.Reconcile(initial, 0, replay) == ReconcileResult::Applied);
+			Command local; local.client = 3; local.entity = 7; local.sequence = 1; local.tick = 1;
+			AUTH_REQUIRE(client.Queue(local));
+			Checkpoint snapshot = initial; snapshot.tick = 1; snapshot.entities[0].position[3] = 7;
+			Command authoritative = local; authoritative.sequence = 10; authoritative.tick = 20;
+			AUTH_REQUIRE(SubmitCommand(snapshot, Limits {}, authoritative) == CommandResult::Accepted);
+			CHECK(client.Reconcile(snapshot, 2, [&](EntityState &e, Tick, float, const std::vector<Command> &)
+			{
+				e.position[3] = std::numeric_limits<double>::infinity();
+				return invalid_result;
+			}) == ReconcileResult::ReplayFailed);
+			CHECK(client.PredictedTick() == 0);
+			CHECK(client.Predicted().position == ship.position);
+			CHECK(client.LateDiscarded() == 0);
+			AUTH_REQUIRE(client.Pending().size() == 1);
+			CHECK(client.Pending()[0].sequence == 1);
+			local.sequence = 2;
+			CHECK(client.Queue(local)); // No server cutoff, sequence or intended-time frontier leaked.
+			AUTH_REQUIRE(client.Reconcile(snapshot, 1, replay) == ReconcileResult::Applied);
+			CHECK(client.Predicted().position == snapshot.entities[0].position);
+			CHECK(client.LateDiscarded() == 2);
+			AUTH_REQUIRE(client.Pending().size() == 1);
+			CHECK(client.Pending()[0].sequence == 10);
+			local.sequence = 11; local.tick = 2;
+			CHECK_FALSE(client.Queue(local));
+			local.tick = 20;
+			CHECK(client.Queue(local));
+		}
+	}
+
 	TEST_CASE("Bounded reconciliation handles loss reorder duplicate snapshots and replay failure")
 	{
 		Checkpoint initial; EntityState ship; ship.id = 7; ship.owner = 3; initial.entities.push_back(ship);

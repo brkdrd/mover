@@ -89,6 +89,7 @@ set(UNIT_TESTS_SRC_FILES
 #	${UNIT_TESTS_ROOT}/Physics/SixDOFConstraintTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/SliderConstraintTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/SoftBodyTests.cpp
+	${UNIT_TESTS_ROOT}/Physics/SpaceDynamicsTests.cpp
 	${UNIT_TESTS_ROOT}/Physics/SubShapeIDTest.cpp
 	${UNIT_TESTS_ROOT}/Physics/WholeBodySimulationTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/TaperedCylinderShapeTests.cpp

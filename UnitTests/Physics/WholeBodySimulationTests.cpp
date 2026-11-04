@@ -182,8 +182,9 @@ TEST_SUITE("WholeBodySimulationTests")
 		PhysicsTestContext c;
 		c.ZeroGravity();
 
-		// Deliberately not a single rotation plane, and deliberately not inertially symmetric, so
-		// the gyroscopic term is active
+		// Deliberately a double rotation of an inertially symmetric tesseract.
+		// This checks the constant-velocity exponential only; asymmetric gyroscopic
+		// conservation and independent timestep refinement live in SpaceDynamicsTests.
 		const Bivec cAngularVelocity(1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.7f);
 
 		Body &body = c.CreateBox(RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4(0.5f, 0.5f, 0.5f, 0.5f));

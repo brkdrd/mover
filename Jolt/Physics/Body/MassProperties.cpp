@@ -48,12 +48,10 @@ bool MassProperties::DecomposePrincipalMomentsOfInertia(Mat44 &outRotation, Vec4
 
 	// Ensure the rotation matrix is a proper rotation (determinant +1) rather than a reflection.
 	// In 4D, flipping a single axis changes determinant sign. We flip the last column if det < 0.
-	// Compute determinant via 4D cross product of first three columns dotted with the fourth.
-	Vec4 c0 = Vec4(rotation.GetColumn4(0));
-	Vec4 c1 = Vec4(rotation.GetColumn4(1));
-	Vec4 c2 = Vec4(rotation.GetColumn4(2));
-	Vec4 c3 = Vec4(rotation.GetColumn4(3));
-	if (Vec4::sCross(c0, c1, c2).Dot(c3) < 0.0f)
+	// sCross(c0, c1, c2).Dot(c3) has the OPPOSITE sign of the determinant in our
+	// 4D cross convention (already -1 for the identity basis). A reflection cannot
+	// be represented by GetRotor and silently corrupts a rotated inertia tensor.
+	if (rotation.GetDeterminant() < 0.0f)
 		rotation.SetColumn4(3, -rotation.GetColumn4(3));
 
 	outRotation = rotation;

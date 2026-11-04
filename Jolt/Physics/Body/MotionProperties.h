@@ -271,8 +271,10 @@ public:
 	inline void				SubAngularVelocityStep(BivecArg inAngularVelocityChange)		{ JPH_DET_LOG("SubAngularVelocityStep: " << inAngularVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mAngularVelocity -= inAngularVelocityChange; JPH_ASSERT(!mAngularVelocity.IsNaN()); }
 	///@}
 
-	/// Apply the gyroscopic force (aka Dzhanibekov effect, see https://en.wikipedia.org/wiki/Tennis_racket_theorem)
-	inline void				ApplyGyroscopicForceInternal(RotorArg inBodyRotation, float inDeltaTime);
+	/// Advance torque-free orientation AND transport angular velocity with fixed world momentum.
+	/// Called once after force/contact velocity kicks, not separately as an extra torque.
+	/// Second-order principal-plane Hamiltonian splitting; unlocked, positive inertia only.
+	inline Rotor			IntegrateGyroscopicRotationInternal(RotorArg inBodyRotation, float inDeltaTime);
 
 	/// Apply all accumulated forces, torques and drag (should only be called by the PhysicsSystem)
 	inline void				ApplyForceTorqueAndDragInternal(RotorArg inBodyRotation, Vec4Arg inGravity, float inDeltaTime);

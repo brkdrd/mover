@@ -125,59 +125,125 @@ InverseInertiaOperator MotionProperties::GetInverseInertiaForRotation(RotorArg i
 	return op;
 }
 
-void MotionProperties::ApplyGyroscopicForceInternal(RotorArg inBodyRotation, float inDeltaTime)
+namespace MotionPropertiesImpl
+{
+	// Step-local double adjoint. A float rotor is only approximately unit: four
+	// successive float adjoints need not be inverses and can amplify momentum
+	// even for dt = 0. Evaluate the normalized SO(4) map in double, and round
+	// only the final velocity. This normalizes the ROTATION, never L or energy.
+	class GyroscopicAdjoint
+	{
+	public:
+		explicit GyroscopicAdjoint(RotorArg inRotation)
+		{
+			double s = inRotation.GetScalar(), a = inRotation.GetE12(), b = inRotation.GetE13(), c = inRotation.GetE14();
+			double d = inRotation.GetE23(), e = inRotation.GetE24(), f = inRotation.GetE34(), p = inRotation.GetPseudoscalar();
+			double norm = s*s + a*a + b*b + c*c + d*d + e*e + f*f + p*p;
+			double defect = 2 * (s*p - a*f + b*e - c*d);
+			double inverse_scale = 1.0 / sqrt(norm*norm - defect*defect);
+			double q[4][4];
+			for (int j = 0; j < 4; ++j)
+			{
+				double v1 = j == 0? 1 : 0, v2 = j == 1? 1 : 0, v3 = j == 2? 1 : 0, v4 = j == 3? 1 : 0;
+				double t1 = s*v1 + a*v2 + b*v3 + c*v4;
+				double t2 = s*v2 - a*v1 + d*v3 + e*v4;
+				double t3 = s*v3 - b*v1 - d*v2 + f*v4;
+				double t4 = s*v4 - c*v1 - e*v2 - f*v3;
+				double t123 = d*v1 - b*v2 + a*v3 + p*v4;
+				double t124 = e*v1 - c*v2 + a*v4 - p*v3;
+				double t134 = f*v1 + p*v2 - c*v3 + b*v4;
+				double t234 = -p*v1 + f*v2 - e*v3 + d*v4;
+				q[0][j] = (t1*s + t2*a + t3*b + t4*c + t123*d + t124*e + t134*f + t234*p) * inverse_scale;
+				q[1][j] = (t2*s - t1*a + t3*d + t4*e - t123*b - t124*c + t234*f - t134*p) * inverse_scale;
+				q[2][j] = (t3*s - t1*b - t2*d + t4*f + t123*a - t134*c - t234*e + t124*p) * inverse_scale;
+				q[3][j] = (t4*s - t1*c - t2*e - t3*f + t124*a + t134*b + t234*d - t123*p) * inverse_scale;
+			}
+			constexpr int i[6] = { 0, 0, 0, 1, 1, 2 }, j[6] = { 1, 2, 3, 2, 3, 3 };
+			for (int row = 0; row < 6; ++row)
+				for (int col = 0; col < 6; ++col)
+					mA[row][col] = q[i[row]][i[col]] * q[j[row]][j[col]] - q[i[row]][j[col]] * q[j[row]][i[col]];
+		}
+
+		void ToWorld(const double *inLocal, double *outWorld) const
+		{
+			for (int i = 0; i < 6; ++i)
+			{
+				outWorld[i] = 0;
+				for (int j = 0; j < 6; ++j) outWorld[i] += mA[i][j] * inLocal[j];
+			}
+		}
+		void ToLocal(const double *inWorld, double *outLocal) const
+		{
+			for (int i = 0; i < 6; ++i)
+			{
+				outLocal[i] = 0;
+				for (int j = 0; j < 6; ++j) outLocal[i] += mA[j][i] * inWorld[j];
+			}
+		}
+
+	private:
+		double mA[6][6];
+	};
+}
+
+Rotor MotionProperties::IntegrateGyroscopicRotationInternal(RotorArg inBodyRotation, float inDeltaTime)
 {
 	JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite));
 	JPH_ASSERT(mCachedBodyType == EBodyType::RigidBody);
 	JPH_ASSERT(mCachedMotionType == EMotionType::Dynamic);
 
-	// Calculate local space inertia (reciprocal of inverse, avoiding division by zero)
-	Bivec inv_diag = mInvInertiaDiagonal;
-	Bivec local_inertia(
-		inv_diag[0] != 0.0f ? 1.0f / inv_diag[0] : 0.0f,
-		inv_diag[1] != 0.0f ? 1.0f / inv_diag[1] : 0.0f,
-		inv_diag[2] != 0.0f ? 1.0f / inv_diag[2] : 0.0f,
-		inv_diag[3] != 0.0f ? 1.0f / inv_diag[3] : 0.0f,
-		inv_diag[4] != 0.0f ? 1.0f / inv_diag[4] : 0.0f,
-		inv_diag[5] != 0.0f ? 1.0f / inv_diag[5] : 0.0f);
+	// Free rotation requires all six rotational DOFs and a nonsingular inertia.
+	// World-space locks model external constraint torques, not an isolated top.
+	if ((mAllowedDOFs & EAllowedDOFs::AllRotation) != EAllowedDOFs::AllRotation)
+		return (Rotor::sExp(0.5f * inDeltaTime * mAngularVelocity) * inBodyRotation).Normalized();
+	for (int k = 0; k < 6; ++k)
+		if (mInvInertiaDiagonal[k] <= 0.0f)
+			return (Rotor::sExp(0.5f * inDeltaTime * mAngularVelocity) * inBodyRotation).Normalized();
 
-	// Calculate local space angular velocity: bring the world-space angular velocity into the body's
-	// inertia principal frame via the inverse adjoint (Ad(R^{-1}), R = body_rotation * inertia_rotation).
-	Rotor combined = inBodyRotation * mInertiaRotation;
-	Bivec local_angular_velocity = combined.InverseRotateBivec(mAngularVelocity);
-	Bivec local_momentum = local_inertia * local_angular_velocity;
+	MotionPropertiesImpl::GyroscopicAdjoint initial(inBodyRotation * mInertiaRotation);
+	double velocity[6], momentum[6], world_momentum[6];
+	for (int k = 0; k < 6; ++k) velocity[k] = mAngularVelocity[k];
+	initial.ToLocal(velocity, momentum);
+	for (int k = 0; k < 6; ++k) momentum[k] /= mInvInertiaDiagonal[k];
+	initial.ToWorld(momentum, world_momentum);
+	Bivec local_momentum { float(momentum[0]), float(momentum[1]), float(momentum[2]),
+		float(momentum[3]), float(momentum[4]), float(momentum[5]) };
 
-	// The gyroscopic torque in 4D: T = [Omega, L] (commutator of bivectors)
-	// [Omega, L]_ij = sum_k (Omega_ik * L_kj - L_ik * Omega_kj)
-	// This is the Lie bracket of the bivectors viewed as elements of so(4).
-	//
-	// For now, use the simplified energy-conserving approach:
-	// new_momentum = momentum - dt * [omega, momentum], then rescale to preserve |momentum|
-	//
-	// The commutator of two bivectors A, B in so(4):
-	float w12 = local_angular_velocity.GetE12(), w13 = local_angular_velocity.GetE13(), w14 = local_angular_velocity.GetE14();
-	float w23 = local_angular_velocity.GetE23(), w24 = local_angular_velocity.GetE24(), w34 = local_angular_velocity.GetE34();
-	float L12 = local_momentum.GetE12(), L13 = local_momentum.GetE13(), L14 = local_momentum.GetE14();
-	float L23 = local_momentum.GetE23(), L24 = local_momentum.GetE24(), L34 = local_momentum.GetE34();
+	// H(L) = sum_k L_k^2 / (2 I_k). Each single-plane Hamiltonian has an
+	// EXACT flow: Q <- Q exp(e_k L_k dt / (2 I_k)),
+	// L <- Ad(exp(-e_k L_k dt / (2 I_k))) L. L_k is constant in that flow.
+	// Compose these six flows symmetrically (Strang, 11 plane rotations).
+	// This is a second-order, time-reversible Lie-Poisson splitting: world
+	// momentum and the coadjoint orbit are preserved, energy has bounded
+	// splitting error, NOT an artificial momentum/energy length projection.
+	// The old forward-Euler commutator had the wrong sign as well as secular
+	// error: in this convention local Ldot = -[Omega_matrix, L_matrix].
+	Rotor delta = Rotor::sIdentity();
+	for (int stage = 0; stage < 11; ++stage)
+	{
+		int k = stage <= 5? stage : 10 - stage;
+		float h = (stage == 5? inDeltaTime : 0.5f * inDeltaTime);
+		float angle = h * mInvInertiaDiagonal[k] * local_momentum[k];
+		float plane[6] = { 0, 0, 0, 0, 0, 0 };
+		plane[k] = 0.5f * angle;
+		Rotor step = Rotor::sExp(Bivec(plane[0], plane[1], plane[2], plane[3], plane[4], plane[5]));
+		delta = delta * step;
+		local_momentum = step.InverseRotateBivec(local_momentum);
+	}
 
-	// [w, L]_ij = sum_k (w_ik * L_kj - L_ik * w_kj)
-	// Antisymmetric matrix representation: w_ij = -w_ji
-	Bivec commutator(
-		w13*L23 + w14*L24 - w23*L13 - w24*L14,                    // [w,L]_12
-		-w12*L23 + w14*L34 + w23*L12 - w34*L14,                   // [w,L]_13
-		-w12*L24 - w13*L34 + w24*L12 + w34*L13,                   // [w,L]_14
-		w12*L13 - w13*L12 + w24*L34 - w34*L24,                    // [w,L]_23
-		w12*L14 - w14*L12 - w23*L34 + w34*L23,                    // [w,L]_24
-		w13*L14 - w14*L13 + w23*L24 - w24*L23                     // [w,L]_34
-	);
-
-	Bivec new_local_momentum = local_momentum - inDeltaTime * commutator;
-	float new_len_sq = new_local_momentum.LengthSq();
-	new_local_momentum = new_len_sq > 0.0f ? new_local_momentum * sqrt(local_momentum.LengthSq() / new_len_sq) : Bivec::sZero();
-
-	// Convert body-frame momentum back to a body-frame angular velocity, then rotate it to world space
-	Bivec new_local_angular_velocity = mInvInertiaDiagonal * new_local_momentum;
-	mAngularVelocity = combined.RotateBivec(new_local_angular_velocity);
+	// Derive velocity from THE SAME normalized endpoint orientation used by
+	// the body. Momentum is a step-local derived value, never separate state.
+	// Reconstructing from world L avoids accumulating eleven adjoint rounding
+	// errors per step. No torque/impulse is applied here: those have one owner
+	// in the existing force kick and contact/CCD solvers.
+	Rotor rotation = (inBodyRotation * mInertiaRotation * delta * mInertiaRotation.Reversed()).Normalized();
+	MotionPropertiesImpl::GyroscopicAdjoint final(rotation * mInertiaRotation);
+	final.ToLocal(world_momentum, momentum);
+	for (int k = 0; k < 6; ++k) momentum[k] *= mInvInertiaDiagonal[k];
+	final.ToWorld(momentum, velocity);
+	mAngularVelocity = Bivec(float(velocity[0]), float(velocity[1]), float(velocity[2]),
+		float(velocity[3]), float(velocity[4]), float(velocity[5]));
+	return rotation;
 }
 
 void MotionProperties::ApplyForceTorqueAndDragInternal(RotorArg inBodyRotation, Vec4Arg inGravity, float inDeltaTime)

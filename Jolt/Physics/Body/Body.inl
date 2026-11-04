@@ -60,6 +60,16 @@ inline bool Body::sFindCollidingPairsCanCollide(const Body &inBody1, const Body 
 	return true;
 }
 
+void Body::IntegrateRotationInternal(float inDeltaTime)
+{
+	JPH_ASSERT(IsRigidBody());
+	JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sPositionAccess(), BodyAccess::EAccess::ReadWrite));
+	if (IsDynamic() && GetApplyGyroscopicForce())
+		mRotation = mMotionProperties->IntegrateGyroscopicRotationInternal(mRotation, inDeltaTime);
+	else
+		AddRotationStep(GetAngularVelocity() * inDeltaTime);
+}
+
 void Body::AddRotationStep(BivecArg inAngularVelocityTimesDeltaTime)
 {
 	JPH_ASSERT(IsRigidBody());

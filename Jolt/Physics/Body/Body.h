@@ -100,7 +100,9 @@ public:
 	/// Checks if the combination of this body and inBody2 should use manifold reduction
 	inline bool				GetUseManifoldReductionWithBody(const Body &inBody2) const		{ return ((mFlags.load(memory_order_relaxed) & inBody2.mFlags.load(memory_order_relaxed)) & uint8(EFlags::UseManifoldReduction)) != 0; }
 
-	/// Set to indicate that the gyroscopic force should be applied to this body (aka Dzhanibekov effect, see https://en.wikipedia.org/wiki/Tennis_racket_theorem)
+	/// Enable momentum-transporting second-order free rotation during orientation drift.
+	/// Applies to unlocked dynamic rigid bodies with positive inertia; see Docs/SpaceDynamics.md.
+	/// Forces/contact impulses still have their existing single owner; defaults remain opt-in.
 	inline void				SetApplyGyroscopicForce(bool inApply)							{ JPH_ASSERT(IsRigidBody()); if (inApply) mFlags.fetch_or(uint8(EFlags::ApplyGyroscopicForce), memory_order_relaxed); else mFlags.fetch_and(uint8(~uint8(EFlags::ApplyGyroscopicForce)), memory_order_relaxed); }
 
 	/// Check if the gyroscopic force is being applied for this body
@@ -342,6 +344,11 @@ public:
 	/// Update position using an Euler step (used during position integrate & constraint solving)
 	inline void				AddPositionStep(Vec4Arg inLinearVelocityTimesDeltaTime)			{ JPH_ASSERT(IsRigidBody()); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sPositionAccess(), BodyAccess::EAccess::ReadWrite)); mPosition += RVec4(Lane4(mMotionProperties->LockTranslation(inLinearVelocityTimesDeltaTime))); JPH_ASSERT(!mPosition.IsNaN()); }
 	inline void				SubPositionStep(Vec4Arg inLinearVelocityTimesDeltaTime)			{ JPH_ASSERT(IsRigidBody()); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sPositionAccess(), BodyAccess::EAccess::ReadWrite)); mPosition -= RVec4(Lane4(mMotionProperties->LockTranslation(inLinearVelocityTimesDeltaTime))); JPH_ASSERT(!mPosition.IsNaN()); }
+
+	/// Advance orientation and, when enabled on a dynamic body, torque-free angular velocity.
+	/// PhysicsSystem only: call once per drift, after velocity impulses. Position corrections
+	/// must keep using AddRotationStep/SubRotationStep, not integrate a second free motion.
+	inline void				IntegrateRotationInternal(float inDeltaTime);
 
 	/// Update rotation using an Euler step (used during position integrate & constraint solving)
 	/// In 4D, takes a bivector (angular velocity * dt) and integrates via rotor exponential

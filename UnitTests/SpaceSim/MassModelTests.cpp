@@ -47,6 +47,61 @@ MassVector ReferencePointVelocity(const MassBody &body, const MassVector &point,
     return v;
 }
 
+// Independent forward-error/conservation oracle: no production TwoSum, Wedge or Ledger.
+void CheckRedistributionRepresentation(const MassBody &body, const MassTransaction &tx)
+{
+    BodyMassData a, b;
+    MASS_REQUIRE(MassModel::Derive(body, a));
+    MASS_REQUIRE(MassModel::Derive(tx.mBodies[0], b, a.mWorldCOM));
+    auto local = tx.mBodies[0];
+    local.mOrigin = {};
+    BodyMassData target;
+    MASS_REQUIRE(MassModel::Derive(local, target)); // The actual rounded rotated offset t.
+    auto halfULP = [](double x)
+    {
+        double hi = std::nextafter(x, std::numeric_limits<double>::infinity());
+        double lo = std::nextafter(x, -std::numeric_limits<double>::infinity());
+        return 0.5L * std::max(static_cast<long double>(hi) - x, static_cast<long double>(x) - lo);
+    };
+    for (size_t i = 0; i < 4; ++i)
+    {
+        long double error = static_cast<long double>(b.mWorldCOM[i]) - a.mWorldCOM[i];
+        long double bound = tx.mLedger.mCOMRoundingPositionBound[i];
+        CHECK(std::abs(error) <= bound);
+        // Each of the two rounding residues is <= half an ULP of its result.
+        long double cap = halfULP(tx.mBodies[0].mOrigin[i]) + halfULP(b.mWorldCOM[i]);
+        CHECK(bound <= cap * (1 + 4 * std::numeric_limits<double>::epsilon()));
+        CHECK(tx.mBodies[0].mOrigin[i] == a.mWorldCOM[i] - target.mWorldCOM[i]);
+        CHECK(tx.mLedger.mResidual.mLinear[i] == 0);
+    }
+    long double scale = 0;
+    for (size_t k = 0; k < 6; ++k)
+        scale += std::abs(a.mSpinMomentum[k]) + std::abs(b.mSpinMomentum[k])
+            + std::abs(a.mSpinMomentum[k]) + std::abs(b.mMomentum.mAngular[k]);
+    long double tolerance = 1e-9L * std::max(scale, 1e-12L);
+    size_t k = 0;
+    for (size_t i = 0; i < 4; ++i)
+        for (size_t j = i + 1; j < 4; ++j, ++k)
+        {
+            long double p_i = static_cast<long double>(b.mLocal.mMass) * body.mLinearVelocity[i];
+            long double p_j = static_cast<long double>(b.mLocal.mMass) * body.mLinearVelocity[j];
+            long double dx_i = static_cast<long double>(b.mWorldCOM[i]) - a.mWorldCOM[i];
+            long double dx_j = static_cast<long double>(b.mWorldCOM[j]) - a.mWorldCOM[j];
+            long double orbital = p_i * dx_j - p_j * dx_i;
+            long double bound = std::abs(p_i) * tx.mLedger.mCOMRoundingPositionBound[j]
+                + std::abs(p_j) * tx.mLedger.mCOMRoundingPositionBound[i];
+            // Production p is rounded once; account for only that product's half-ULP.
+            long double pBudget = halfULP(b.mMomentum.mLinear[i]) * tx.mLedger.mCOMRoundingPositionBound[j]
+                + halfULP(b.mMomentum.mLinear[j]) * tx.mLedger.mCOMRoundingPositionBound[i];
+            CHECK(tx.mLedger.mCOMRoundingAngularBound[k] <= (bound + pBudget) * (1 + 8 * std::numeric_limits<double>::epsilon()));
+            CHECK(std::abs(orbital) <= bound);
+            long double residual = static_cast<long double>(b.mSpinMomentum[k]) - a.mSpinMomentum[k] + orbital;
+            CHECK(std::abs(residual) <= tolerance + bound);
+            CHECK(tx.mLedger.mResidual.mAngular[k] == b.mMomentum.mAngular[k] - a.mSpinMomentum[k]);
+            CHECK(std::abs(tx.mLedger.mResidual.mAngular[k]) <= tolerance + tx.mLedger.mCOMRoundingAngularBound[k]);
+        }
+}
+
 void CheckGlobalConservation(const std::vector<MassBody> &before, const MassTransaction &tx, double tolerance = 1e-7)
 {
     MassMomentum a, b;
@@ -181,6 +236,8 @@ TEST_SUITE("SpaceSimMass")
         CHECK(MassModel::Derive(body, a));
         CHECK(MassModel::Derive(tx.mBodies[0], b));
         CHECK(a.mWorldCOM == b.mWorldCOM);
+        CHECK(tx.mLedger.mCOMRoundingPositionBound == MassVector {});
+        CHECK(tx.mLedger.mCOMRoundingAngularBound == MassBivector {});
         CHECK(body.mLinearVelocity == tx.mBodies[0].mLinearVelocity);
         for (size_t i = 0; i < 6; ++i)
         {
@@ -192,6 +249,80 @@ TEST_SUITE("SpaceSimMass")
         CHECK(MassModel::Redistribute(tx.mBodies[0], body.mComponents, tx));
         CHECK(tx.mLedger.mAddedEnergy > 0);
         CHECK(tx.mLedger.mDissipatedEnergy == 0);
+    }
+
+    TEST_CASE("RedistributionCOMRoundTripDoesNotInventSpinOrRejectTranslation")
+    {
+        for (double speed : { 0.0, 1.0, 1e8 })
+        {
+            CAPTURE(speed);
+            MassBody body;
+            body.mID = 1;
+            body.mComponents = { Component(1, 2, { 0, 0.1, 0, 0 }, { 1, 1, 1, 1 }) };
+            body.mLinearVelocity = { speed, 0, 0, 0 };
+            auto replacement = body.mComponents;
+            replacement[0].mLocalCOM[1] = 0.7;
+            MassTransaction tx;
+            MASS_REQUIRE(MassModel::Redistribute(body, replacement, tx));
+            CHECK(tx.mBodies[0].mAngularVelocity == MassBivector {});
+            CHECK(tx.mBodies[0].mLinearVelocity == body.mLinearVelocity);
+            CHECK(tx.mLedger.mAddedEnergy == 0);
+            CHECK(tx.mLedger.mDissipatedEnergy == 0);
+            CheckRedistributionRepresentation(body, tx);
+            // Exact analytical double fixture: COM falls by 2^-55, not physical spin.
+            CHECK(tx.mLedger.mCOMRoundingPositionBound[1] >= 0x1p-55);
+            CHECK(tx.mLedger.mCOMRoundingPositionBound[1] < 0x1.0000000000002p-55);
+            CHECK(tx.mLedger.mResidual.mAngular[0] == -2 * speed * 0x1p-55);
+            CHECK(tx.mLedger.mCOMRoundingAngularBound[0] >= 2 * speed * 0x1p-55);
+            if (speed != 0) CHECK(std::abs(tx.mLedger.mResidual.mAngular[0]) > 1e-21);
+        }
+    }
+
+    TEST_CASE("SeededRedistributionPreservesCentralMotionAcrossFourLaneBoosts")
+    {
+        UnitTestRandom random(0xC04E4D);
+        std::uniform_real_distribution<double> u(-1.0, 1.0);
+        for (int trial = 0; trial < 3000; ++trial)
+        {
+            CAPTURE(trial);
+            MassBody body;
+            body.mID = 1;
+            body.mRotation = Rotor::sExp(Bivec(float(u(random)), float(u(random)), float(u(random)), float(u(random)), float(u(random)), float(u(random))));
+            for (double &x : body.mOrigin) x = 10 * u(random);
+            for (uint64 id = 1; id <= 4; ++id)
+                body.mComponents.push_back(Component(id, float(id + 1), { 2*u(random), 2*u(random), 2*u(random), 2*u(random) }, { 1, 2, 3, 4 }));
+            auto replacement = body.mComponents;
+            for (auto &c : replacement)
+            {
+                for (double &x : c.mLocalCOM) x = 2 * u(random);
+                c.mProperties.mInertia *= 1.5f;
+            }
+            const MassVector boosts[] = { {}, { 1, -2, 3, -4 }, { 1e8, 0, 0, 0 },
+                { 1e8*u(random), 1e8*u(random), 1e8*u(random), 1e8*u(random) } };
+            for (bool spinning : { false, true })
+            {
+                CAPTURE(spinning);
+                if (spinning) for (double &w : body.mAngularVelocity) w = u(random);
+                MassTransaction rest;
+                body.mLinearVelocity = {};
+                MASS_REQUIRE(MassModel::Redistribute(body, replacement, rest));
+                for (const auto &boost : boosts)
+                {
+                    body.mLinearVelocity = boost;
+                    MassTransaction tx;
+                    MASS_REQUIRE(MassModel::Redistribute(body, replacement, tx));
+                    CHECK(tx.mBodies[0].mAngularVelocity == rest.mBodies[0].mAngularVelocity);
+                    CHECK(tx.mBodies[0].mLinearVelocity == boost);
+                    CheckRedistributionRepresentation(body, tx);
+                    if (!spinning)
+                    {
+                        CHECK(tx.mBodies[0].mAngularVelocity == MassBivector {});
+                        CHECK(tx.mLedger.mAddedEnergy == 0);
+                        CHECK(tx.mLedger.mDissipatedEnergy == 0);
+                    }
+                }
+            }
+        }
     }
 
     TEST_CASE("FreeFragmentationInheritsRigidMotionWithoutDoubleMass")
@@ -457,12 +588,26 @@ TEST_SUITE("SpaceSimMass")
         MassTransaction out;
         out.mBodies.push_back(body);
         out.mLedger.mAddedEnergy = 123;
-        auto unchanged = [&]() { CHECK(out.mBodies.size() == 1); CHECK(out.mBodies[0].mID == 1); CHECK(out.mLedger.mAddedEnergy == 123); };
+        out.mLedger.mCOMRoundingPositionBound = { 1, 2, 3, 4 };
+        out.mLedger.mCOMRoundingAngularBound = { 1, 2, 3, 4, 5, 6 };
+        auto unchanged = [&]()
+        {
+            CHECK(out.mBodies.size() == 1); CHECK(out.mBodies[0].mID == 1); CHECK(out.mLedger.mAddedEnergy == 123);
+            CHECK(out.mLedger.mCOMRoundingPositionBound == MassVector { 1, 2, 3, 4 });
+            CHECK(out.mLedger.mCOMRoundingAngularBound == MassBivector { 1, 2, 3, 4, 5, 6 });
+        };
         auto replacement = body.mComponents;
         replacement[0].mID = 999;
         CHECK_FALSE(MassModel::Redistribute(body, replacement, out)); unchanged();
         replacement = body.mComponents; replacement[0].mProperties.mMass = 5;
         CHECK_FALSE(MassModel::Redistribute(body, replacement, out)); unchanged();
+        // Valid target mass/IDs, but the COM-preserving reconstructed origin exceeds
+        // the coordinate envelope: reject after reconstruction without publishing bounds.
+        auto distant = body;
+        distant.mOrigin[1] = 1e9;
+        replacement = body.mComponents;
+        for (auto &c : replacement) c.mLocalCOM[1] = -1;
+        CHECK_FALSE(MassModel::Redistribute(distant, replacement, out)); unchanged();
         CHECK_FALSE(MassModel::Fragment(body, { { 1, { 1 } }, { 2, {} } }, out)); unchanged();
         CHECK_FALSE(MassModel::Fragment(body, { { 1, { 1 } }, { 0, { 2 } } }, out)); unchanged();
         CHECK_FALSE(MassModel::Dock({ body, body }, 5, out)); unchanged();
@@ -536,6 +681,8 @@ TEST_SUITE("SpaceSimMass")
         CHECK_APPROX_EQUAL(boosted.mLedger.mBefore.mKineticEnergy, 2.054, 1e-14);
         CHECK(rest.mLedger.mVelocityRoundingEnergyBound == 0);
         CHECK(boosted.mLedger.mVelocityRoundingEnergyBound > 0);
+        CHECK(boosted.mLedger.mCOMRoundingPositionBound == MassVector {});
+        CHECK(boosted.mLedger.mCOMRoundingAngularBound == MassBivector {});
         CHECK(boosted.mLedger.mVelocityRoundingEnergyBound < 1e-8);
         double error = boosted.mLedger.mAddedEnergy + boosted.mLedger.mDissipatedEnergy;
         CHECK(error > 1e-9 * boosted.mLedger.mBefore.mKineticEnergy); // Old blanket relative test rejects.

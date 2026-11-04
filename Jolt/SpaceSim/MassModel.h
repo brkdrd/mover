@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -77,6 +78,8 @@ struct MassLedger
     double mAddedEnergy = 0; ///< Positive net kinetic work required by this model.
     double mDissipatedEnergy = 0; ///< Positive kinetic energy removed (heat/deformation etc.).
     double mVelocityRoundingEnergyBound = 0; ///< Fragment-only bound from storing absolute double velocities; not work.
+    MassVector mCOMRoundingPositionBound {}; ///< Redistribute-only COM reconstruction error, per world coordinate.
+    MassBivector mCOMRoundingAngularBound {}; ///< Redistribute-only |p wedge COM representation error|; not physical spin.
 };
 
 /// Point-mass flux sample at the transaction epoch. World velocity is ABSOLUTE, not nozzle
@@ -303,6 +306,14 @@ inline bool Rotation(const Rotor &rotor, MassMatrix &out)
 ///   and e is the actual rounding residue of storing V_before+u as an absolute double.
 ///   TwoSum measures that residue; mVelocityRoundingEnergyBound publishes the bound.
 ///   Actual energy differences remain in the work/dissipation entries, never clamped away.
+///   Redistribution reconstructs O = fl(C - t), C' = fl(O + t), where C is the incoming
+///   represented world COM and t is the SAME rotated target COM used by Derive. TwoSum
+///   gives the exact residues r1 = C-t-O and r2 = O+t-C'. Thus |C'-C| <= |r1|+|r2| = E.
+///   The actual output COM must satisfy this per-coordinate position budget. Its orbital
+///   angular representation bound is B_ij = |p_i| E_j + |p_j| E_i, using output p; bounds
+///   are rounded outward. Only Redistribute adds B to the unchanged 1e-9 angular test.
+///   Both bounds and the uncorrected angular residual are published. No compensating
+///   spin, extra work, or allowance for an independently displaced physical COM is added.
 ///   Docking may add <=1e-6*max(K_before, 1e-12) as a float-Rotor composition budget.
 /// - Ledger kinetic energies use the incoming system's COM-velocity frame to resolve
 ///   small work at large common speed; momenta remain world components. Derive() alone
@@ -323,7 +334,10 @@ inline bool Rotation(const Rotor &rotor, MassMatrix &out)
 /// multi-point exhaust trials (masses 2..5, offsets <=1, relative speeds <=3). These check
 /// absolute-velocity quantization against an independent long-double bound and central
 /// spin covariance for identical represented relative velocities, including exact zero
-/// spin/work for co-moving participants. Limits above prevent overflow, NOT a uniform
+/// spin/work for co-moving participants; 3000 additional general-Spin(4) redistribution
+/// trials at rest and under ordinary, axial 1e8 and four-lane 1e8 boosts, with zero and
+/// nonzero spin, independently bound COM reconstruction by the two half-ULP budgets.
+/// Limits above prevent overflow, NOT a uniform
 /// accuracy guarantee over every mass ratio/conditioning. Rebase tiny distant features.
 ///
 /// Not implemented here: live physics commit/locking/cache/shape replacement, collision
@@ -405,11 +419,39 @@ public:
         changed.mComponents = components;
         MassMatrix rotation;
         if (!MassDetail::Rotation(body.mRotation, rotation)) return false;
-        MassVector shift = MassDetail::Transform(rotation, MassDetail::Sub(before.mLocal.mLocalCOM, target.mLocalCOM));
-        for (size_t i = 0; i < 4; ++i) changed.mOrigin[i] += shift[i];
+        const MassVector offset = MassDetail::Transform(rotation, target.mLocalCOM);
+        MassVector positionBound {};
+        // Outward rounding keeps these error bounds conservative in binary64, including
+        // their final products/sums. Exact operations retain a zero budget.
+        auto up = [](double x) { return x == 0? 0 : std::nextafter(x, std::numeric_limits<double>::infinity()); };
+        auto residue = [](double a, double b, double sum)
+        {
+            double bv = sum - a;
+            return (a - (sum - bv)) + (b - bv); // TwoSum: exact a+b = sum+residue.
+        };
+        for (size_t i = 0; i < 4; ++i)
+        {
+            double c = before.mWorldCOM[i], t = offset[i];
+            changed.mOrigin[i] = c - t;
+            double reconstructed = changed.mOrigin[i] + t;
+            positionBound[i] = up(std::abs(residue(c, -t, changed.mOrigin[i]))
+                + std::abs(residue(changed.mOrigin[i], t, reconstructed)));
+        }
         if (!SetCentralMomentum(changed, body.mLinearVelocity, before.mSpinMomentum)) return false;
+        BodyMassData after;
+        if (!Derive(changed, after, before.mWorldCOM)) return false;
+        for (size_t i = 0; i < 4; ++i)
+            if (std::abs(after.mWorldCOM[i] - before.mWorldCOM[i]) > positionBound[i]) return false;
+        MassBivector angularBound {};
+        for (size_t k = 0; k < 6; ++k)
+        {
+            size_t i = MassDetail::cPlaneI[k], j = MassDetail::cPlaneJ[k];
+            angularBound[k] = up(up(std::abs(after.mMomentum.mLinear[i]) * positionBound[j])
+                + up(std::abs(after.mMomentum.mLinear[j]) * positionBound[i]));
+        }
         result.mBodies.push_back(std::move(changed));
-        if (!Ledger({ body }, before.mWorldCOM, {}, result)) return false;
+        if (!Ledger({ body }, before.mWorldCOM, {}, result, angularBound)) return false;
+        result.mLedger.mCOMRoundingPositionBound = positionBound;
         out = std::move(result);
         return true;
     }
@@ -760,11 +802,13 @@ private:
         }
     };
 
-    static bool Ledger(const std::vector<MassBody> &before, const MassVector &reference, const MassMomentum &exported, MassTransaction &result)
+    static bool Ledger(const std::vector<MassBody> &before, const MassVector &reference, const MassMomentum &exported, MassTransaction &result,
+        const MassBivector &comRoundingAngularBound = {})
     {
         MassLedger ledger;
         ledger.mReferenceOrigin = reference;
         ledger.mExported = exported;
+        ledger.mCOMRoundingAngularBound = comRoundingAngularBound;
         MomentumSum initial;
         for (const auto &body : before)
         {
@@ -829,7 +873,7 @@ private:
         {
             double residual = ledger.mAfter.mAngular[i] + exported.mAngular[i] - ledger.mBefore.mAngular[i];
             ledger.mResidual.mAngular[i] = residual;
-            if (!std::isfinite(residual) || std::abs(residual) > 1e-9 * std::max(angularScale, 1e-12)) return false;
+            if (!std::isfinite(residual) || std::abs(residual) > 1e-9 * std::max(angularScale, 1e-12) + comRoundingAngularBound[i]) return false;
         }
         double delta = ledger.mAfter.mKineticEnergy + ledger.mExported.mKineticEnergy - ledger.mBefore.mKineticEnergy;
         if (!std::isfinite(delta)) return false;

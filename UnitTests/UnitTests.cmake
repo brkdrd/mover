@@ -20,6 +20,7 @@ set(UNIT_TESTS_SRC_FILES
 	${UNIT_TESTS_ROOT}/Core/ScopeExitTest.cpp
 	${UNIT_TESTS_ROOT}/Core/STLLocalAllocatorTest.cpp
 	${UNIT_TESTS_ROOT}/Core/StringToolsTest.cpp
+	${UNIT_TESTS_ROOT}/Core/TempAllocatorTests.cpp
 	${UNIT_TESTS_ROOT}/Core/QuickSortTest.cpp
 	${UNIT_TESTS_ROOT}/Core/UnorderedSetTest.cpp
 	${UNIT_TESTS_ROOT}/Core/UnorderedMapTest.cpp
@@ -67,6 +68,7 @@ set(UNIT_TESTS_SRC_FILES
 #	${UNIT_TESTS_ROOT}/Physics/ActiveEdgesTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/BroadPhaseTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/CastShapeTests.cpp
+	${UNIT_TESTS_ROOT}/Physics/CCDTempAllocatorTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/CharacterVirtualTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/CollideShapeTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/CollidePointTests.cpp

@@ -34,9 +34,15 @@ following **additional export checks**:
    Coordinate-aligned rank-one and rank-two tensors are supported. An oblique
    null space is rejected even when a particular rounded matrix happens to work.
    Arbitrary *world body orientation* is independent of this body-local condition.
-4. A temporary `MotionProperties` decodes the proposed settings using the real
-   `SetMassProperties` path. The count of exactly zero planar inverses must be
-   unchanged; every decoded inverse must remain finite and nonnegative.
+4. Before the real `SetMassProperties` dry-run, a checked preflight runs the
+   same float Jacobi eigensolver, with its **unchanged** normalization/eigenpair
+   tolerances, and the same sorted matrix reconstruction test. Numerical
+   diagnostic or convergence failures return false **in every build**, without
+   invoking the assertion callback. Exactly diagonal tensors use the decoder's
+   existing diagonal shortcut. The temporary `MotionProperties` then decodes the
+   proposed settings through the real path; zero-inverse count must be unchanged
+   and every decoded inverse must remain finite and nonnegative. Preflight does
+   not alter global assertion state or the ordinary creation decoder.
 5. Let A and B be the original and decoded **unmasked body-local 6x6 inverse
    response operators**, evaluated on all six coordinate bivectors using the
    actual float rotor/adjoint path. Export requires
@@ -44,15 +50,15 @@ following **additional export checks**:
    accumulated in double. Checking the unmasked operator also protects latent
    inertia behind partial world-space DOF locks and static/kinematic motion types.
 
-The last bound is an explicit *output accuracy budget*, `2^-17` relative
-Frobenius error, not an eigenvalue cutoff or a claimed a-priori error theorem
-for the eigensolver. Six bits of headroom over binary32 epsilon are reserved for
-the matrix/rotor/adjoint encode-decode chain, but acceptance is decided by the
-**measured decoded response**, not by that operation-count heuristic. It is a
-normwise response contract, not a relative error guarantee for every impulse in
-or arbitrarily close to a null space. No conditioning threshold turns a small
-positive moment into zero. If cancellation or conditioning defeats these
-checks, export rejects; it does not regularize M or fabricate sphere inertia.
+The last bound is an explicit *output accuracy policy*, `2^-17` relative
+Frobenius error, not an eigenvalue cutoff or a mathematically derived error
+bound for the eigensolver or the matrix/rotor/adjoint chain. The coefficient
+64 is a chosen policy; acceptance is decided by the **measured decoded
+response**. It is a normwise response contract, not a relative error guarantee
+for every impulse in or arbitrarily close to a null space. No conditioning
+threshold turns a small positive moment into zero. If cancellation or
+conditioning defeats these checks, export rejects; it does not regularize M
+or fabricate sphere inertia.
 Existing tighter physics regression tolerances are unchanged.
 
 Static bodies without motion properties and completely locked rotational
@@ -92,13 +98,17 @@ underflow/overflow. The test is therefore exact for the supported normal float
 inputs, not a numerical rank threshold. A skinny positive diagonal fails the
 identity, however small its nonzero entry is.
 
-After certification, a stable double Householder construction supplies the
-occupied direction and an orthogonal completion, with eigenvalues
-`[trace(M),0,0,0]`. The existing proper-orientation and reconstruction assertions
-are retained unchanged. This fixes the review fixture's *initial creation*
-assertion without weakening the generic eigensolver or its tolerances. It does
-not claim to recover an ideal rank-one particle distribution from an already
-rounded matrix whose exact rank is different.
+After certification, the occupied column is assigned **directly from the
+normalized pivot column**, preserving structural zero components exactly. A
+stable double Householder construction supplies only the other three columns,
+with eigenvalues `[trace(M),0,0,0]`. Evaluating the occupied column via the
+Householder subtraction instead can leave `2.220446049250313e-16` in a required
+zero component: for `M = 2^40 x x^T`, `x=(0,-2,10,-10)`, it previously reconstructed
+`M10` as approximately `0.00697405` instead of zero. The existing proper-orientation
+and reconstruction assertions are retained unchanged. This fixes the review
+fixtures' *initial creation* assertions without weakening the generic eigensolver
+or its tolerances. It does not claim to recover an ideal rank-one particle
+distribution from an already rounded matrix whose exact rank is different.
 
 `SetMassProperties` also keeps identity as the principal frame when M is
 already exactly diagonal. Sorting/permuting it and converting that permutation
@@ -110,11 +120,17 @@ For export, an exact zero `I_ab` plus PSD implies `d_a = d_b = 0`; other d's are
 recovered from incident moments instead of subtracting almost equal
 reciprocals. These are algebraic zero constraints, not clamping rules.
 
-The generic non-diagonal, non-rank-one decomposition and its historical
-**decomposition-failure** fallback remain unchanged. Arbitrary rank-two/rank-three
-ill-conditioned creation, underflow-scale input, and arbitrary inverse-setter
-states are **not newly certified** by this change. In particular, successful
-initial creation is not a promise that checked export must succeed.
+The ordinary non-diagonal, non-rank-one `SetMassProperties` creation path keeps
+its historical assertion diagnostics and **decomposition-failure** sphere fallback.
+Only export opts into recoverable numerical checks; it never changes an installed
+body or uses the sphere fallback to justify acceptance. For mass 2 and the exactly
+represented SPD tensor `M = x x^T + 2^-8 Identity`, `x=(-4,-3,3,-3)`, creation can
+succeed while the rounded export fails the unchanged eigenpair accuracy test.
+The checked API now rejects that case with zero assertion callbacks.
+Arbitrary rank-two/rank-three ill-conditioned creation, underflow-scale input,
+and arbitrary inverse-setter states are **not newly certified** by this change.
+In particular, successful initial creation is not a promise that checked export
+must succeed.
 
 ## Permanent coverage and verification
 
@@ -124,6 +140,16 @@ initial creation is not a promise that checked export must succeed.
   checked-export rejection;
 - exact rank-one particle directions, multiple scales and world orientations,
   with a velocity-Gram analytical pseudoinverse and unchanged exact nullity;
+- `s x x^T`, `x=(0,-2,10,-10)`, for `s = 2^-40`, `1`, `2^40`,
+  and every choice of structurally zero axis: direct decomposition and actual
+  body creation have zero assertion callbacks, exact zero reconstruction entries,
+  orthonormal completion, proper orientation and three exact zero planar inverses;
+- mass-2 `x x^T + 2^-8 Identity`, `x=(-4,-3,3,-3)`: successful creation followed
+  by atomic checked-export rejection, with zero assertion callbacks throughout;
+- a Linux self-subprocess legacy death test requiring **SIGABRT**, not just a
+  nonzero exit. An assertion callback exits with a distinct non-signal status.
+  Its helper case is skipped except when explicitly spawned by the parent; even
+  `--no-skip` without the parent's marker cannot accidentally trigger the death;
 - every coordinate null-plane choice of diagonal rank-two M;
 - positive skinny diagonals with entries down to `2^-80`: creation keeps every
   rotational inverse positive; export either preserves them or explicitly
@@ -134,13 +160,34 @@ initial creation is not a promise that checked export must succeed.
   state, shape/COM offsets, DOF masks and sphere quadrature.
 
 The isolated assertions-enabled GCC 13 Release build uses `-ffp-contract=off`
-and `-j2` at `/home/brkdrd/mover-rank-mass-build`. RED evidence is
-`/home/brkdrd/mover-rank-mass-red.log`; build/test and fail-stop subprocess logs
-are in that build and its `review-artifacts/` directory. The final mass suite
-passes **10 cases / 3,568 assertions**, and HelloWorld passes. The full suite
-passes **537 of 538 cases**; its sole failure is the pre-existing
-`GyroscopicClampFailStopsEvenWithoutAnyDelivery` (12 assertions). A separate
-baseline executable relinked the original HEAD Body/MassProperties/
-MotionProperties objects and reproduced that same failure, without this repair.
-Native Windows and sanitizer verification are separate acceptance work, not
-implied by WSL results.
+and `-j2` at `/home/brkdrd/mover-rank-mass-build`. The two assertion-path
+regressions were each executed RED before their respective fixes. Evidence and
+final verification are in `review-artifacts/cycle2-*.log`:
+
+- mass suite: **13 cases / 3,956 assertions pass**, including the self-subprocess
+  SIGABRT check; the child-only helper is skipped by normal test selection;
+- full suite: **540 of 541 executed cases pass**, with one child helper skipped.
+  The sole failure remains the pre-existing
+  `GyroscopicClampFailStopsEvenWithoutAnyDelivery` (12 assertions), independently
+  reproduced by the original-object baseline already in `review-artifacts/`;
+- HelloWorld passes;
+- the independent 2,048-rank-one scan passes, with maximum orthogonality error
+  `9.22872507e-8` and normalized reconstruction error `5.52172781e-8`;
+- all 512 well-conditioned independent SPD exports pass; maximum world-response
+  error remains `2.02206906e-6`;
+- the independent conditioning scan exercises 1,664 successfully created SPD
+  tensors with **zero export assertion callbacks**. Its other 2,432 inputs
+  already assert during ordinary creation and are outside this export repair;
+- an isolated native MSVC `/O2 /fp:precise`, assertions/traps-enabled standalone
+  executes **2,060 rank-one decomposition/normal-creation cases**, with zero
+  assertion callbacks; its standalone checked SPD decode also rejects with zero
+  callbacks. The same targeted MassProperties/MotionProperties harness passes
+  GCC ASAN+UBSAN, and a separate assertions-disabled GCC Release run still rejects
+  the checked SPD decode. These are not native Body API or whole-engine sanitizer
+  certification; no shared/main native build was rebuilt.
+
+Native probe sources, command and log are
+`C:/Users/goliy/AppData/Local/hermes/cache/scratch/rank-cycle2-native.*`.
+The historical normal-creation eigenpair assertion on unsupported ill-conditioned
+non-rank-one inputs remains intentional; for example the independent skinny
+non-diagonal probe at exponent 16 still diagnoses insufficient accuracy.

@@ -56,10 +56,12 @@ bool MassProperties::DecomposePrincipalMomentsOfInertia(Mat44 &outRotation, Vec4
 	if (rank_one)
 	{
 		double trace = double(mInertia(0, 0)) + mInertia(1, 1) + mInertia(2, 2) + mInertia(3, 3);
-		// Stable Householder completion of the occupied direction. Its first
-		// column is +/- the normalized pivot column; the remaining columns
-		// span its orthogonal complement before rounding. Choose the sign
-		// to avoid cancellation.
+		// Stable Householder completion of the occupied direction. Set the
+		// occupied column directly from the normalized pivot: evaluating it
+		// as 1 - 2*w[0]^2/|w|^2 can turn an exact zero into double roundoff,
+		// which becomes a material spurious column when trace(M) is large.
+		// The remaining columns span its orthogonal complement. Choose the
+		// sign to avoid cancellation in the Householder vector.
 		double w[4], norm_sq = 0.0;
 		double scale = 1.0 / std::sqrt(p * trace);
 		double sign = pivot_column[0] < 0.0f? -1.0 : 1.0;
@@ -69,8 +71,11 @@ bool MassProperties::DecomposePrincipalMomentsOfInertia(Mat44 &outRotation, Vec4
 			norm_sq += w[i] * w[i];
 		}
 		for (int i = 0; i < 4; ++i)
-			for (int j = 0; j < 4; ++j)
+		{
+			rotation(i, 0) = float(-sign * pivot_column[i] * scale);
+			for (int j = 1; j < 4; ++j)
 				rotation(i, j) = float((i == j? 1.0 : 0.0) - 2.0 * w[i] * w[j] / norm_sq);
+		}
 		diagonal[0] = float(trace);
 	}
 	else

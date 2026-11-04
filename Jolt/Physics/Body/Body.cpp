@@ -19,6 +19,10 @@
 #include <Jolt/Physics/Collision/Shape/EmptyShape.h>
 #include <Jolt/Core/StringTools.h>
 #include <Jolt/Core/Profiler.h>
+#include <Jolt/Core/InsertionSort.h>
+#include <Jolt/Math/Matrix.h>
+#include <Jolt/Math/Vector.h>
+#include <Jolt/Math/EigenValueSymmetric.h>
 #include <cmath>
 #include <cstdlib>
 #ifdef JPH_DEBUG_RENDERER
@@ -489,9 +493,47 @@ bool Body::TryGetBodyCreationSettings(BodyCreationSettings &outSettings) const
 						return false;
 				}
 
-			// Dry-run the real decoder, without changing the body or keeping a
-			// second independently editable dynamical state. Accept only finite
-			// inertia, unchanged nullity, and the documented response budget.
+			// Preflight the eigensolver and reconstruction diagnostics before
+			// entering the real decoder. Checked eigenpairs use the SAME solver
+			// and tolerances, but return false in all builds rather than asserting.
+			// The diagonal path in SetMassProperties does not use that solver.
+			bool is_diagonal = true;
+			for (int i = 0; i < 4; ++i)
+				for (int j = 0; j < 4; ++j)
+					is_diagonal = is_diagonal && (i == j || encoded(i, j) == 0.0f);
+			if (!is_diagonal)
+			{
+				Matrix<4, 4> inertia;
+				inertia.CopyPart(encoded, 0, 0, 4, 4, 0, 0);
+				Matrix<4, 4> eigen_vec = Matrix<4, 4>::sIdentity();
+				Vector<4> eigen_val;
+				if (!EigenValueSymmetric(inertia, eigen_vec, eigen_val, true))
+					return false;
+				int indices[] = { 0, 1, 2, 3 };
+				InsertionSort(indices, indices + 4, [&eigen_val](int a, int b) { return eigen_val[a] > eigen_val[b]; });
+				Mat44 principal_rotation, principal_diagonal = Mat44::sZero();
+				for (int i = 0; i < 4; ++i)
+				{
+					if (!(eigen_val[i] >= 0.0f) || !std::isfinite(eigen_val[i]))
+						return false;
+					const auto &col = eigen_vec.GetColumn(indices[i]);
+					principal_rotation.SetColumn4(i, Lane4(col[0], col[1], col[2], col[3]));
+					principal_diagonal(i, i) = eigen_val[indices[i]];
+				}
+				if (principal_rotation.GetDeterminant() < 0.0f)
+					principal_rotation.SetColumn4(3, -principal_rotation.GetColumn4(3));
+				Mat44 reconstructed = principal_rotation * principal_diagonal * principal_rotation.Transposed();
+				for (int i = 0; i < 4; ++i)
+				{
+					Vec4 original_column(encoded.GetColumn4(i));
+					if (!Vec4(reconstructed.GetColumn4(i)).IsClose(original_column, max(original_column.LengthSq(), 1.0f) * 1.0e-6f))
+						return false;
+				}
+			}
+
+			// Dry-run the real decoder only after checked preflight succeeds.
+			// No second independently editable dynamical state is retained.
+			// Accept only finite inertia, unchanged nullity and response budget.
 			MotionProperties decoded;
 			decoded.SetMassProperties(EAllowedDOFs::All, result.mMassPropertiesOverride);
 			int decoded_zeros = 0;

@@ -10,6 +10,16 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <cmath>
+#include <cstdlib>
+#include <vector>
+#if defined(JPH_PLATFORM_LINUX)
+#include <spawn.h>
+#include <sys/wait.h>
+#include <sys/resource.h>
+#include <cerrno>
+#include <csignal>
+extern char **environ;
+#endif
 
 TEST_SUITE("MassRoundTripTests")
 {
@@ -344,6 +354,142 @@ TEST_SUITE("MassRoundTripTests")
 								}
 							}
 				}
+	}
+
+#if defined(JPH_PLATFORM_LINUX)
+	// Only the parent test enables this case in a fresh executable. A mere
+	// nonzero child exit is NOT success: only the legacy API's SIGABRT is.
+	TEST_CASE("LegacyUnrepresentableMassExportDeathChild" * doctest::skip())
+	{
+		// Even --no-skip on the normal suite must not run an unrequested death.
+		const char *marker = std::getenv("JPH_MASS_EXPORT_DEATH_CHILD");
+		if (marker == nullptr || marker[0] != '1' || marker[1] != '\0')
+			return;
+		const rlimit no_core { 0, 0 };
+		if (setrlimit(RLIMIT_CORE, &no_core) != 0)
+			std::_Exit(92);
+		JPH_IF_ENABLE_ASSERTS(AssertFailed = [](const char *, const char *, const char *, uint) { std::_Exit(91); return false; };)
+		PhysicsTestContext context;
+		BodyCreationSettings settings(new SphereShape(0.5f), RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+		settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
+		settings.mMassPropertiesOverride.mMass = 2.0f;
+		Mat44 &inertia = settings.mMassPropertiesOverride.mInertia;
+		inertia = Mat44::sZero();
+		inertia(2, 2) = inertia(2, 3) = inertia(3, 2) = inertia(3, 3) = 2.0f;
+		Body &body = context.CreateBody(settings, EActivation::DontActivate);
+		(void)body.GetBodyCreationSettings();
+		CHECK(false); // Returning invented settings must not pass the death test.
+	}
+
+	TEST_CASE("LegacyUnrepresentableMassExportFailsClosedInSubprocess")
+	{
+		char executable[] = "/proc/self/exe";
+		char filter[] = "--test-case=LegacyUnrepresentableMassExportDeathChild";
+		char unskip[] = "--no-skip=true";
+		char no_colors[] = "--no-colors=true";
+		char quiet[] = "--quiet=true"; // Expected child SIGABRT is checked by waitpid, not its reporter.
+		char *args[] = { executable, filter, unskip, no_colors, quiet, nullptr };
+		char marker[] = "JPH_MASS_EXPORT_DEATH_CHILD=1";
+		std::vector<char *> child_env;
+		for (char **env = environ; *env != nullptr; ++env)
+			child_env.push_back(*env);
+		child_env.push_back(marker);
+		child_env.push_back(nullptr);
+		pid_t child;
+		int spawned = posix_spawn(&child, executable, nullptr, nullptr, args, child_env.data());
+		CHECK(spawned == 0);
+		if (spawned != 0)
+			return;
+		int status = 0;
+		pid_t waited;
+		do { waited = waitpid(child, &status, 0); } while (waited == -1 && errno == EINTR);
+		CHECK(waited == child);
+		CHECK(WIFSIGNALED(status));
+		if (WIFSIGNALED(status))
+			CHECK(WTERMSIG(status) == SIGABRT);
+	}
+#endif
+
+	TEST_CASE("ExactRankOneStructuralZerosSurviveLargeScalesAndEveryAxis")
+	{
+		PhysicsTestContext context;
+		JPH_IF_ENABLE_ASSERTS(ExpectAssert no_asserts(0);)
+		for (int zero_axis = 0; zero_axis < 4; ++zero_axis)
+			for (int exponent : { -40, 0, 40 })
+			{
+				CAPTURE(zero_axis); CAPTURE(exponent);
+				// This permutation family includes the reported x=(0,-2,10,-10),
+				// scale=2^40 fixture. Every entry is exact binary32.
+				float x[] = { 0, -2, 10, -10 };
+				std::swap(x[0], x[zero_axis]);
+				BodyCreationSettings settings(new SphereShape(0.5f), RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+				settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
+				MassProperties &mass = settings.mMassPropertiesOverride;
+				mass.mMass = 2.0f;
+				for (int i = 0; i < 4; ++i)
+					for (int j = 0; j < 4; ++j)
+						mass.mInertia(i, j) = std::ldexp(1.0f, exponent) * x[i] * x[j];
+				Mat44 rotation;
+				Vec4 diagonal;
+				bool decomposed = mass.DecomposePrincipalMomentsOfInertia(rotation, diagonal);
+				CHECK(decomposed);
+				if (!decomposed)
+					return;
+				CHECK(rotation(zero_axis, 0) == 0.0f);
+				CHECK(diagonal[0] == std::ldexp(204.0f, exponent));
+				CHECK(diagonal[1] == 0.0f);
+				CHECK(diagonal[2] == 0.0f);
+				CHECK(diagonal[3] == 0.0f);
+				CHECK(rotation.GetDeterminant() == doctest::Approx(1.0f).epsilon(1.0e-6));
+				Mat44 diagonal_matrix = Mat44::sZero();
+				diagonal_matrix(0, 0) = diagonal[0];
+				Mat44 reconstructed = rotation * diagonal_matrix * rotation.Transposed();
+				for (int i = 0; i < 4; ++i)
+					for (int j = 0; j < 4; ++j)
+					{
+						double dot = 0.0;
+						for (int k = 0; k < 4; ++k)
+							dot += double(rotation(k, i)) * rotation(k, j);
+						CHECK(std::abs(dot - (i == j? 1.0 : 0.0)) < 2.0e-7);
+						if (i == zero_axis || j == zero_axis)
+							CHECK(reconstructed(i, j) == 0.0f);
+					}
+				Body &body = context.CreateBody(settings, EActivation::DontActivate);
+				int zeros = 0;
+				for (int plane = 0; plane < 6; ++plane)
+					zeros += body.GetMotionProperties()->GetInverseInertiaDiagonal()[plane] == 0.0f;
+				CHECK(zeros == 3);
+			}
+	}
+
+	TEST_CASE("CheckedExportRejectsUnsupportedEigenpairAccuracyWithoutAssertions")
+	{
+		PhysicsTestContext context;
+		BodyCreationSettings settings(new SphereShape(0.5f), RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+		settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
+		settings.mMassPropertiesOverride.mMass = 2.0f;
+		// Exactly represented SPD: x x^T + 2^-8 Identity. Initial creation
+		// succeeds, but decoding its rounded export fails the eigenpair check.
+		const float x[] = { -4, -3, 3, -3 };
+		for (int i = 0; i < 4; ++i)
+			for (int j = 0; j < 4; ++j)
+				settings.mMassPropertiesOverride.mInertia(i, j) = x[i] * x[j] + (i == j? std::ldexp(1.0f, -8) : 0.0f);
+		JPH_IF_ENABLE_ASSERTS(ExpectAssert no_asserts(0);)
+		Body &body = context.CreateBody(settings, EActivation::DontActivate);
+		BodyCreationSettings exported(new SphereShape(0.75f), RVec4(9, 8, 7, 6), Rotor::sIdentity(), EMotionType::Kinematic, Layers::MOVING);
+		exported.mUserData = 0xfeedbeef;
+		exported.mMassPropertiesOverride.mMass = 53.0f;
+		const Shape *shape = exported.GetShape();
+		const Bivec inverse = body.GetMotionProperties()->GetInverseInertiaDiagonal();
+		const Rotor principal = body.GetMotionProperties()->GetInertiaRotation();
+		CHECK_FALSE(body.TryGetBodyCreationSettings(exported));
+		CHECK(exported.GetShape() == shape);
+		CHECK(exported.mPosition == RVec4(9, 8, 7, 6));
+		CHECK(exported.mMotionType == EMotionType::Kinematic);
+		CHECK(exported.mUserData == 0xfeedbeef);
+		CHECK(exported.mMassPropertiesOverride.mMass == 53.0f);
+		CHECK(body.GetMotionProperties()->GetInverseInertiaDiagonal() == inverse);
+		CHECK(body.GetMotionProperties()->GetInertiaRotation() == principal);
 	}
 
 	TEST_CASE("DiagonalRankTwoMassPreservesEveryChoiceOfNullPlane")

@@ -25,8 +25,11 @@ JPH_NAMESPACE_BEGIN
 /// @param inMatrix is the matrix of which to return the eigenvalues and vectors
 /// @param outEigVec will contain a matrix whose columns contain the normalized eigenvectors (must be identity before call)
 /// @param outEigVal will contain the eigenvalues
+/// @param inCheckAccuracy Convert numerical sanity-check / convergence failures
+/// to false instead of assertions, in all builds. Output is unspecified on failure.
+/// The default preserves the historical assertion-based diagnostic behavior.
 template <class Vector, class Matrix>
-bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outEigVal)
+bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outEigVal, bool inCheckAccuracy = false)
 {
 	// This algorithm can generate infinite values, see comment below
 	FPExceptionDisableInvalid disable_invalid;
@@ -75,19 +78,25 @@ bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outE
 		// Normal return, convergence to machine underflow
 		if (avg_sm < FLT_MIN) // Original code: sm == 0.0f, when the average is denormal, we also consider it machine underflow
 		{
-			// Sanity checks
-			#ifdef JPH_ENABLE_ASSERTS
+			// Checked callers use exactly the historical diagnostics and
+			// tolerances, including in release builds, but get recoverable failure.
+			bool check_accuracy = inCheckAccuracy;
+			JPH_IF_ENABLE_ASSERTS(check_accuracy = true;)
+			if (check_accuracy)
 				for (uint c = 0; c < n; ++c)
 				{
-					// Check if the eigenvector is normalized
-					JPH_ASSERT(outEigVec.GetColumn(c).IsNormalized());
+					bool normalized = outEigVec.GetColumn(c).IsNormalized();
+					if (inCheckAccuracy && !normalized)
+						return false;
+					JPH_ASSERT(normalized);
 
-					// Check if inMatrix * eigen_vector = eigen_value * eigen_vector
 					Vector mat_eigvec = inMatrix * outEigVec.GetColumn(c);
 					Vector eigval_eigvec = outEigVal[c] * outEigVec.GetColumn(c);
-					JPH_ASSERT(mat_eigvec.IsClose(eigval_eigvec, max(mat_eigvec.LengthSq(), eigval_eigvec.LengthSq()) * 1.0e-6f));
+					bool accurate = mat_eigvec.IsClose(eigval_eigvec, max(mat_eigvec.LengthSq(), eigval_eigvec.LengthSq()) * 1.0e-6f);
+					if (inCheckAccuracy && !accurate)
+						return false;
+					JPH_ASSERT(accurate);
 				}
-			#endif
 
 			// Success
 			return true;
@@ -169,8 +178,9 @@ bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outE
 		}
 	}
 
-	// Failure
-	JPH_ASSERT(false, "Too many iterations");
+	// Failure. Checked callers must not enter the assertion handler.
+	if (!inCheckAccuracy)
+		JPH_ASSERT(false, "Too many iterations");
 	return false;
 }
 

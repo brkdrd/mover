@@ -127,8 +127,9 @@ struct GlobalPosition
 	}
 };
 
-// Individual double operations are bounded, not arbitrary precision. Transfers
-// reject an addition that discards more than this absolute length/speed budget.
+// Individual position operations are bounded, not arbitrary precision. Reject
+// additions discarding more than this absolute length budget. Persistent speed
+// must be exact: even a tiny discarded residual grows without bound with time.
 inline constexpr double cTransferError = 1.0e-9;
 inline bool SplitSum(double a, double b, double &head, double &tail)
 {
@@ -430,7 +431,10 @@ inline bool BuildSweptBounds(const ObjectState &object, const Frame &frame, cons
 	Tick tick, Tick interval, double step, GlobalBounds &out)
 {
 	Tick horizon = std::max(interval, object.mSchedulingInterval);
-	if (!object.IsValid() || !frame.IsValid() || !reference.IsValid() || object.mFrame != frame.mID || tick > UINT64_MAX - horizon) return false;
+	// Endpoint ages can each fit in 2^53 while their separation does not.
+	// Check the effective sweep duration independently of every epoch.
+	if (!object.IsValid() || !frame.IsValid() || !reference.IsValid() || object.mFrame != frame.mID
+		|| horizon > (UINT64_C(1) << 53) || tick > UINT64_MAX - horizon) return false;
 	Tick end = tick + horizon;
 	Detail::Interval start_age, end_age;
 	if (!Detail::Time(object.GetSourceEpoch(), tick, step, start_age) || !Detail::Time(object.GetSourceEpoch(), end, step, end_age)) return false;
@@ -630,6 +634,8 @@ public:
 	// pending contacts, at a quiescent boundary. Failure changes nothing. Success
 	// bumps a revision: physics/query/history owners must rebuild their caches
 	// before continuing. This class does not own or silently mutate Jolt caches.
+	// Reject any unrepresentable velocity, even within cTransferError: a speed
+	// tolerance is not a bounded trajectory error over arbitrary future horizons.
 	bool TransformInteractingSet(const std::vector<ObjectID> &ids, FrameID destination, Tick tick)
 	{
 		auto target = FindFrame(destination);
@@ -651,12 +657,12 @@ public:
 				|| !indexed.Difference(target->mOrigin, cMaxLocalRange, delta)) return false;
 			for (size_t i = 0; i < 4; ++i)
 			{
-				double relative, relative_tail, velocity, velocity_tail, tail;
+				double relative, relative_tail, velocity, velocity_tail, tail, discarded;
 				if (!CheckedSum(next.mPosition[i], delta[i], next.mPosition[i])
 					|| !SplitSum(source->mVelocity[i], -target->mVelocity[i], relative, relative_tail)
 					|| !SplitSum(relative, next.mVelocity[i], velocity, velocity_tail)
-					|| !CheckedSum(relative_tail, velocity_tail, tail)
-					|| !CheckedSum(velocity, tail, next.mVelocity[i])) return false;
+					|| !SplitSum(relative_tail, velocity_tail, tail, discarded) || discarded != 0
+					|| !SplitSum(velocity, tail, next.mVelocity[i], discarded) || discarded != 0) return false;
 			}
 			next.mFrame = destination;
 			if (!next.IsValid() || !absolute.Translate(next.mPosition, absolute)) return false;
@@ -671,7 +677,8 @@ public:
 	// removes common velocity before the sweep; it is unrelated to any camera.
 	bool FindInteractions(Tick tick, Tick interval, ActivationResult &out) const
 	{
-		if (!IsValid() || tick > UINT64_MAX - interval) return false;
+		// This applies even to an empty world, before the early success return.
+		if (!IsValid() || interval > (UINT64_C(1) << 53) || tick > UINT64_MAX - interval) return false;
 		ActivationResult result;
 		result.mTick = tick;
 		result.mInterval = interval;

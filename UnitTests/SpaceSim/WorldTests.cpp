@@ -78,6 +78,120 @@ TEST_SUITE("SpaceSimWorldTests")
 		CHECK(world.TransformInteractingSet({100, 101}, 1, 20));
 		CHECK(world.FindObject(100)->mPosition[3] == doctest::Approx(3.96).epsilon(1.0e-12));
 	}
+	TEST_CASE("FrameTransferCannotDiscardTinyVelocityThatCreatesALongHorizonEncounter")
+	{
+		for (size_t axis = 0; axis < 4; ++axis)
+			for (double boost : {1.0e18, -1.0e18})
+			{
+				World world(1);
+				Frame stationary; stationary.mID = 1;
+				Frame moving = stationary; moving.mID = 2; moving.mVelocity[axis] = boost;
+				CHECK(world.AddFrame(stationary)); CHECK(world.AddFrame(moving));
+				ObjectState approaching; approaching.mID = 2; approaching.mFrame = 1;
+				approaching.mVelocity[axis] = 1.0e-10;
+				approaching.mHasSourceEpoch = true; approaching.mSourceEpoch = 7;
+				ObjectState target = approaching; target.mID = 1;
+				target.mPosition[axis] = 0.1; target.mVelocity[axis] = 0;
+				CHECK(world.AddObject(target)); CHECK(world.AddObject(approaching));
+				ActivationResult before, after;
+				CHECK(world.FindInteractions(0, 1000000000, before));
+				CHECK(before.mPairs == std::vector<InteractionPair>{{1, 2}});
+				GlobalPosition expected;
+				CHECK(world.EvaluateGlobal(2, 1000000000, expected));
+				// Stage the exactly representable target first, then reject the
+				// approaching body's lost speed. Neither body may be committed.
+				CHECK_FALSE(world.TransformInteractingSet({1, 2}, 2, 0));
+				CHECK(world.FindObject(1)->mFrame == 1);
+				CHECK(world.FindObject(2)->mFrame == 1);
+				CHECK(world.FindObject(2)->mVelocity == approaching.mVelocity);
+				CHECK(world.FindObject(2)->mEpoch == 0);
+				CHECK(world.FindObject(2)->GetSourceEpoch() == 7);
+				CHECK(world.GetRepresentationVersion() == 0);
+				CHECK(world.TransformInteractingSet({1, 2}, 1, 0));
+				CHECK(world.FindInteractions(0, 1000000000, after));
+				CHECK(after.mPairs == before.mPairs);
+				GlobalPosition actual;
+				Vector difference;
+				CHECK(world.EvaluateGlobal(2, 1000000000, actual));
+				CHECK(actual.Difference(expected, 1, difference));
+				CHECK(difference == Vector{});
+			}
+	}
+
+	TEST_CASE("RepresentableBoostRoundTripPreservesLongHorizonCandidatesAndGlobalDrift")
+	{
+		for (double boost : {0x1p20, -0x1p20})
+		{
+			World world(1);
+			Frame source; source.mID = 1;
+			Frame destination = source; destination.mID = 2; destination.mVelocity[3] = boost;
+			CHECK(world.AddFrame(source)); CHECK(world.AddFrame(destination));
+			ObjectState a; a.mID = 1; a.mFrame = 1; a.mVelocity[3] = 0x1p-30;
+			ObjectState b = a; b.mID = 2; b.mVelocity[3] = 0; b.mPosition[3] = 0.5;
+			CHECK(world.AddObject(a)); CHECK(world.AddObject(b));
+			ActivationResult before, during, after;
+			CHECK(world.FindInteractions(0, 1000000000, before));
+			CHECK(before.mPairs == std::vector<InteractionPair>{{1, 2}});
+			GlobalPosition expected, actual;
+			CHECK(world.EvaluateGlobal(1, 1000000000, expected));
+			CHECK(world.TransformInteractingSet({1, 2}, 2, 0));
+			CHECK(world.FindInteractions(0, 1000000000, during));
+			CHECK(during.mPairs == before.mPairs);
+			CHECK(world.EvaluateGlobal(1, 1000000000, actual));
+			Vector difference;
+			CHECK(actual.Difference(expected, 1, difference));
+			CHECK(std::abs(difference[3]) <= cTransferError);
+			CHECK(world.TransformInteractingSet({1, 2}, 1, 0));
+			CHECK(world.FindObject(1)->mVelocity == a.mVelocity);
+			CHECK(world.FindObject(1)->GetSourceEpoch() == a.GetSourceEpoch());
+			CHECK(world.FindInteractions(0, 1000000000, after));
+			CHECK(after.mPairs == before.mPairs);
+			CHECK(world.EvaluateGlobal(1, 1000000000, actual));
+			CHECK(actual.mSector == expected.mSector);
+			CHECK(actual.mOffset == expected.mOffset);
+		}
+	}
+
+	TEST_CASE("PreparationPropagatesUnrepresentableVelocityWithoutPromotingOrPublishing")
+	{
+		World world(1);
+		Frame source; source.mID = 1;
+		Frame destination = source; destination.mID = 2; destination.mVelocity[0] = 1.0e18;
+		CHECK(world.AddFrame(source)); CHECK(world.AddFrame(destination));
+		ObjectState a; a.mID = 1; a.mFrame = 2; a.mTier = Tier::Distant;
+		ObjectState b = a; b.mID = 2; b.mFrame = 1; b.mVelocity[0] = 1.0e-10;
+		CHECK(world.AddObject(a)); CHECK(world.AddObject(b));
+		ActivationResult plan;
+		CHECK(world.FindInteractions(0, 0, plan));
+		CHECK(plan.mPairs == std::vector<InteractionPair>{{1, 2}});
+		CHECK(plan.mGroups.size() == 1);
+		if (plan.mGroups.empty()) return;
+		CHECK(plan.mGroups[0].mFrame == 2);
+		ActivationResult result; result.mTick = 123; result.mPairs = {{7, 9}};
+		CHECK_FALSE(world.PrepareInteractions(0, 0, result));
+		CHECK(result.mTick == 123);
+		CHECK(result.mPairs == std::vector<InteractionPair>{{7, 9}});
+		CHECK(world.FindObject(1)->mTier == Tier::Distant);
+		CHECK(world.FindObject(2)->mTier == Tier::Distant);
+		CHECK(world.FindObject(2)->mFrame == 1);
+		CHECK(world.FindObject(2)->mVelocity == b.mVelocity);
+		CHECK(world.GetRepresentationVersion() == 0);
+	}
+
+	TEST_CASE("VelocityTransferCanCancelIntermediateSubtractionResidualExactly")
+	{
+		World world(1);
+		Frame source; source.mID = 1; source.mVelocity[0] = 1.0e-10;
+		Frame destination; destination.mID = 2; destination.mVelocity[0] = 1.0e18;
+		CHECK(world.AddFrame(source)); CHECK(world.AddFrame(destination));
+		ObjectState object; object.mID = 1; object.mFrame = 1; object.mVelocity[0] = -source.mVelocity[0];
+		CHECK(world.AddObject(object));
+		CHECK(world.TransformInteractingSet({1}, 2, 0));
+		CHECK(world.FindObject(1)->mVelocity[0] == -destination.mVelocity[0]);
+		CHECK(world.TransformInteractingSet({1}, 1, 0));
+		CHECK(world.FindObject(1)->mVelocity == object.mVelocity);
+	}
+
 	TEST_CASE("CrossFrameProjectilePromotesWholeInteractionBeforeSolving")
 	{
 		for (double common : {0.0, 1.0e18})
@@ -419,23 +533,37 @@ TEST_SUITE("SpaceSimWorldTests")
 		CHECK(result.mPairs.empty());
 	}
 
-	TEST_CASE("DifferentFrameEpochsAndVelocityDeltasDoNotDestroySmallRelativeMotion")
+	TEST_CASE("DifferentFrameEpochsAndVelocityDeltasRequireRepresentableLocalMotion")
 	{
-		World world(0.5);
-		Frame a; a.mID = 1; a.mVelocity[0] = 1.0e18 + 128;
-		Frame b = a; b.mID = 2; b.mEpoch = 3;
-		CHECK(a.OriginAt(3, 0.5, b.mOrigin));
-		b.mVelocity[0] += 128;
-		CHECK(world.AddFrame(a)); CHECK(world.AddFrame(b));
-		ObjectState object; object.mID = 1; object.mFrame = 1;
-		object.mVelocity[0] = 0.001; object.mPosition[3] = 0.00025;
-		CHECK(world.AddObject(object));
-		CHECK(world.TransformInteractingSet({1}, 2, 5));
-		const auto *result = world.FindObject(1);
-		CHECK(result->mPosition[0] == doctest::Approx(-127.9975).epsilon(1.0e-12));
-		CHECK(result->mVelocity[0] == -128 + 0.001);
-		CHECK(result->mPosition[3] == 0.00025);
-		CHECK(result->GetSourceEpoch() == 0);
+		for (double local_velocity : {0.001, 0x1p-10})
+		{
+			World world(0.5);
+			Frame a; a.mID = 1; a.mVelocity[0] = 1.0e18 + 128;
+			Frame b = a; b.mID = 2; b.mEpoch = 3;
+			CHECK(a.OriginAt(3, 0.5, b.mOrigin));
+			b.mVelocity[0] += 128;
+			CHECK(world.AddFrame(a)); CHECK(world.AddFrame(b));
+			ObjectState object; object.mID = 1; object.mFrame = 1;
+			object.mVelocity[0] = local_velocity; object.mPosition[3] = 0.00025;
+			CHECK(world.AddObject(object));
+			if (local_velocity == 0.001)
+			{
+				// -128 + binary64(0.001) is not exactly representable. Its tiny
+				// speed residual cannot be charged to a fixed position budget.
+				CHECK_FALSE(world.TransformInteractingSet({1}, 2, 5));
+				CHECK(world.FindObject(1)->mFrame == 1);
+				CHECK(world.FindObject(1)->mEpoch == 0);
+				CHECK(world.FindObject(1)->mVelocity == object.mVelocity);
+				CHECK(world.GetRepresentationVersion() == 0);
+				continue;
+			}
+			CHECK(world.TransformInteractingSet({1}, 2, 5));
+			const auto *result = world.FindObject(1);
+			CHECK(result->mPosition[0] == std::fma(local_velocity, 2.5, -128.0));
+			CHECK(result->mVelocity[0] == -128 + local_velocity);
+			CHECK(result->mPosition[3] == 0.00025);
+			CHECK(result->GetSourceEpoch() == 0);
+		}
 	}
 
 	TEST_CASE("FrameVelocitySubtractionResidualCannotAmplifyIntoLostPosition")
@@ -545,6 +673,69 @@ TEST_SUITE("SpaceSimWorldTests")
 		GlobalPosition unchanged;
 		CHECK_FALSE(frame.OriginAt(1, 1, unchanged));
 		CHECK(unchanged.mSector[0] == 0);
+	}
+
+	TEST_CASE("SchedulingHorizonsAreCheckedDirectlyAtArbitraryEpochs")
+	{
+		constexpr Tick exact_limit = UINT64_C(1) << 53;
+		for (Tick tick : {Tick(0), Tick(37), UINT64_MAX - exact_limit - 1})
+			for (Tick horizon : {exact_limit - 1, exact_limit, exact_limit + 1})
+				for (bool scheduled : {false, true})
+				{
+					World world(1);
+					// Both endpoints are individually within 2^53 of the epochs,
+					// even when their separation is 2^53 + 1. This must not bypass
+					// the direct requested/effective horizon contract.
+					Frame frame; frame.mID = 1; frame.mEpoch = tick + 1;
+					ObjectState object; object.mID = 1; object.mFrame = 1;
+					object.mEpoch = frame.mEpoch; object.mTier = Tier::Detailed;
+					if (scheduled) object.mSchedulingInterval = horizon;
+					Tick interval = scheduled? 1 : horizon;
+					CHECK(world.AddFrame(frame)); CHECK(world.AddObject(object));
+					bool allowed = horizon <= exact_limit;
+					GlobalBounds bounds;
+					bounds.mMin.mOffset[0] = 123;
+					CHECK(BuildSweptBounds(object, frame, frame, tick, interval, 1, bounds) == allowed);
+					if (!allowed) CHECK(bounds.mMin.mOffset[0] == 123);
+					ActivationResult result; result.mTick = 123; result.mPairs = {{7, 9}};
+					CHECK(world.FindInteractions(tick, interval, result) == allowed);
+					if (!allowed)
+					{
+						CHECK(result.mTick == 123);
+						CHECK(result.mPairs == std::vector<InteractionPair>{{7, 9}});
+						CHECK_FALSE(world.PrepareInteractions(tick, interval, result));
+						CHECK(result.mTick == 123);
+						CHECK_FALSE(world.TryDemote(1, Tier::Distant, tick + 1, 0, interval));
+						CHECK(world.FindObject(1)->mTier == Tier::Detailed);
+						CHECK(world.FindObject(1)->mEpoch == tick + 1);
+						CHECK(world.GetRepresentationVersion() == 0);
+					}
+				}
+	}
+
+	TEST_CASE("EmptyWorldStillRejectsRequestedHorizonsBeyondExactTickRange")
+	{
+		constexpr Tick exact_limit = UINT64_C(1) << 53;
+		for (Tick tick : {Tick(0), Tick(37), UINT64_MAX - exact_limit - 1})
+			for (bool add_frame : {false, true})
+			{
+				World world(1);
+				if (add_frame)
+				{
+					Frame frame; frame.mID = 1; frame.mEpoch = tick + 1;
+					CHECK(world.AddFrame(frame));
+				}
+				ActivationResult result;
+				CHECK(world.FindInteractions(tick, exact_limit - 1, result));
+				CHECK(world.FindInteractions(tick, exact_limit, result));
+				result.mTick = 123; result.mPairs = {{7, 9}};
+				CHECK_FALSE(world.FindInteractions(tick, exact_limit + 1, result));
+				CHECK(result.mTick == 123);
+				CHECK(result.mPairs == std::vector<InteractionPair>{{7, 9}});
+				CHECK_FALSE(world.PrepareInteractions(tick, exact_limit + 1, result));
+				CHECK(result.mTick == 123);
+				CHECK(world.GetRepresentationVersion() == 0);
+			}
 	}
 
 	TEST_CASE("TicksNearUint64MaximumUseSmallDifferencesNotAbsoluteDoubleTime")

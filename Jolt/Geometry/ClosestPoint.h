@@ -5,6 +5,8 @@
 #pragma once
 
 #include <Jolt/Math/Bivec.h>
+#include <Jolt/Math/DVec4.h>
+#include <cmath>
 
 JPH_NAMESPACE_BEGIN
 
@@ -29,17 +31,42 @@ namespace ClosestPoint
 		return Bivec::sWedge(inU, inV).LengthSq();
 	}
 
+	// Keep length^4 quantities in double: float area products underflow/overflow even
+	// when every input coordinate, edge and squared edge length is representable.
+	// Wedge components avoid subtracting nearly equal Gram products for slivers.
+	JPH_INLINE double GramDeterminant(DVec4Arg inU, DVec4Arg inV)
+	{
+		double area_sq = 0.0;
+		for (uint i = 0; i < 4; ++i)
+			for (uint j = i + 1; j < 4; ++j)
+				area_sq += Square(inU[i] * inV[j] - inU[j] * inV[i]);
+		return area_sq;
+	}
+
+	// An exact power-of-two change of units bounds coordinates before float
+	// length^2/length^4 products. Double holds the scale even at float exponent
+	// extremes; it is a representation-range guard, not a geometric tolerance.
+	inline double ProjectionScale(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC)
+	{
+		float largest = Vec4::sMax(Vec4::sMax(inA.Abs(), inB.Abs()), inC.Abs()).ReduceMax();
+		int exponent = 0;
+		std::frexp(double(largest), &exponent);
+		return std::ldexp(1.0, exponent);
+	}
+
 	/// Compute barycentric coordinates of closest point to origin for infinite line defined by (inA, inB)
 	/// Point can then be computed as inA * outU + inB * outV
 	/// Returns false if the points inA, inB do not form a line (are at the same point)
 	inline bool GetBaryCentricCoordinates(Vec4Arg inA, Vec4Arg inB, float &outU, float &outV)
 	{
-		Vec4 ab = inB - inA;
+		double scale = ProjectionScale(inA, inB, Vec4::sZero());
+		Vec4 a(DVec4(inA) / scale), b(DVec4(inB) / scale);
+		Vec4 ab = b - a;
 		float denominator = ab.LengthSq();
-		if (denominator < Square(FLT_EPSILON))
+		if (denominator == 0.0f)
 		{
 			// Degenerate line segment, fallback to points
-			if (inA.LengthSq() < inB.LengthSq())
+			if (a.LengthSq() < b.LengthSq())
 			{
 				// A closest
 				outU = 1.0f;
@@ -55,7 +82,7 @@ namespace ClosestPoint
 		}
 		else
 		{
-			outV = -inA.Dot(ab) / denominator;
+			outV = -a.Dot(ab) / denominator;
 			outU = 1.0f - outV;
 		}
 		return true;
@@ -71,23 +98,25 @@ namespace ClosestPoint
 		// Adjusted to always include the shortest edge of the triangle in the calculation to improve numerical accuracy
 
 		// First calculate the three edges
-		Vec4 v0 = inB - inA;
-		Vec4 v1 = inC - inA;
-		Vec4 v2 = inC - inB;
+		DVec4 v0 = DVec4(inB) - DVec4(inA);
+		DVec4 v1 = DVec4(inC) - DVec4(inA);
+		DVec4 v2 = DVec4(inC) - DVec4(inB);
 
 		// Make sure that the shortest edge is included in the calculation to keep the products a * b - c * d as small as possible to preserve accuracy
-		float d00 = v0.LengthSq();
-		float d11 = v1.LengthSq();
-		float d22 = v2.LengthSq();
+		double d00 = v0.LengthSq();
+		double d11 = v1.LengthSq();
+		double d22 = v2.LengthSq();
 		if (d00 <= d22)
 		{
 			// Use v0 and v1 to calculate barycentric coordinates
-			float d01 = v0.Dot(v1);
+			double d01 = v0.Dot(v1);
 
 			// Denominator must be positive:
 			// |v0|^2 * |v1|^2 - (v0 . v1)^2 = |v0|^2 * |v1|^2 * (1 - cos(angle)^2) >= 0
-			float denominator = GramDeterminant(v0, v1);
-			if (denominator < 1.0e-12f)
+			double denominator = GramDeterminant(v0, v1);
+			// length^4 / Hadamard bound: the same dimensionless conditioning policy
+			// as the higher-dimensional simplices, not a minimum triangle area.
+			if (denominator <= 1.0e-6f * d00 * d11)
 			{
 				// Degenerate triangle, return coordinates along longest edge
 				if (d00 > d11)
@@ -104,20 +133,22 @@ namespace ClosestPoint
 			}
 			else
 			{
-				float a0 = inA.Dot(v0);
-				float a1 = inA.Dot(v1);
-				outV = (d01 * a1 - d11 * a0) / denominator;
-				outW = (d01 * a0 - d00 * a1) / denominator;
-				outU = 1.0f - outV - outW;
+				double a0 = DVec4(inA).Dot(v0);
+				double a1 = DVec4(inA).Dot(v1);
+				double v = (d01 * a1 - d11 * a0) / denominator;
+				double w = (d01 * a0 - d00 * a1) / denominator;
+				outV = float(v);
+				outW = float(w);
+				outU = float(1.0 - v - w);
 			}
 		}
 		else
 		{
 			// Use v1 and v2 to calculate barycentric coordinates
-			float d12 = v1.Dot(v2);
+			double d12 = v1.Dot(v2);
 
-			float denominator = GramDeterminant(v1, v2);
-			if (denominator < 1.0e-12f)
+			double denominator = GramDeterminant(v1, v2);
+			if (denominator <= 1.0e-6f * d11 * d22)
 			{
 				// Degenerate triangle, return coordinates along longest edge
 				if (d11 > d22)
@@ -134,11 +165,13 @@ namespace ClosestPoint
 			}
 			else
 			{
-				float c1 = inC.Dot(v1);
-				float c2 = inC.Dot(v2);
-				outU = (d22 * c1 - d12 * c2) / denominator;
-				outV = (d11 * c2 - d12 * c1) / denominator;
-				outW = 1.0f - outU - outV;
+				double c1 = DVec4(inC).Dot(v1);
+				double c2 = DVec4(inC).Dot(v2);
+				double u = (d22 * c1 - d12 * c2) / denominator;
+				double v = (d11 * c2 - d12 * c1) / denominator;
+				outU = float(u);
+				outV = float(v);
+				outW = float(1.0 - u - v);
 			}
 		}
 		return true;
@@ -240,7 +273,7 @@ namespace ClosestPoint
 	/// outSet describes which features are closest: 1 = a, 2 = b, 4 = c, 5 = line segment ac, 7 = triangle interior etc.
 	/// If MustIncludeC is true, the function assumes that C is part of the closest feature (vertex, edge, face) and does less work, if the assumption is not true then a closest point to the other features is returned.
 	template <bool MustIncludeC = false>
-	inline Vec4	GetClosestPointOnTriangle(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, uint32 &outSet)
+	inline Vec4	GetClosestPointOnTriangleScaled(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, uint32 &outSet)
 	{
 		// Taken from: Real-Time Collision Detection - Christer Ericson (Section: Closest Point on Triangle to Point)
 		// With p = 0
@@ -264,8 +297,8 @@ namespace ClosestPoint
 		Vec4 ac = c - a;
 		float n_len_sq = GramDeterminant(ab, ac); // = |ab x ac|^2 in 3D
 
-		// Check degenerate
-		if (n_len_sq < 1.0e-10f) // Square(FLT_EPSILON) was too small and caused numerical problems, see test case TestCollideParallelTriangleVsCapsule
+		// Match the barycentric solve's dimensionless Hadamard conditioning policy.
+		if (n_len_sq <= 1.0e-6f * ab.LengthSq() * ac.LengthSq())
 		{
 			// Degenerate, fallback to vertices and edges
 
@@ -299,7 +332,7 @@ namespace ClosestPoint
 
 			// Edge AC
 			float ac_len_sq = ac.LengthSq();
-			if (ac_len_sq > Square(FLT_EPSILON))
+			if (ac_len_sq > 0.0f)
 			{
 				float v = Clamp(-a.Dot(ac) / ac_len_sq, 0.0f, 1.0f);
 				Vec4 q = a + v * ac;
@@ -315,7 +348,7 @@ namespace ClosestPoint
 			// Edge BC
 			Vec4 bc = inC - inB;
 			float bc_len_sq = bc.LengthSq();
-			if (bc_len_sq > Square(FLT_EPSILON))
+			if (bc_len_sq > 0.0f)
 			{
 				float v = Clamp(-inB.Dot(bc) / bc_len_sq, 0.0f, 1.0f);
 				Vec4 q = inB + v * bc;
@@ -334,7 +367,7 @@ namespace ClosestPoint
 				// Edge AB
 				ab = inB - inA;
 				float ab_len_sq = ab.LengthSq();
-				if (ab_len_sq > Square(FLT_EPSILON))
+				if (ab_len_sq > 0.0f)
 				{
 					float v = Clamp(-inA.Dot(ab) / ab_len_sq, 0.0f, 1.0f);
 					Vec4 q = inA + v * ab;
@@ -424,6 +457,19 @@ namespace ClosestPoint
 		outSet = 0b0111;
 		Bivec plane = Bivec::sWedge(ab, ac);
 		return a + plane.Contract(plane.Contract(a)) * (1.0f / n_len_sq);
+	}
+
+	/// Closest triangle point with a power-of-two change of units. The scaled helper
+	/// retains the established float Voronoi/wedge arithmetic and feature masks.
+	/// Scaling is exact in the normal range and is undone only after projection.
+	/// MustIncludeC has the same precondition as GetClosestPointOnTriangleScaled.
+	template <bool MustIncludeC = false>
+	inline Vec4 GetClosestPointOnTriangle(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, uint32 &outSet)
+	{
+		double scale = ProjectionScale(inA, inB, inC);
+		Vec4 a(DVec4(inA) / scale), b(DVec4(inB) / scale), c(DVec4(inC) / scale);
+		Vec4 closest = GetClosestPointOnTriangleScaled<MustIncludeC>(a, b, c, outSet);
+		return Vec4(DVec4(closest) * scale);
 	}
 
 	/// Check if the origin is outside the face (inA, inB, inC) of tetrahedron (inA, inB, inC, inD).

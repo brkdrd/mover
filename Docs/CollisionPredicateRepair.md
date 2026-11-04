@@ -1,4 +1,6 @@
-# Collision predicate and tetrahedron projection precision repairs
+# Collision predicate and lower-dimensional projection precision repairs
+
+**Latest bounded result (baseline `aee62ba5`): the unchanged 18,432-query small-scale envelope now passes, with zero material misses, false hits, or distance failures.** The final registered assertions-enabled suite passes 556/556 cases at its original accuracy bounds. See [the final lower-dimensional repair](#final-lower-dimensional-repair-measured-envelope-passes) for attribution, RED evidence, coverage limits, and measured cost. Earlier FAIL statements below describe the previous revisions, not this final measured envelope. This is not a general collision-robustness or SpaceSim readiness certification.
 
 ## Scope
 
@@ -112,6 +114,74 @@ Follow-up evidence is preserved under `/home/brkdrd/mover-build-collision/artifa
 The follow-up small-scale mixed sphere–box ABBA benchmark uses 14 samples per variant with the same compiler/flags and 4,096 inputs. Median baseline/final GJK cost is 110.39/109.30 ns per call, with overlapping ranges 103.29–120.45 and 104.30–125.73 ns. This excludes an obvious order-of-magnitude regression in that workload; it is not a speedup or server-capacity claim.
 
 A separate exploratory variant of the initial repair using double cofactors but already-rounded float dot products also passes the initial regression corpus. That does **not** validate that shortcut over a wider envelope; both retained double solves promote coordinates before multiplication/accumulation.
+
+## Final lower-dimensional repair: measured envelope passes
+
+Baseline `aee62ba5`; isolated branch `fix/collision-envelope`. Production changes are confined to `ClosestPoint.h`. No GJK termination rule, support mapping, pentachoron/tetrahedron predicate or projection, query tolerance, legacy disagreement allowance, or external gate classification changes.
+
+### Exact cause, independently established before repair
+
+The exact remaining sample is envelope ID `(sample=0, scale=.01, margin=.001, axis=2/W, reversed=0)`. Its represented-shape corner oracle gives overlap `1.0000425375239833e-5`, against query tolerance `9.999999974752427e-7`. Original GJK exits false with closest squared distance `3.2789433390689737e-8`.
+
+An external instrumented-header trace records the final five support points bit-for-bit. An independent **exact rational active-set solver** enumerates every simplex subset and solves with rational Gaussian elimination, not the engine's float predicates. The best feasible feature is triangle B/C/E, with weights `[0.4413719031941673, 0.4944237861445550, 0.0642043106612777]` and squared distance `2.0021438439227815e-8`: definite progress. Its squared wedge area is `5.080135843525845e-11`, below the old absolute `1e-10` cutoff, although its Gram/Hadamard ratio is **0.8499850178513567**. It is well-conditioned, not geometrically degenerate. The absolute length^4 cutoff discards that interior and the restricted fallback produces a worse candidate, triggering GJK's unchanged no-progress rejection.
+
+Controlled original-header overlays isolate the effect:
+
+| Sole change to baseline | Material misses | Distance failures |
+|---|---:|---:|
+| None | 2,154 | 8,733 |
+| Triangle barycentric absolute cutoff made relative | 2,154 | 8,733 |
+| Line absolute cutoffs removed | 2,154 | 8,733 |
+| Closest-triangle area cutoff made relative | **0** | **0** |
+
+Compiler dependency files confirm each probe actually includes its overlay. This establishes the measured gate's cause independently of the broader numerical cleanup.
+
+### Final arithmetic and conditioning policy
+
+- Both triangle barycentric denominator branches and the closest-triangle area test compare squared wedge area with `1.0e-6f * |edge1|^2 * |edge2|^2`. The quotient is `sin(angle)^2`, dimensionless and invariant under uniform scaling. The coefficient follows the existing higher-simplex conditioning policy; it is not an arbitrarily smaller absolute area or a query-tolerance increase. Ill-conditioned triangles still reduce to edges.
+- Triangle barycentrics form differences, wedge components, dot products and solve intermediates in double, narrowing only the returned weights. Tests at scales `2^-60` and `2^60` demonstrate why a relative comparison **alone** is insufficient: float length^4 arithmetic underflows/overflows even when the vertices and squared edge lengths remain representable.
+- Line barycentrics and closest-triangle projections use an exact power-of-two change of units before their float arithmetic, undoing it after projection. The scale itself and coordinate rescaling use double, so the scale need not fit in float. This bounds ordinary coordinates before length^2/length^4 products while preserving the established float Voronoi/wedge operation sequence in its normal range. Lines and fallback edges no longer have a world-unit `FLT_EPSILON^2` minimum length; zero-length edges retain their endpoint fallback.
+- An exploratory all-double line/triangle projection was **rejected**, not shipped: it changed iterative EPA support trajectories enough to violate the existing `TestEPASphereBox` witness error bound (`0.200626 < 0.20` failed). Isolated probes also exposed changed results from double line-only and triangle-only variants. The retained power-of-two formulation passes the original EPA accuracy bound without loosening it.
+
+This is a bounded finite-precision repair, not exact rank/containment arithmetic. Extreme within-simplex dynamic ranges, rounding-sensitive conditioning boundaries, other shape families, and a universal no-progress/separation proof are not certified.
+
+### Durable RED/GREEN tests and final verification
+
+Five new cases are registered through the existing Geometry test files:
+
+- `TestLowerDimensionalProjectionScaleInvariance`: exact dyadic line/triangle oracles, all triangle permutations, endpoint exchange, zero/nonzero common translations, and scales `2^-60` through `2^60`. Compare normalized results so the test tolerance itself does not underflow.
+- `TestLowerDimensionalDegenerateAndConditionedProjections`: coincident points, collinear and near-collinear triangles on both sides of the relative conditioning policy, endpoint/interior line regions, permutations and three scales. Optimized paths are checked only under their documented last-vertex precondition.
+- `TestTriangleSmallScaleKnownSupportProjection`: exact B/C/E support bits, rational-reference point and weights, all six permutations at four scales, both closest-feature paths. Point allowance is `1e-9 * scale`, not a relaxed query tolerance.
+- `TestGJKSmallScaleExactMaterialOverlap`: frozen sphere, matrix, box and radius bits, independent represented-corner normal-cone oracle, four initial axes and both argument orders; raw hit and distance checks at `1e-6`.
+- `TestGJKSmallScaleMaterialEnvelope`: the complete 18,432-query corpus, actual represented-corner oracle, unchanged `2 * query_tolerance` material classification and distance bound, and a checked query count. No statistical disagreement allowance.
+
+Before production edits, the first exact/scale regressions failed executably (three cases, 336 failed assertions). The complete final new cases also fail against the pinned original header: direct projection cases have 566 failed assertions; the GJK exact/envelope cases have 10,891. The relative-only experiment clears the collision gate but still fails 192 scale-range assertions, motivating the scaled/double arithmetic independently.
+
+Final external gate result, unchanged source and exit policy:
+
+```text
+queries=18432 material_misses=0 material_false_hits=0 distance_failures=0
+oracle_failures=0 selected_scale_0.01_margin_0.001=0/512
+exit=0
+```
+
+Identity-based CSV comparison verifies all **18,432 baseline hit/distance values match the prior independent artifact bit-for-bit in binary32**, then finds all 2,154 original material misses and 8,733 original distance failures resolved, with **zero newly introduced failures**. The 6,144 queries within one query tolerance of contact remain separately identified, not silently reclassified as material hits.
+
+The rebuilt, real registered source list reports:
+
+```text
+[doctest] test cases:     556 |     556 passed | 0 failed | 0 skipped
+[doctest] assertions: 4144296 | 4144296 passed | 0 failed |
+[doctest] Status: SUCCESS!
+```
+
+Rebuilt HelloWorld passes every check and sleeps after 63 steps. Separate assertions-enabled ASAN/UBSAN runners compile the actual ClosestPoint, GJK and EPA test translation units: respectively **16/16 (87,093 assertions), 13/13 (90,560), and 9/9 (2,177,455)**, with no reported sanitizer errors. This instruments the header-driven geometry paths; the linked Jolt library is the ordinary assertions-enabled library, **not a whole-engine sanitizer build**.
+
+Environment: WSL Ubuntu GCC 13.3.0, Release `-O3`, assertions enabled, cross-platform deterministic arithmetic, `-ffp-contract=off`, AVX2, profiler/debug renderer/LTO off. Builds use at most `-j2`. The external CMake driver links the actual Jolt target and includes the unmodified `UnitTests.cmake` registered source list. GCC's existing assertions-enabled `-O3` AABox array-bounds warnings required `-Wno-error=array-bounds`; no source or test policy was changed to suppress those unrelated diagnostics. **Native MSVC was not executed.**
+
+Evidence: `/home/brkdrd/mover-collision-final-build/artifacts/` contains trace source/overlay/dependencies/log, exact-rational oracle and script, pinned original header, attribution overlays/CSV/logs, rejected all-double variant and EPA probes, RED logs, final CSV and identity comparison/resolved IDs, registered-suite and HelloWorld logs, and targeted sanitizer sources/commands/logs. The external build driver and replay scripts are archived there as well.
+
+Performance sanity: unchanged 4,096-input mixed small-scale sphere/AABox ABBA microbenchmark, 14 samples per version, reports median **102.89 ns/call baseline versus 124.62 ns/call final** (ranges 100.12–104.09 and 123.22–127.57). The direct unchanged pentachoron predicate remains about 31 ns. This is a measurable raw-GJK cost, not a speedup or server-capacity result. The measured small-scale acceptance gate is now PASS; broader collision robustness and SpaceSim shipping readiness remain separate questions.
 
 ## Performance sanity, not a server-capacity claim
 

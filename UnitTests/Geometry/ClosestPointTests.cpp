@@ -9,6 +9,138 @@
 
 TEST_SUITE("ClosestPointTests")
 {
+	TEST_CASE("TestLowerDimensionalProjectionScaleInvariance")
+	{
+		// Exact dyadic geometry: a nonzero segment has no dimensionful minimum length;
+		// the triangle projects to weights (1/2, 1/4, 1/4), independently of scale.
+		for (float scale : { 0x1p-60f, 0x1p-30f, 0x1p-20f, 0x1p-10f, 1.0f, 0x1p10f, 0x1p60f })
+			for (Vec4 translation : { Vec4::sZero(), Vec4(4, -8, 16, -32) * scale })
+			{
+				CAPTURE(scale);
+				Vec4 offset = Vec4(0.25f, -0.125f, 0, 0) * scale;
+				Vec4 direction = Vec4(1, 2, 3, 4) * scale;
+				for (bool reverse : { false, true })
+				{
+					Vec4 a = translation + offset - direction, b = translation + offset + direction;
+					if (reverse) std::swap(a, b);
+					a -= translation;
+					b -= translation;
+					float u, v;
+					CHECK(ClosestPoint::GetBaryCentricCoordinates(a, b, u, v));
+					CHECK_APPROX_EQUAL(u, 0.5f, 1.0e-6f);
+					CHECK_APPROX_EQUAL(v, 0.5f, 1.0e-6f);
+					uint32 set;
+					CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnLine(a, b, set) / scale, offset / scale, 2.0e-6f);
+					CHECK(set == 3);
+				}
+				const Vec4 basis[] = { Vec4(-1, 0, 0.125f, 0.25f), Vec4(1, -1, 0.125f, 0.25f), Vec4(1, 1, 0.125f, 0.25f) };
+				const float weights[] = { 0.5f, 0.25f, 0.25f };
+				int permutation[] = { 0, 1, 2 };
+				do
+				{
+					Vec4 a = (translation + basis[permutation[0]] * scale) - translation;
+					Vec4 b = (translation + basis[permutation[1]] * scale) - translation;
+					Vec4 c = (translation + basis[permutation[2]] * scale) - translation;
+					float u, v, w;
+					CHECK(ClosestPoint::GetBaryCentricCoordinates(a, b, c, u, v, w));
+					CHECK_APPROX_EQUAL(u, weights[permutation[0]], 1.0e-6f);
+					CHECK_APPROX_EQUAL(v, weights[permutation[1]], 1.0e-6f);
+					CHECK_APPROX_EQUAL(w, weights[permutation[2]], 1.0e-6f);
+					Vec4 expected = Vec4(0, 0, 0.125f, 0.25f) * scale;
+					uint32 set;
+					CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTriangle(a, b, c, set) / scale, expected / scale, 2.0e-6f);
+					CHECK(set == 7);
+					CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTriangle<true>(a, b, c, set) / scale, expected / scale, 2.0e-6f);
+					CHECK(set == 7);
+				} while (std::next_permutation(permutation, permutation + 3));
+			}
+	}
+
+	TEST_CASE("TestLowerDimensionalDegenerateAndConditionedProjections")
+	{
+		for (float scale : { 0x1p-30f, 1.0f, 0x1p30f })
+		{
+			CAPTURE(scale);
+			const Vec4 point = Vec4(1, -2, 3, -4) * scale;
+			float u, v, w;
+			CHECK_FALSE(ClosestPoint::GetBaryCentricCoordinates(point, point, u, v));
+			CHECK(u + v == 1.0f);
+			CHECK_FALSE(ClosestPoint::GetBaryCentricCoordinates(point, point, point, u, v, w));
+			CHECK(u + v + w == 1.0f);
+			uint32 set;
+			CHECK(ClosestPoint::GetClosestPointOnTriangle(point, point, point, set) == point);
+			CHECK(set == 4);
+			CHECK(ClosestPoint::GetClosestPointOnTriangle<true>(point, point, point, set) == point);
+			CHECK(set == 4);
+			// Endpoints and an interior projection, checked under endpoint exchange.
+			for (float query : { -2.0f, 0.0f, 2.0f })
+				for (bool reverse : { false, true })
+				{
+					Vec4 a = Vec4(-1 - query, 0.125f, 0, 0) * scale;
+					Vec4 b = Vec4(1 - query, 0.125f, 0, 0) * scale;
+					if (reverse) std::swap(a, b);
+					Vec4 expected(Clamp(query, -1.0f, 1.0f) - query, 0.125f, 0, 0);
+					CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnLine(a, b, set) / scale, expected, 1.0e-6f);
+					CHECK(set == (query == 0? 3u : ((query < 0) != reverse? 1u : 2u)));
+				}
+			for (float height : { 0.0f, 0x1p-12f, 0x1p-8f })
+			{
+				CAPTURE(height);
+				const Vec4 basis[] = { Vec4(-1, -height * 0.25f, 0.125f, 0.25f),
+					Vec4(1, -height * 0.25f, 0.125f, 0.25f), Vec4(0, height * 0.75f, 0.125f, 0.25f) };
+				int permutation[] = { 0, 1, 2 };
+				do
+				{
+					Vec4 a = basis[permutation[0]] * scale, b = basis[permutation[1]] * scale, c = basis[permutation[2]] * scale;
+					bool conditioned = height == 0x1p-8f;
+					CHECK(ClosestPoint::GetBaryCentricCoordinates(a, b, c, u, v, w) == conditioned);
+					Vec4 expected(0, conditioned? 0 : -height * 0.25f, 0.125f, 0.25f);
+					CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTriangle(a, b, c, set) / scale, expected, 1.0e-6f);
+					uint32 base_set = (1u << int(std::find(permutation, permutation + 3, 0) - permutation))
+						| (1u << int(std::find(permutation, permutation + 3, 1) - permutation));
+					if (height > 0) CHECK(set == (conditioned? 7u : base_set));
+					// Only invoke the optimized path when its stated C-in-feature precondition holds.
+					if ((set & 4u) != 0)
+						CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTriangle<true>(a, b, c, set) / scale, expected, 1.0e-6f);
+				} while (std::next_permutation(permutation, permutation + 3));
+			}
+		}
+	}
+
+	TEST_CASE("TestTriangleSmallScaleKnownSupportProjection")
+	{
+		// Last pentachoron of envelope sample 0 / scale .01 / margin .001 / W / sphere first.
+		// Exact-rational active-set solve chooses B,C,E: its area^2 is 5.0801358435e-11
+		// but area^2/(|BC|^2 |BE|^2) is .849985, so this is NOT a sliver.
+		const Vec4 fixture[] = {
+			UVec4(3124139324u, 3124762040u, 3125614128u, 3113572352u).ReinterpretAsFloat(),
+			UVec4(980414140u, 970477680u, 975393232u, 941508608u).ReinterpretAsFloat(),
+			UVec4(3137814712u, 977921368u, 986919216u, 948463104u).ReinterpretAsFloat()
+		};
+		const float weights[] = { 0.4413719031941673f, 0.494423786144555f, 0.0642043106612777f };
+		const Vec4 reference(0.000012611873664899887f, -0.00006997230677438714f,
+			0.00006617920941013659f, -0.00010289104727044411f);
+		for (float scale : { 0.125f, 1.0f, 8.0f, 128.0f })
+		{
+			CAPTURE(scale);
+			int permutation[] = { 0, 1, 2 };
+			do
+			{
+				Vec4 a = fixture[permutation[0]] * scale, b = fixture[permutation[1]] * scale, c = fixture[permutation[2]] * scale;
+				float u, v, w;
+				CHECK(ClosestPoint::GetBaryCentricCoordinates(a, b, c, u, v, w));
+				CHECK_APPROX_EQUAL(u, weights[permutation[0]], 1.0e-6f);
+				CHECK_APPROX_EQUAL(v, weights[permutation[1]], 1.0e-6f);
+				CHECK_APPROX_EQUAL(w, weights[permutation[2]], 1.0e-6f);
+				uint32 set;
+				CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTriangle(a, b, c, set), reference * scale, 1.0e-9f * scale);
+				CHECK(set == 7);
+				CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTriangle<true>(a, b, c, set), reference * scale, 1.0e-9f * scale);
+				CHECK(set == 7);
+			} while (std::next_permutation(permutation, permutation + 3));
+		}
+	}
+
 	TEST_CASE("TestTetrahedronSmallScaleProjection")
 	{
 		// The origin projects to the centroid with barycentrics (1/4, 1/4, 1/4, 1/4).

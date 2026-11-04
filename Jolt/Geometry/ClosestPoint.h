@@ -152,22 +152,32 @@ namespace ClosestPoint
 		// Edge vectors from A; solve the 3x3 Gram system to project the origin onto the affine hull
 		Vec4 e1 = inB - inA, e2 = inC - inA, e3 = inD - inA;
 
+		// Small GJK support tetrahedra can have nearly parallel edges. Retain double
+		// through the Gram solve, promoting coordinates before multiplication/accumulation.
+		auto dot_double = [](Vec4Arg inU, Vec4Arg inV) {
+			return (double(inU.GetX()) * double(inV.GetX()) + double(inU.GetY()) * double(inV.GetY()))
+				+ (double(inU.GetZ()) * double(inV.GetZ()) + double(inU.GetW()) * double(inV.GetW()));
+		};
+
 		// 3x3 Gram matrix G: G_ij = e_i . e_j
-		float d00 = e1.Dot(e1), d01 = e1.Dot(e2), d02 = e1.Dot(e3);
-		float d11 = e2.Dot(e2), d12 = e2.Dot(e3), d22 = e3.Dot(e3);
+		double d00 = dot_double(e1, e1), d01 = dot_double(e1, e2), d02 = dot_double(e1, e3);
+		double d11 = dot_double(e2, e2), d12 = dot_double(e2, e3), d22 = dot_double(e3, e3);
 
 		// Cofactors of the 3x3 Gram matrix
-		float C00 = d11 * d22 - d12 * d12;
-		float C01 = d02 * d12 - d01 * d22;
-		float C02 = d01 * d12 - d02 * d11;
-		float C11 = d00 * d22 - d02 * d02;
-		float C12 = d01 * d02 - d00 * d12;
-		float C22 = d00 * d11 - d01 * d01;
+		double C00 = d11 * d22 - d12 * d12;
+		double C01 = d02 * d12 - d01 * d22;
+		double C02 = d01 * d12 - d02 * d11;
+		double C11 = d00 * d22 - d02 * d02;
+		double C12 = d01 * d02 - d00 * d12;
+		double C22 = d00 * d11 - d01 * d01;
 
 		// Gram determinant (always >= 0)
-		float det = d00 * C00 + d01 * C01 + d02 * C02;
+		double det = d00 * C00 + d01 * C01 + d02 * C02;
 
-		if (det < 1.0e-12f)
+		// det has units length^6: an absolute cutoff discards well-conditioned small
+		// tetrahedra and makes GJK's interior projection disagree with its face predicate.
+		// Use the same scale-invariant Hadamard conditioning limit as that predicate.
+		if (det <= 1.0e-6f * d00 * d11 * d22)
 		{
 			// Degenerate tetrahedron, fall back to best triangle using largest Gram sub-determinant
 			if (C22 >= C00 && C22 >= C11)
@@ -189,13 +199,13 @@ namespace ClosestPoint
 		}
 
 		// RHS: b_i = -A . e_i
-		float b0 = -inA.Dot(e1), b1 = -inA.Dot(e2), b2 = -inA.Dot(e3);
+		double b0 = -dot_double(inA, e1), b1 = -dot_double(inA, e2), b2 = -dot_double(inA, e3);
 
-		// Cramer's rule: lambda = adj(G) * b / det(G)
-		float inv_det = 1.0f / det;
-		outV = (b0 * C00 + b1 * C01 + b2 * C02) * inv_det;
-		outW = (b0 * C01 + b1 * C11 + b2 * C12) * inv_det;
-		outX = (b0 * C02 + b1 * C12 + b2 * C22) * inv_det;
+		// Cramer's rule: lambda = adj(G) * b / det(G). Only round the output weights.
+		double inv_det = 1.0 / det;
+		outV = float((b0 * C00 + b1 * C01 + b2 * C02) * inv_det);
+		outW = float((b0 * C01 + b1 * C11 + b2 * C12) * inv_det);
+		outX = float((b0 * C02 + b1 * C12 + b2 * C22) * inv_det);
 		outU = 1.0f - outV - outW - outX;
 		return true;
 	}

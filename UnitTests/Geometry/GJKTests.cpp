@@ -143,9 +143,7 @@ TEST_SUITE("GJKTests")
 				center[i] = (random() & 1u? 1.0f : -1.0f) * (extent[i] + delta);
 				corner_distance_sq += double(delta) * double(delta);
 			}
-			// The broader 0.01-scale sphere-box probe still fails outside this predicate repair;
-			// see Docs/CollisionPredicateRepair.md for the preserved diagnostic and scope limits.
-			for (float scale : { 0.1f, 1.0f, 100.0f })
+			for (float scale : { 0.01f, 0.1f, 1.0f, 100.0f })
 			{
 				CAPTURE(scale);
 				AABox local_box(-extent * scale, extent * scale);

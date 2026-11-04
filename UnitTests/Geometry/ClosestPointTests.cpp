@@ -9,6 +9,68 @@
 
 TEST_SUITE("ClosestPointTests")
 {
+	TEST_CASE("TestTetrahedronSmallScaleProjection")
+	{
+		// The origin projects to the centroid with barycentrics (1/4, 1/4, 1/4, 1/4).
+		// A fixed 1e-12 cutoff on a length^6 determinant incorrectly discarded this interior.
+		const Vec4 basis[] = { Vec4(-1, -1, -1, 0.125f), Vec4(1, 0, 0, 0.125f),
+			Vec4(0, 1, 0, 0.125f), Vec4(0, 0, 1, 0.125f) };
+		for (float scale : { 0.001f, 0.01f, 0.1f, 1.0f, 100.0f })
+		{
+			CAPTURE(scale);
+			int permutation[] = { 0, 1, 2, 3 };
+			do
+			{
+				Vec4 a = basis[permutation[0]] * scale, b = basis[permutation[1]] * scale;
+				Vec4 c = basis[permutation[2]] * scale, d = basis[permutation[3]] * scale;
+				CHECK(ClosestPoint::OriginOutsideOfTetrahedronPlanes(a, b, c, d).GetTrues() == 0);
+				float u, v, w, x;
+				CHECK(ClosestPoint::GetBaryCentricCoordinates(a, b, c, d, u, v, w, x));
+				for (float weight : { u, v, w, x })
+					CHECK_APPROX_EQUAL(weight, 0.25f, 1.0e-5f);
+				uint32 set;
+				Vec4 expected(0, 0, 0, 0.125f * scale);
+				CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTetrahedron(a, b, c, d, set), expected, 1.0e-5f * scale);
+				CHECK(set == 15);
+				CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTetrahedron<true>(a, b, c, d, set), expected, 1.0e-5f * scale);
+				CHECK(set == 15);
+			} while (std::next_permutation(permutation, permutation + 4));
+		}
+	}
+
+	TEST_CASE("TestTetrahedronSmallScaleKnownSupportProjection")
+	{
+		// Exact support simplex at the no-progress exit of seeded GJK sample 0, scale 0.01,
+		// initial axis W. Independent 65-digit solve (not float Gram cofactors)
+		// gives barycentrics [0.00832342377, 0.37596215505, 0.49389370775, 0.12182071343].
+		const Vec4 fixture[] = {
+			UVec4(1010285740u, 3163555020u, 1015486452u, 996166808u).ReinterpretAsFloat(),
+			UVec4(3147128350u, 989130896u, 961850688u, 3127518464u).ReinterpretAsFloat(),
+			UVec4(996926212u, 3123856728u, 3127008288u, 3098048256u).ReinterpretAsFloat(),
+			UVec4(3133775915u, 3140428114u, 983431248u, 989491424u).ReinterpretAsFloat()
+		};
+		const Vec4 reference(-0.00003012045801648818f, -0.00010516357624502538f,
+			-0.00006613909852123448f, -0.00011422888476000912f);
+		for (float scale : { 0.1f, 1.0f, 10.0f, 100.0f })
+		{
+			CAPTURE(scale);
+			int permutation[] = { 0, 1, 2, 3 };
+			do
+			{
+				Vec4 a = fixture[permutation[0]] * scale, b = fixture[permutation[1]] * scale;
+				Vec4 c = fixture[permutation[2]] * scale, d = fixture[permutation[3]] * scale;
+				CHECK(ClosestPoint::OriginOutsideOfTetrahedronPlanes(a, b, c, d).GetTrues() == 0);
+				float u, v, w, x;
+				CHECK(ClosestPoint::GetBaryCentricCoordinates(a, b, c, d, u, v, w, x));
+				uint32 set;
+				CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTetrahedron(a, b, c, d, set), reference * scale, 1.0e-7f * scale);
+				CHECK(set == 15);
+				CHECK_APPROX_EQUAL(ClosestPoint::GetClosestPointOnTetrahedron<true>(a, b, c, d, set), reference * scale, 1.0e-7f * scale);
+				CHECK(set == 15);
+			} while (std::next_permutation(permutation, permutation + 4));
+		}
+	}
+
 	TEST_CASE("TestPentachoronFacesAgainstKnownBarycentrics")
 	{
 		UnitTestRandom random(98765);

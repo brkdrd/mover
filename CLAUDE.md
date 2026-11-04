@@ -11,10 +11,38 @@ generalize" below. Treat that section as load-bearing: underestimating it is how
 got stuck.
 
 - `master` = pristine upstream 3D Jolt, kept as reference. Never commit 4D work to it.
-- `4d` = the working branch. As of 2026-07-22 most of the Geometry/Physics/ObjectStream work
-  is **uncommitted working-tree changes** on top of commit `6f770d01 "Math for 4D"`.
+- `4d` = the published working branch. Local performance work was prepared on
+  `perf/v1-step`; publish it to `4d` without rewriting upstream history.
+- [README.md](README.md) is the current public entry point. The older dated notes
+  below retain the porting history and may describe already-completed work.
+- The intended application is a 4D PvP space simulator with detailed ships and
+  populated asteroid environments. See [the specification](Docs/SpaceSimSpecification.md)
+  and [system architecture](Docs/SpaceSimArchitecture.md). These are proposals,
+  not implemented features. Preserve the existing `F wedge r` torque convention.
 
 ## Build & test
+
+### Performance follow-up (2026-11-04)
+
+The working WSL baseline for this investigation was `c9014297` (then 27 commits ahead of
+the public `4d` branch). See [Docs/PerformanceOptimization.md](Docs/PerformanceOptimization.md)
+for the current pipeline map, controlled 3D comparison, retained changes, rejected experiments,
+and remaining work toward 120 steps/s. The older timings and progress snapshots below are historical.
+
+The retained third pass adds an exact zero-friction early exit and native Windows build fixes.
+It passes **389 cases / 2,397,320 assertions** in WSL Release and assertions-enabled ASAN/UBSAN,
+plus HelloWorld. Tests now check pyramid stability and collision conservation at 60, 120 and 150 Hz,
+and expand the independent Clifford-algebra rotation references.
+In a five-repeat unchanged-timestep comparison, the shortcut raises six / twelve-thread medians
+from **98.5 / 105.6 to 105.9 / 118.2 steps/s**, with identical state hashes.
+Native MSVC at an actual 120 Hz timestep averages **155.6 steps/s** with twelve threads, but the
+initial collapse still causes roughly **14 ms full-run p99** and only about **91%** of updates meet
+8.333 ms. Do not present the much faster post-warmup statistics as reliable full-workload 120 Hz.
+Native tests pass **389 of 390 cases**: one raw sphere-box GJK false negative is reproduced using
+both current and untouched v1 geometry. Its exact input is recorded in the report/results; do not
+relax its accuracy bound. Native timings are therefore separate from full correctness acceptance.
+Use `PerformanceTest/run_comparison.py` with profiler-disabled Release binaries for timing;
+do not compare profiler-enabled or sanitizer builds against uninstrumented 3D Jolt.
 
 ```bash
 # v1 is HEADLESS: build with the debug renderer OFF (the 3D DebugRenderer is deferred).
@@ -68,7 +96,10 @@ measurement recorded next to the check. See the commit for the full table. In sh
 
 **Known accuracy limits to keep in mind** (documented, not bugs): raw EPA on curved shapes is ~1–13%
 depending on how centred the overlap is; 4D GJK can miss grazing overlaps up to ~0.03 on shapes of
-size ~4. Neither is reachable through the engine's normal collision path.
+size ~4 in the original Linux sample set. A later Windows-generated sample misses a raw sphere-box
+overlap of about **0.106**, reproduced under GCC in both untouched v1 and the optimized version.
+See the performance report for exact input bits. Earlier claims that these limits cannot reach
+normal engine collision paths are not a comprehensive correctness guarantee.
 
 ### FIXED: EPA did not work at all (2026-08-08)
 Five separate bugs, each a different way the 3D→4D port lost a dimension:

@@ -1,0 +1,34 @@
+name: 4D headless build and tests
+
+on:
+  push:
+    branches: [4d]
+  pull_request:
+    branches: [4d]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-gcc:
+    name: Linux GCC 13 / Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure headless 4D build
+        run: >-
+          cmake -S Build -B out/headless
+          -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
+          -DPROFILER_IN_DEBUG_AND_RELEASE=OFF
+          -DTARGET_SAMPLES=OFF -DTARGET_VIEWER=OFF
+          -DTARGET_UNIT_TESTS=ON -DTARGET_HELLO_WORLD=ON
+          -DTARGET_PERFORMANCE_TEST=ON
+      - name: Build
+        run: cmake --build out/headless --target UnitTests HelloWorld PerformanceTest --parallel 2
+      - name: Unit tests
+        run: ctest --test-dir out/headless --output-on-failure
+      - name: Simulation smoke test
+        run: ./out/headless/HelloWorld

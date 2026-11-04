@@ -1,5 +1,11 @@
 # Building and Using Jolt Physics
 
+> **4D fork:** start with the [headless build instructions](../README.md#build-and-run).
+> This inherited manual describes upstream Jolt options and platforms. Samples,
+> the debug renderer, several subsystems and some configurations are not yet
+> supported by the 4D port. For tested Windows settings, see the
+> [native build recipe](../Docs/PerformanceOptimization.md#reproducing-the-native-build).
+
 ## Build Types
 
 Each platform supports multiple build targets

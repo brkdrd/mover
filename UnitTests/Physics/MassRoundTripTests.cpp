@@ -235,6 +235,222 @@ TEST_SUITE("MassRoundTripTests")
 		sCheckTensor(recreated.GetBodyCreationSettings().mMassPropertiesOverride.mInertia, expected);
 	}
 
+	TEST_CASE("RotatedTwoParticleMassDoesNotInventInverseInertia")
+	{
+		PhysicsTestContext context;
+		BodyCreationSettings settings(new SphereShape(0.5f), RVec4::sZero(),
+			Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+		settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
+		settings.mMassPropertiesOverride.mMass = 2.0f;
+		settings.mMassPropertiesOverride.mInertia = Mat44::sZero();
+		// Two unit particles at +/-(0,0,1,1), not inverse-inertia setter overrides.
+		settings.mMassPropertiesOverride.mInertia(2, 2) = settings.mMassPropertiesOverride.mInertia(2, 3)
+			= settings.mMassPropertiesOverride.mInertia(3, 2) = settings.mMassPropertiesOverride.mInertia(3, 3) = 2.0f;
+		Body &original = context.CreateBody(settings, EActivation::DontActivate);
+		// A float matrix cannot generally encode an oblique null space.
+		// The checked API must reject this state atomically, not invent a
+		// huge inverse or freeze the body by silently changing its DOFs.
+		BodyCreationSettings exported;
+		exported.mUserData = 0x12345678;
+		CHECK_FALSE(original.TryGetBodyCreationSettings(exported));
+		CHECK(exported.mUserData == 0x12345678);
+		CHECK(exported.GetShape() == nullptr);
+		CHECK(original.GetMotionProperties()->GetAllowedDOFs() == EAllowedDOFs::All);
+		for (const Body *body : { &original })
+			for (int input = 0; input < 6; ++input)
+			{
+				float v[6] = {};
+				v[input] = 1.0f;
+				Bivec actual = body->GetMotionProperties()->MultiplyWorldSpaceInverseInertiaByVector(
+					body->GetRotation(), Bivec(v[0], v[1], v[2], v[3], v[4], v[5]));
+				// For n=(0,0,1,1)/sqrt(2), I=4 P on the image of
+				// omega -> omega.Contract(n). Thus I^+=P/4: XZ/XW
+				// and YZ/YW each have a 2x2 block of 1/8, ZW is 1/4.
+				for (int output = 0; output < 6; ++output)
+				{
+					double expected = ((input == 1 || input == 2) && (output == 1 || output == 2))
+						|| ((input == 3 || input == 4) && (output == 3 || output == 4))? 0.125
+						: input == 5 && output == 5? 0.25 : 0.0;
+					CAPTURE(input); CAPTURE(output);
+					CHECK(std::abs(actual[output] - expected) < 1.0e-7);
+				}
+			}
+	}
+
+	TEST_CASE("ExactRankOneParticlesPreserveNullityUnderOrientationAndScale")
+	{
+		PhysicsTestContext context;
+		const Vec4 directions[] = { Vec4(1, 0, 0, 0), Vec4(0, 1, 0, 0), Vec4(0, 0, 1, 1),
+			Vec4(1, -1, 1, -1), Vec4(1, 2, -1, 0), Vec4(0, 0, 0, 2) };
+		const Rotor orientations[] = { Rotor::sIdentity(), Rotor::sExp(Bivec(0.23f, -0.31f, 0.17f, 0.29f, -0.11f, 0.37f)) };
+		for (Vec4 direction : directions)
+			for (float scale : { 1.0f, 4.0f })
+				for (Rotor orientation : orientations)
+				{
+					BodyCreationSettings settings(new SphereShape(0.5f), RVec4::sZero(), orientation, EMotionType::Dynamic, Layers::MOVING);
+					settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
+					settings.mMassPropertiesOverride.mMass = 2.0f;
+					settings.mMassPropertiesOverride.mInertia = Mat44::sZero();
+					for (int i = 0; i < 4; ++i)
+						for (int j = 0; j < 4; ++j)
+							settings.mMassPropertiesOverride.mInertia(i, j) = 2.0f * Square(scale) * direction[i] * direction[j];
+					Body &body = context.CreateBody(settings, EActivation::DontActivate);
+					int zeros = 0;
+					for (int plane = 0; plane < 6; ++plane)
+						zeros += body.GetMotionProperties()->GetInverseInertiaDiagonal()[plane] == 0.0f;
+					CHECK(zeros == 3);
+					// Independent world particle position and velocity Gram matrix:
+					// I = 2 C(x)^T C(x), I^+ = C(x)^T C(x) / (2 |x|^4).
+					Cl4Ref::MV point;
+					for (int i = 0; i < 4; ++i)
+						point.mC[Cl4Ref::cVecMask[i]] = scale * direction[i];
+					point = Cl4Ref::Sandwich(Cl4Ref::FromRotor(orientation), point);
+					double x[4], r_sq = 0.0, field[6][4] = {};
+					for (int i = 0; i < 4; ++i)
+					{
+						x[i] = point.mC[Cl4Ref::cVecMask[i]];
+						r_sq += x[i] * x[i];
+					}
+					int plane = 0;
+					for (int i = 0; i < 4; ++i)
+						for (int j = i + 1; j < 4; ++j, ++plane)
+						{
+							field[plane][i] = x[j];
+							field[plane][j] = -x[i];
+						}
+					BodyCreationSettings exported;
+					bool accepted = body.TryGetBodyCreationSettings(exported);
+					int occupied_axes = 0;
+					for (int i = 0; i < 4; ++i)
+						occupied_axes += direction[i] != 0.0f;
+					if (occupied_axes == 1)
+						CHECK(accepted);
+					const Body *recreated = accepted? &context.CreateBody(exported, EActivation::DontActivate) : nullptr;
+					for (const Body *candidate : { static_cast<const Body *>(&body), recreated })
+						if (candidate != nullptr)
+							for (int input = 0; input < 6; ++input)
+							{
+								float v[6] = {};
+								v[input] = 1.0f;
+								Bivec actual = candidate->GetMotionProperties()->MultiplyWorldSpaceInverseInertiaByVector(
+									candidate->GetRotation(), Bivec(v[0], v[1], v[2], v[3], v[4], v[5]));
+								for (int output = 0; output < 6; ++output)
+								{
+									double expected = 0.0;
+									for (int i = 0; i < 4; ++i)
+										expected += field[input][i] * field[output][i] / (2.0 * r_sq * r_sq);
+									CAPTURE(direction); CAPTURE(scale); CAPTURE(input); CAPTURE(output); CAPTURE(accepted);
+									CHECK(std::abs(actual[output] - expected) < 1.0e-7);
+								}
+							}
+				}
+	}
+
+	TEST_CASE("DiagonalRankTwoMassPreservesEveryChoiceOfNullPlane")
+	{
+		PhysicsTestContext context;
+		for (int a = 0; a < 4; ++a)
+			for (int b = a + 1; b < 4; ++b)
+			{
+				BodyCreationSettings settings(new SphereShape(0.5f), RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+				settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
+				settings.mMassPropertiesOverride.mMass = 2.0f;
+				settings.mMassPropertiesOverride.mInertia = Mat44::sZero();
+				settings.mMassPropertiesOverride.mInertia(a, a) = 2.0f;
+				settings.mMassPropertiesOverride.mInertia(b, b) = 7.0f;
+				Body &original = context.CreateBody(settings, EActivation::DontActivate);
+				BodyCreationSettings exported;
+				bool accepted = original.TryGetBodyCreationSettings(exported);
+				CHECK(accepted);
+				if (!accepted)
+					continue;
+				Body &recreated = context.CreateBody(exported, EActivation::DontActivate);
+				int plane = 0;
+				for (int i = 0; i < 4; ++i)
+					for (int j = i + 1; j < 4; ++j, ++plane)
+					{
+						float moment = settings.mMassPropertiesOverride.mInertia(i, i) + settings.mMassPropertiesOverride.mInertia(j, j);
+						float expected = moment > 0.0f? 1.0f / moment : 0.0f;
+						CHECK(recreated.GetMotionProperties()->GetInverseInertiaDiagonal()[plane] == doctest::Approx(expected).epsilon(1.0e-6));
+						if (moment == 0.0f)
+							CHECK(recreated.GetMotionProperties()->GetInverseInertiaDiagonal()[plane] == 0.0f);
+					}
+			}
+	}
+
+	TEST_CASE("SkinnyPositiveSecondMomentsAreNeverClassifiedAsNull")
+	{
+		PhysicsTestContext context;
+		for (int exponent : { 4, 12, 20, 40, 80 })
+		{
+			float small = std::ldexp(1.0f, -exponent);
+			BodyCreationSettings settings(new SphereShape(0.5f), RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+			settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
+			settings.mMassPropertiesOverride.mMass = 2.0f;
+			settings.mMassPropertiesOverride.mInertia = Mat44::sZero();
+			settings.mMassPropertiesOverride.mInertia(0, 0) = 4.0f;
+			for (int i = 1; i < 4; ++i)
+				settings.mMassPropertiesOverride.mInertia(i, i) = small;
+			Body &original = context.CreateBody(settings, EActivation::DontActivate);
+			Bivec before = original.GetMotionProperties()->GetInverseInertiaDiagonal();
+			for (int plane = 0; plane < 6; ++plane)
+			{
+				CAPTURE(exponent); CAPTURE(plane);
+				CHECK(before[plane] > 0.0f);
+				CHECK(before[plane] == doctest::Approx(1.0f / (plane < 3? 4.0f + small : 2.0f * small)));
+			}
+			BodyCreationSettings exported;
+			bool accepted = original.TryGetBodyCreationSettings(exported);
+			CAPTURE(exponent); CAPTURE(accepted);
+			if (exponent <= 20)
+				CHECK(accepted);
+			// Unrecoverable reciprocal cancellation may reject an extreme
+			// aspect ratio; it must NEVER silently turn a positive mode off.
+			if (accepted)
+			{
+				Body &recreated = context.CreateBody(exported, EActivation::DontActivate);
+				Bivec after = recreated.GetMotionProperties()->GetInverseInertiaDiagonal();
+				for (int plane = 0; plane < 6; ++plane)
+				{
+					CHECK(after[plane] > 0.0f);
+					CHECK(after[plane] == doctest::Approx(before[plane]).epsilon(1.0e-6));
+				}
+			}
+		}
+	}
+
+	TEST_CASE("ZeroAndSmallPhysicalMomentsDoNotAcquireSphereFallbackInertia")
+	{
+		PhysicsTestContext context;
+		for (float scale : { 0.0f, std::ldexp(1.0f, -40), std::ldexp(1.0f, -60) })
+		{
+			BodyCreationSettings settings(new SphereShape(0.5f), RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+			settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
+			settings.mMassPropertiesOverride.mMass = 2.0f;
+			settings.mMassPropertiesOverride.mInertia = Mat44::sZero();
+			for (int i = 0; i < 4; ++i)
+				settings.mMassPropertiesOverride.mInertia(i, i) = (i + 1) * scale;
+			Body &original = context.CreateBody(settings, EActivation::DontActivate);
+			BodyCreationSettings exported;
+			bool accepted = original.TryGetBodyCreationSettings(exported);
+			CHECK(accepted);
+			if (!accepted)
+				continue;
+			Body &recreated = context.CreateBody(exported, EActivation::DontActivate);
+			for (const Body *body : { &original, &recreated })
+			{
+				int plane = 0;
+				for (int i = 0; i < 4; ++i)
+					for (int j = i + 1; j < 4; ++j, ++plane)
+					{
+						float expected = scale == 0.0f? 0.0f : 1.0f / ((i + j + 2) * scale);
+						CAPTURE(scale); CAPTURE(plane);
+						CHECK(body->GetMotionProperties()->GetInverseInertiaDiagonal()[plane] == doctest::Approx(expected).epsilon(1.0e-6));
+					}
+			}
+		}
+	}
+
 	TEST_CASE("SphereSecondMomentMatchesRadialParticleQuadrature")
 	{
 		// Independent volume quadrature: shell measure 2*pi^2*r^3 dr and

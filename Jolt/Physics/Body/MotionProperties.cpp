@@ -45,8 +45,27 @@ void MotionProperties::SetMassProperties(EAllowedDOFs inAllowedDOFs, const MassP
 		// plus a Rotor aligning the body frame to the principal axes of the 4x4 second moment tensor M.
 		Mat44 principal_rotation;
 		Vec4 diagonal;
-		if (inMassProperties.DecomposePrincipalMomentsOfInertia(principal_rotation, diagonal)
-			&& !diagonal.IsNearZero())
+		// A diagonal body-local tensor already supplies a principal frame.
+		// Keeping it avoids a permutation -> rotor -> adjoint round trip,
+		// which needlessly perturbs even coordinate-aligned null modes.
+		bool is_diagonal = true;
+		for (int i = 0; i < 4; ++i)
+			for (int j = 0; j < 4; ++j)
+				if (i != j && inMassProperties.mInertia(i, j) != 0.0f)
+					is_diagonal = false;
+		bool decomposed;
+		if (is_diagonal)
+		{
+			principal_rotation = Mat44::sIdentity();
+			diagonal = Vec4(inMassProperties.mInertia.GetDiagonal4());
+			decomposed = true;
+		}
+		else
+			decomposed = inMassProperties.DecomposePrincipalMomentsOfInertia(principal_rotation, diagonal);
+		// Zero is a physical particle moment, not a decomposition failure.
+		// An absolute near-zero test would also replace valid small positive
+		// moments by invented unit-sphere inertia.
+		if (decomposed)
 		{
 			// Derive the 6 bivector principal moments from the 4 second-moment eigenvalues
 			Bivec bivec_inertia = MassProperties::sBivecInertiaFromSecondMomentDiagonal(diagonal);

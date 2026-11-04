@@ -19,6 +19,8 @@
 #include <Jolt/Physics/Collision/Shape/EmptyShape.h>
 #include <Jolt/Core/StringTools.h>
 #include <Jolt/Core/Profiler.h>
+#include <cmath>
+#include <cstdlib>
 #ifdef JPH_DEBUG_RENDERER
 	#include <Jolt/Renderer/DebugRenderer.h>
 #endif // JPH_DEBUG_RENDERER
@@ -353,6 +355,19 @@ void Body::RestoreState(StateRecorder &inStream)
 
 BodyCreationSettings Body::GetBodyCreationSettings() const
 {
+	BodyCreationSettings result;
+	if (!TryGetBodyCreationSettings(result))
+	{
+		// This legacy API has no error channel. Never return plausible settings
+		// which silently turn a null rotational mode into a huge inverse.
+		Trace("Body::GetBodyCreationSettings: unrepresentable mass state; use TryGetBodyCreationSettings");
+		std::abort();
+	}
+	return result;
+}
+
+bool Body::TryGetBodyCreationSettings(BodyCreationSettings &outSettings) const
+{
 	JPH_ASSERT(IsRigidBody());
 
 	BodyCreationSettings result;
@@ -385,14 +400,13 @@ BodyCreationSettings Body::GetBodyCreationSettings() const
 	result.mNumPositionStepsOverride = mMotionProperties != nullptr? mMotionProperties->GetNumPositionStepsOverride() : 0;
 	result.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
 
-	// Supported inputs are finite physical mass properties (including zero
-	// planar moments), as installed by body creation or SetMassProperties.
-	// Arbitrary inverse-mass/inertia setter overrides need not have such a
-	// representation and cannot in general round-trip through MassProperties.
-	// Export finite mass properties. Static bodies without motion properties do
-	// not retain mass/inertia; fully locked sectors discard that information too.
-	// Use canonical finite values for those unobservable sectors, preserving the
-	// allowed DOFs rather than fabricating FLT_MAX moments (which can overflow).
+	// Only export a state that survives the actual float mass encode/decode.
+	// Oblique null modes cannot in general be encoded by a float Mat44
+	// without changing rank. Reject, rather than epsilon-clamping a moment.
+	// See Docs/MassRoundTrip.md for the supported domain and error budget.
+	// Static bodies without motion properties do not retain mass/inertia;
+	// fully locked sectors discard that information too. Use finite canonical
+	// values for those unobservable sectors and retain the allowed DOFs.
 	result.mMassPropertiesOverride.mMass = 1.0f;
 	result.mMassPropertiesOverride.mInertia = Mat44::sZero();
 	if (mMotionProperties != nullptr)
@@ -400,9 +414,9 @@ BodyCreationSettings Body::GetBodyCreationSettings() const
 		float inv_mass = mMotionProperties->GetInverseMassUnchecked();
 		if ((result.mAllowedDOFs & EAllowedDOFs::AllTranslation) != EAllowedDOFs::None)
 		{
-			JPH_ASSERT(inv_mass > 0.0f, "Export requires finite positive mass for unlocked translation");
-			if (inv_mass > 0.0f)
-				result.mMassPropertiesOverride.mMass = 1.0f / inv_mass;
+			if (!(inv_mass > 0.0f) || !std::isfinite(inv_mass) || 1.0 / inv_mass > FLT_MAX)
+				return false;
+			result.mMassPropertiesOverride.mMass = float(1.0 / inv_mass);
 		}
 
 		if ((result.mAllowedDOFs & EAllowedDOFs::AllRotation) != EAllowedDOFs::None)
@@ -413,35 +427,109 @@ BodyCreationSettings Body::GetBodyCreationSettings() const
 			Bivec inv_diag = mMotionProperties->mInvInertiaDiagonal;
 			double moment[6];
 			double trace = 0.0;
+			int zero_moments = 0;
 			for (int plane = 0; plane < 6; ++plane)
 			{
-				// SetMassProperties maps a zero planar moment to zero inverse
-				// inertia. Preserve this finite, degenerate-particle convention.
-				// Arbitrary infinite-inertia overrides are not representable by
-				// the finite second-moment MassProperties API.
-				JPH_ASSERT(inv_diag[plane] >= 0.0f, "Invalid inverse inertia");
+				if (!(inv_diag[plane] >= 0.0f) || !std::isfinite(inv_diag[plane]))
+					return false;
+				// A zero planar moment has zero inverse by the particle convention,
+				// not an infinite physical second moment.
 				moment[plane] = inv_diag[plane] > 0.0f? 1.0 / inv_diag[plane] : 0.0;
+				zero_moments += inv_diag[plane] == 0.0f;
 				trace += moment[plane];
 			}
 			// I_ij = d_i + d_j. Each d_i occurs in three of the six
 			// moments, so trace(M) = sum(I_ij)/3 and
 			// d_i = (sum of the three incident moments - trace(M))/2.
 			trace /= 3.0;
-			Mat44 second = Mat44::sZero();
-			second(0, 0) = float(0.5 * (moment[0] + moment[1] + moment[2] - trace));
-			second(1, 1) = float(0.5 * (moment[0] + moment[3] + moment[4] - trace));
-			second(2, 2) = float(0.5 * (moment[1] + moment[3] + moment[5] - trace));
-			second(3, 3) = float(0.5 * (moment[2] + moment[4] + moment[5] - trace));
-			// This is body-local inertia, not world-space inertia: the body
-			// rotation is exported separately. Restore all W terms/couplings.
+			double d[4] = {
+				0.5 * (moment[0] + moment[1] + moment[2] - trace),
+				0.5 * (moment[0] + moment[3] + moment[4] - trace),
+				0.5 * (moment[1] + moment[3] + moment[5] - trace),
+				0.5 * (moment[2] + moment[4] + moment[5] - trace) };
+			if (zero_moments != 0)
+			{
+				// PSD plus I_ab = d_a + d_b = 0 implies d_a = d_b = 0
+				// EXACTLY. Solve from an incident moment instead of subtracting
+				// nearly equal reciprocals. This is not an epsilon rank decision.
+				constexpr int a[] = { 0, 0, 0, 1, 1, 2 }, b[] = { 1, 2, 3, 2, 3, 3 };
+				for (int plane = 0; plane < 6; ++plane)
+					if (inv_diag[plane] == 0.0f)
+					{
+						int axis = a[plane];
+						d[axis] = d[b[plane]] = 0.0;
+						for (int incident = 0; incident < 6; ++incident)
+						{
+							if (a[incident] == axis)
+								d[b[incident]] = moment[incident];
+							else if (b[incident] == axis)
+								d[a[incident]] = moment[incident];
+						}
+						break;
+					}
+			}
+			for (double value : d)
+				if (!(value >= 0.0) || value > FLT_MAX)
+					return false;
+			// This is body-local inertia; body rotation is exported separately.
 			Mat44 rotation = Mat44::sRotation(mMotionProperties->GetInertiaRotation());
-			result.mMassPropertiesOverride.mInertia = rotation * second * rotation.Transposed();
+			Mat44 &encoded = result.mMassPropertiesOverride.mInertia;
+			for (int i = 0; i < 4; ++i)
+				for (int j = i; j < 4; ++j)
+				{
+					double value = 0.0;
+					for (int k = 0; k < 4; ++k)
+						value += double(rotation(i, k)) * d[k] * rotation(j, k);
+					if (!std::isfinite(value) || std::abs(value) > FLT_MAX)
+						return false;
+					encoded(i, j) = encoded(j, i) = float(value);
+					// Exact, deliberately conservative supported domain for null
+					// modes. An oblique float tensor cannot certify their rank.
+					if (zero_moments != 0 && i != j && encoded(i, j) != 0.0f)
+						return false;
+				}
+
+			// Dry-run the real decoder, without changing the body or keeping a
+			// second independently editable dynamical state. Accept only finite
+			// inertia, unchanged nullity, and the documented response budget.
+			MotionProperties decoded;
+			decoded.SetMassProperties(EAllowedDOFs::All, result.mMassPropertiesOverride);
+			int decoded_zeros = 0;
+			for (int k = 0; k < 6; ++k)
+			{
+				float value = decoded.mInvInertiaDiagonal[k];
+				if (!(value >= 0.0f) || !std::isfinite(value))
+					return false;
+				decoded_zeros += value == 0.0f;
+			}
+			if (decoded_zeros != zero_moments)
+				return false;
+			double error_sq = 0.0, reference_sq = 0.0;
+			for (int input = 0; input < 6; ++input)
+			{
+				float v[6] = {};
+				v[input] = 1.0f;
+				Bivec basis(v[0], v[1], v[2], v[3], v[4], v[5]);
+				Rotor original_rotation = mMotionProperties->GetInertiaRotation();
+				Bivec expected = original_rotation.RotateBivec(inv_diag * original_rotation.InverseRotateBivec(basis));
+				Bivec actual = decoded.mInertiaRotation.RotateBivec(decoded.mInvInertiaDiagonal * decoded.mInertiaRotation.InverseRotateBivec(basis));
+				for (int output = 0; output < 6; ++output)
+				{
+					if (!std::isfinite(actual[output]) || !std::isfinite(expected[output]))
+						return false;
+					error_sq += Square(double(actual[output]) - expected[output]);
+					reference_sq += Square(double(expected[output]));
+				}
+			}
+			if (!(error_sq <= Square(64.0 * FLT_EPSILON) * reference_sq))
+				return false;
 		}
 	}
 
 	result.SetShape(GetShape());
 
-	return result;
+	outSettings = std::move(result);
+	return true;
 }
 
 #ifdef JPH_ENABLE_SOFT_BODY

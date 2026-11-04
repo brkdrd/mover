@@ -323,8 +323,14 @@ public:
 	/// Get the transformed shape of this body, which can be used to do collision detection outside of a body lock
 	inline TransformedShape	GetTransformedShape() const										{ JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sPositionAccess(), BodyAccess::EAccess::Read)); return TransformedShape(mPosition, mRotation, mShape, mID); }
 
-	/// Debug function to convert a body back to a body creation settings object to be able to save/recreate the body later
+	/// Debug function to save/recreate a body. Fail-stops if the mass state is not representable;
+	/// use TryGetBodyCreationSettings for recoverable failure (see Docs/MassRoundTrip.md).
 	BodyCreationSettings	GetBodyCreationSettings() const;
+
+	/// Checked export; returns false and leaves outSettings unchanged if float second-moment
+	/// encoding cannot preserve the stored inertia. Zero planar moments require an exactly
+	/// diagonal body-local tensor. No small positive moment is reclassified as zero.
+	[[nodiscard]] bool		TryGetBodyCreationSettings(BodyCreationSettings &outSettings) const;
 
 	/// Debug function to convert a soft body back to a soft body creation settings object to be able to save/recreate the body later
 #ifdef JPH_ENABLE_SOFT_BODY

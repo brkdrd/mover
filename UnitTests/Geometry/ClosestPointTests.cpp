@@ -4,9 +4,40 @@
 
 #include "UnitTestFramework.h"
 #include <Jolt/Geometry/ClosestPoint.h>
+#include <random>
 
 TEST_SUITE("ClosestPointTests")
 {
+	TEST_CASE("TestPentachoronFacesAgainstKnownBarycentrics")
+	{
+		UnitTestRandom random(98765);
+		std::uniform_real_distribution<float> angle(-1.0f, 1.0f);
+		std::uniform_int_distribution<int> weight(-8, 8);
+		for (int sample = 0; sample < 1000; ++sample)
+		{
+			float bary[5];
+			bary[0] = 1.0f;
+			for (int i = 1; i < 5; ++i)
+			{
+				int w = weight(random);
+				bary[i] = float(w == 0? 1 : w) * 0.125f;
+				bary[0] -= bary[i];
+			}
+			if (bary[0] == 0.0f) continue; // Keep away from the rounding-sensitive boundary.
+			Rotor rotation = Rotor::sExp(Bivec(angle(random), angle(random), angle(random), angle(random), angle(random), angle(random)));
+			for (float scale : { 0.001f, 0.1f, 1.0f, 10.0f, 1000.0f })
+			{
+				Vec4 query(bary[1], bary[2], bary[3], bary[4]);
+				Vec4 vertices[5] = { Vec4::sZero(), Vec4::sAxisX(), Vec4::sAxisY(), Vec4::sAxisZ(), Vec4::sAxisW() };
+				for (Vec4 &vertex : vertices) vertex = rotation * ((vertex - query) * scale);
+				uint32 expected = (bary[4] < 0.0f? 1u : 0u) | (bary[0] < 0.0f? 2u : 0u)
+					| (bary[1] < 0.0f? 4u : 0u) | (bary[2] < 0.0f? 8u : 0u) | (bary[3] < 0.0f? 16u : 0u);
+				CHECK(ClosestPoint::OriginOutsideOfPentachoronPlanes(vertices[0], vertices[1], vertices[2], vertices[3], vertices[4]) == expected);
+			}
+		}
+		CHECK(ClosestPoint::OriginOutsideOfPentachoronPlanes(Vec4::sZero(), Vec4::sAxisX(), Vec4::sAxisY(), Vec4::sAxisZ(), Vec4(0, 0, 1, 1.0e-5f)) == 0x1f);
+	}
+
 	// Test closest point from inPoint to triangle (inA, inB, inC) in 4D
 	inline static void TestClosestPointToTriangle(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, Vec4Arg inPoint, Vec4Arg inExpectedClosestPoint, uint32 inExpectedSet)
 	{

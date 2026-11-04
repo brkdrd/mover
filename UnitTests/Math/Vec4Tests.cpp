@@ -769,6 +769,89 @@ TEST_SUITE("Vec4Tests")
 		CHECK(ConvertToString(v) == "1, 2, 3, 4");
 	}
 
+	TEST_CASE("TestCrossAgainstDeterminantReference")
+	{
+		UnitTestRandom random(0x4D);
+		std::uniform_real_distribution<float> value(-2.0f, 2.0f);
+		for (int sample = 0; sample < 1000; ++sample)
+		{
+			Vec4 rows[3];
+			for (Vec4 &v : rows)
+				v = Vec4(value(random), value(random), value(random), value(random));
+			Vec4 cross = Vec4::sCross(rows[0], rows[1], rows[2]);
+			for (int excluded = 0; excluded < 4; ++excluded)
+			{
+				int columns[3], count = 0;
+				for (int col = 0; col < 4; ++col)
+					if (col != excluded) columns[count++] = col;
+				// Leibniz determinant in double precision, independent of the SIMD shuffles.
+				int permutation[3] = { 0, 1, 2 };
+				double determinant = 0.0;
+				do
+				{
+					int inversions = 0;
+					for (int i = 0; i < 3; ++i)
+						for (int j = i + 1; j < 3; ++j)
+							inversions += permutation[i] > permutation[j];
+					double product = ((inversions + excluded) & 1)? -1.0 : 1.0;
+					for (int row = 0; row < 3; ++row)
+						product *= rows[row][columns[permutation[row]]];
+					determinant += product;
+				} while (std::next_permutation(permutation, permutation + 3));
+				CHECK(abs(double(cross[excluded]) - determinant) < 1.0e-5);
+			}
+			for (const Vec4 &v : rows)
+				CHECK(abs(cross.Dot(v)) < 5.0e-5f);
+			CHECK(Vec4::sCross(rows[0], rows[0], rows[2]).LengthSq() < 1.0e-9f);
+		}
+	}
+
+	TEST_CASE("TestTangentFrameIsOrthonormalAndContinuous")
+	{
+		UnitTestRandom random(0xF4A4E);
+		std::uniform_real_distribution<float> value(-1.0f, 1.0f);
+		for (int sample = 0; sample < 1000; ++sample)
+		{
+			Vec4 normal = Vec4(value(random), value(random), value(random), value(random)).Normalized();
+			Vec4 frame[4] = { normal };
+			normal.GetContinuousPerpendicularBasis(frame[1], frame[2], frame[3]);
+			for (int i = 0; i < 4; ++i)
+				for (int j = i; j < 4; ++j)
+					CHECK(abs(frame[i].Dot(frame[j]) - (i == j? 1.0f : 0.0f)) < 1.0e-5f);
+		}
+		// Cross the old least-component selection boundaries near every coordinate axis.
+		// A tiny normal change must not permute the cached friction impulse's frame.
+		for (int axis = 0; axis < 4; ++axis)
+		{
+			Vec4 n1 = Vec4::sZero(), n2 = Vec4::sZero();
+			n1[axis] = n2[axis] = 1.0f;
+			n1[(axis + 1) % 4] = 1.0e-5f;
+			n2[(axis + 2) % 4] = 1.0e-5f;
+			Vec4 a[3], b[3];
+			n1.GetContinuousPerpendicularBasis(a[0], a[1], a[2]);
+			n2.GetContinuousPerpendicularBasis(b[0], b[1], b[2]);
+			for (int i = 0; i < 3; ++i)
+				CHECK((a[i] - b[i]).LengthSq() < 1.0e-8f);
+		}
+	}
+
+	TEST_CASE("TestDotReductionOrder")
+	{
+		UnitTestRandom random(123456);
+		std::uniform_real_distribution<float> value(-1000.0f, 1000.0f);
+		for (int sample = 0; sample < 10000; ++sample)
+		{
+			Vec4 a(value(random), value(random), value(random), value(random));
+			Vec4 b(value(random), value(random), value(random), value(random));
+			// Volatile intermediates enforce the specified scalar rounding / sum tree.
+			volatile float p0 = a[0] * b[0], p1 = a[1] * b[1], p2 = a[2] * b[2], p3 = a[3] * b[3];
+			volatile float xy = p0 + p1, zw = p2 + p3;
+			float expected = xy + zw;
+			CHECK(a.Dot(b) == expected);
+			CHECK(a.DotV(b) == Lane4::sReplicate(expected));
+		}
+	}
+
 	TEST_CASE("TestVec4CompressUnitVector")
 	{
 		// We want these to be preserved exactly

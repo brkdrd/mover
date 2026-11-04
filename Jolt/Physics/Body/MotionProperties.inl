@@ -100,13 +100,19 @@ InverseInertiaOperator MotionProperties::GetInverseInertiaForRotation(RotorArg i
 	Bivec a[6] = { Bivec::sWedge(f1, f2), Bivec::sWedge(f1, f3), Bivec::sWedge(f1, f4),
 				   Bivec::sWedge(f2, f3), Bivec::sWedge(f2, f4), Bivec::sWedge(f3, f4) };
 
-	// Mask and scale the diagonal once rather than masking every result
+	// DOF locks are in world space, whereas the diagonal is in the principal frame.
+	// Mask columns and rows of the assembled world operator, not the local diagonal.
 	Bivec mask = GetAngularDOFsBivecMask();
-	Bivec inv_d = Bivec::sAnd(mInvInertiaDiagonal, mask) * inInvInertiaScale;
+	Bivec inv_d = mInvInertiaDiagonal * inInvInertiaScale;
 
 	InverseInertiaOperator op;
 	for (int k = 0; k < 6; ++k)
 	{
+		if ((uint16(mAllowedDOFs) & (1u << (k + 4))) == 0)
+		{
+			op.mColumn[k] = Bivec::sZero();
+			continue;
+		}
 		Vec8 col = Vec8::sZero();
 		for (int j = 0; j < 6; ++j)
 			col = col + a[j].GetVec8() * Vec8::sReplicate(inv_d[j] * a[j][k]);

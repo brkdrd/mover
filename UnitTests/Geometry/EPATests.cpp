@@ -7,6 +7,7 @@
 #include <Jolt/Geometry/EPAPenetrationDepth.h>
 #include <Jolt/Geometry/AABox.h>
 #include <Jolt/Geometry/Sphere.h>
+
 #include <random>
 
 // Enable to trace accuracy of EPA algorithm
@@ -15,6 +16,103 @@
 
 TEST_SUITE("EPATests")
 {
+	TEST_CASE("TestCellProjectionDistanceBound")
+	{
+		// A tetrahedral cell centred on the W = 2 plane. Its closest point is
+		// interior and its squared distance is 4, independently of vertex winding.
+		Vec4 points[] = { Vec4(1, 1, 1, 2), Vec4(-1, -1, 1, 2), Vec4(-1, 1, -1, 2), Vec4(1, -1, -1, 2) };
+		int indices[] = { 0, 1, 2, 3 };
+		do
+		{
+			using Cell = EPAConvexHullBuilder::Cell;
+			Cell full(indices[0], indices[1], indices[2], indices[3], points, Vec4::sZero(), FLT_MAX);
+			Cell bounded(indices[0], indices[1], indices[2], indices[3], points, Vec4::sZero(), 4.0f);
+			Cell within(indices[0], indices[1], indices[2], indices[3], points, Vec4::sZero(), 5.0f);
+			CHECK(full.mClosestLenSq == 4.0f);
+			CHECK(full.mClosestPointInterior);
+			CHECK(bounded.mClosestLenSq == full.mClosestLenSq);
+			CHECK(bounded.mNormal == full.mNormal);
+			CHECK(!bounded.mClosestPointInterior);
+			CHECK(within.mClosestPointInterior);
+			for (uint i = 0; i < 3; ++i)
+			{
+				CHECK(bounded.mLambda[i] == 0.0f);
+				CHECK(within.mLambda[i] == full.mLambda[i]);
+			}
+			// An origin-facing cell must still be projected and queued regardless
+			// of the positive-distance bound.
+			Cell facing(indices[0], indices[1], indices[2], indices[3], points, Vec4(0, 0, 0, 3), 0.0f);
+			CHECK(facing.mClosestLenSq == -4.0f);
+			CHECK(facing.mClosestPointInterior);
+		} while (std::next_permutation(std::begin(indices), std::end(indices)));
+	}
+
+	TEST_CASE("TestHullRidgeAdjacency")
+	{
+		// Check actual shared vertices and reciprocal links, independently of how keys
+		// are encoded. Permutations exercise all seed-cell/ridge index combinations.
+		EPAConvexHullBuilder::Points points;
+		points.push_back(Vec4(-1, -1, -1, -1));
+		points.push_back(Vec4(4, -1, -1, -1));
+		points.push_back(Vec4(-1, 4, -1, -1));
+		points.push_back(Vec4(-1, -1, 4, -1));
+		points.push_back(Vec4(-1, -1, -1, 4));
+		std::mt19937 random(1234);
+		std::uniform_real_distribution<float> component(-1.0f, 1.0f);
+		for (int i = 5; i < 40; ++i)
+			points.push_back(Vec4(component(random), component(random), component(random), component(random)).Normalized() * 8.0f);
+		int indices[5] = { 0, 1, 2, 3, 4 };
+		do
+		{
+			EPAConvexHullBuilder hull(points);
+			hull.Initialize(indices[0], indices[1], indices[2], indices[3], indices[4]);
+			auto check_cell = [](const EPAConvexHullBuilder::Cell *cell)
+			{
+				for (int r = 0; r < 4; ++r)
+				{
+					const auto *other = cell->mNeighbour[r];
+					CHECK(other != nullptr);
+					if (other == nullptr)
+						return;
+					CHECK(!other->mRemoved);
+					int other_ridge = cell->mNeighbourRidge[r];
+					CHECK(other_ridge >= 0);
+					CHECK(other_ridge < 4);
+					if (other_ridge < 0 || other_ridge >= 4)
+						return;
+					CHECK(other->mNeighbour[other_ridge] == cell);
+					CHECK(other->mNeighbourRidge[other_ridge] == r);
+					for (int v = 0; v < 4; ++v)
+						if (v != r)
+						{
+							int matches = 0;
+							for (int w = 0; w < 4; ++w)
+								matches += w != other_ridge && cell->mIdx[v] == other->mIdx[w];
+							CHECK(matches == 1);
+						}
+				}
+			};
+			auto *first = hull.PeekClosestTriangleInQueue();
+			check_cell(first);
+			for (auto *cell : first->mNeighbour)
+				check_cell(cell);
+			for (int i = 5; i < int(points.size()); ++i)
+			{
+				float distance;
+				auto *facing = hull.FindFacingTriangle(points[i], distance);
+				if (facing == nullptr)
+					continue;
+				EPAConvexHullBuilder::NewCells cells;
+				bool added = hull.AddPoint(facing, i, FLT_MAX, cells);
+				CHECK(added);
+				if (!added)
+					return;
+				for (auto *cell : cells)
+					check_cell(cell);
+			}
+		} while (std::next_permutation(std::begin(indices), std::end(indices)));
+	}
+
 	/// Helper function to return the angle between two vectors in degrees
 	static float AngleBetweenVectors(Vec4Arg inV1, Vec4Arg inV2)
 	{
@@ -29,7 +127,7 @@ TEST_SUITE("EPATests")
 	// on S^2 that is ~V^-1 in the vertex count, but on S^3 it is ~V^(-2/3). Measured here on two
 	// coincident spheres: 96 hull points -> 0.269, 192 -> 0.171, 384 -> 0.109, 768 -> 0.069, i.e. 8x
 	// the points for 4x the accuracy, matching the law. Meeting the 3D numbers would need ~768 points
-	// and ~836 KB of stack in EPAConvexHullBuilder (currently 96 points / ~104 KB).
+	// with a correspondingly larger EPAConvexHullBuilder stack allocation (currently 96 points).
 	//
 	// These cases all use a convex radius of 0 on purpose, to drive EPA with a *curved* boundary. The
 	// engine never does that: ConvexShape::sCollideConvexVsConvex shrinks both shapes by their convex

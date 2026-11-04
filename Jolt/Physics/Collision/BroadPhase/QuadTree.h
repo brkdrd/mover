@@ -138,8 +138,9 @@ private:
 		/// If any changes are made to an object inside this sub tree then the direct path from the body to the top of the tree will become changed.
 		atomic<uint32>			mIsChanged;
 
-		// Padding to align to 124 bytes
-		uint32					mPadding = 0;
+		// The free list appends a 4-byte index. Pad the complete slot to three
+		// cache lines, so every node (not just the first in a page) stays aligned.
+		uint32					mPadding[9] = {};
 	};
 
 	// Maximum size of the stack during tree walk
@@ -153,8 +154,8 @@ public:
 	/// Class that allocates tree nodes, can be shared between multiple trees
 	using Allocator = FixedSizeFreeList<Node>;
 
-	// TODO(4D): 128 in 3D; the W axis min/max arrays add 32 bytes
-	static_assert(Allocator::ObjectStorageSize == 160, "Node should be 160 bytes");
+	static_assert(Allocator::ObjectStorageSize == 192, "Node slot should be 192 bytes");
+	static_assert(Allocator::ObjectStorageSize % JPH_CACHE_LINE_SIZE == 0, "Node slots must preserve cache-line alignment");
 
 	/// Data to track location of a Body in the tree
 	struct Tracking

@@ -47,9 +47,8 @@ public:
 	// 64 points -> 2.93, 96 -> 2.97, 128 -> 2.99, 192 -> 2.998. Cells needed scale at roughly 8 per
 	// point for points spread over a 3-sphere; 768 is enough for 96 points (1024 changes nothing).
 	//
-	// This costs stack: the builder is a local in EPAPenetrationDepth::GetPenetrationDepth and is
-	// ~104 KB at these limits. If that ever becomes a problem, lower to 512/64 (~68 KB) and accept
-	// ~2.5% error on curved shapes, or move the builder off the stack.
+	// This costs stack: the builder is local to EPAPenetrationDepth. Compact cell indices
+	// reduce its footprint without reducing these accuracy limits.
 	static constexpr int cMaxCells = 768;					///< Max cells in hull
 	static constexpr int cMaxPoints = 96;					///< Max number of points in hull
 	static constexpr int cMaxRidgeLength = 256;				///< Max number of horizon ridges
@@ -80,7 +79,7 @@ public:
 	{
 	public:
 		/// Constructor
-		inline			Cell(int inIdx0, int inIdx1, int inIdx2, int inIdx3, const Vec4 *inPositions);
+		inline			Cell(int inIdx0, int inIdx1, int inIdx2, int inIdx3, const Vec4 *inPositions, Vec4Arg inInteriorPoint, float inClosestDistSq);
 
 		/// Check if cell is facing inPosition
 		inline bool		IsFacing(Vec4Arg inPosition) const
@@ -96,13 +95,13 @@ public:
 			return mNormal.Dot(mCentroid) < 0.0f;
 		}
 
-		int				mIdx[4];							///< Vertex indices
-		Cell *			mNeighbour[4];						///< mNeighbour[i] shares the ridge opposite vertex mIdx[i]
-		int				mNeighbourRidge[4];					///< Which ridge of the neighbour connects back to this cell
 		Vec4			mNormal;							///< Normal of this cell = sCross of its 3 edge vectors (not normalized), oriented by the vertex winding
 		Vec4			mCentroid;							///< Center of the cell
+		Cell *			mNeighbour[4];						///< mNeighbour[i] shares the ridge opposite vertex mIdx[i]
 		float			mClosestLenSq = FLT_MAX;			///< Closest distance^2 from origin to cell
 		float			mLambda[3];							///< Barycentric coordinates of closest point to origin
+		uint16			mIdx[4];							///< Vertex indices (bounded by cMaxPoints)
+		uint8			mNeighbourRidge[4];					///< Which ridge (0-3) of the neighbour connects back
 		bool			mLambdaRelativeTo0;					///< Reference vertex: true = y0, false = y1
 		bool			mClosestPointInterior = false;		///< Closest point is in the interior of the cell
 		bool			mRemoved = false;					///< Cell has been removed
@@ -133,7 +132,7 @@ public:
 			mHighWatermark = 0;
 		}
 
-		Cell *			CreateCell(int inIdx0, int inIdx1, int inIdx2, int inIdx3, const Vec4 *inPositions)
+		Cell *			CreateCell(int inIdx0, int inIdx1, int inIdx2, int inIdx3, const Vec4 *inPositions, Vec4Arg inInteriorPoint, float inClosestDistSq)
 		{
 			Cell *c;
 			if (mNextFree != nullptr)
@@ -148,7 +147,7 @@ public:
 				c = reinterpret_cast<Cell *>(&mCells[mHighWatermark].mData);
 				++mHighWatermark;
 			}
-			new (c) Cell(inIdx0, inIdx1, inIdx2, inIdx3, inPositions);
+			new (c) Cell(inIdx0, inIdx1, inIdx2, inIdx3, inPositions, inInteriorPoint, inClosestDistSq);
 			return c;
 		}
 
@@ -246,10 +245,11 @@ public:
 			cells[i] = CreateCell(v[0], v[1], v[2], v[3]);
 		}
 
-		// Link all pairs of cells using brute-force 3-vertex matching
+		// Cell i omits vertex i. Its ridge opposite vertex j is shared with cell j.
+		// Since i < j, vertex j has local index j - 1 in cell i, and vice versa index i.
 		for (int i = 0; i < 5; ++i)
 			for (int j = i + 1; j < 5; ++j)
-				sTryLinkCells(cells[i], cells[j]);
+				sLinkCell(cells[i], j - 1, cells[j], i);
 
 		// Add all cells to the priority queue
 		for (int i = 0; i < 5; ++i)
@@ -325,7 +325,7 @@ public:
 		// Create new cells from horizon ridges + new point
 		for (const HorizonRidge &r : ridges)
 		{
-			Cell *nc = CreateCell(r.mVertex[0], r.mVertex[1], r.mVertex[2], inIdx);
+			Cell *nc = CreateCell(r.mVertex[0], r.mVertex[1], r.mVertex[2], inIdx, inClosestDistSq);
 			if (nc == nullptr)
 				return false;
 			outCells.push_back(nc);
@@ -352,37 +352,36 @@ public:
 		// point. Ridge r of a new cell omits vertex r, so for r < 3 it is identified by the pair of
 		// horizon vertices other than r. Key each unlinked ridge by that pair and match on the key:
 		// the comparison becomes one integer test.
-		struct RidgeKey
-		{
-			uint64		mKey;
-			Cell *		mCell;
-			int			mRidge;
-		};
-		StaticArray<RidgeKey, 3 * cMaxRidgeLength> ridge_keys;
+		// Keep keys contiguous so four candidates can be checked together. The flat index
+		// identifies both cell and ridge, avoiding pointers and padding in the search array.
+		static_assert(cMaxPoints < 65536);
+		constexpr uint32 cLinked = 0xffffffff;
+		uint32 ridge_keys[3 * cMaxRidgeLength + 3];
+		uint num_keys = 0;
 		for (Cell *c : outCells)
 			for (int r = 0; r < 3; ++r)
 			{
-				if (c->mNeighbour[r] != nullptr)
-					continue;
 				int a = c->mIdx[(r + 1) % 3];
 				int b = c->mIdx[(r + 2) % 3];
-				uint64 lo = uint64(uint32(min(a, b)));
-				uint64 hi = uint64(uint32(max(a, b)));
-				if (ridge_keys.size() < ridge_keys.capacity())
-					ridge_keys.push_back({ (hi << 32) | lo, c, r });
+				ridge_keys[num_keys++] = c->mNeighbour[r] != nullptr? cLinked : (uint32(max(a, b)) << 16) | uint32(min(a, b));
 			}
+		// A final unaligned four-lane load may read up to three padding keys.
+		for (uint i = 0; i < 3; ++i)
+			ridge_keys[num_keys + i] = cLinked;
 
-		for (uint i = 0; i < ridge_keys.size(); ++i)
+		for (uint i = 0; i < num_keys; ++i)
 		{
-			RidgeKey &ki = ridge_keys[i];
-			if (ki.mCell->mNeighbour[ki.mRidge] != nullptr)
+			if (ridge_keys[i] == cLinked)
 				continue;
-			for (uint j = i + 1; j < ridge_keys.size(); ++j)
+			UVec4 key = UVec4::sReplicate(ridge_keys[i]);
+			for (uint j = i + 1; j < num_keys; j += 4)
 			{
-				RidgeKey &kj = ridge_keys[j];
-				if (kj.mKey == ki.mKey && kj.mCell->mNeighbour[kj.mRidge] == nullptr)
+				uint matches = UVec4::sEquals(UVec4::sLoadInt4(ridge_keys + j), key).GetTrues();
+				if (matches != 0)
 				{
-					sLinkCell(ki.mCell, ki.mRidge, kj.mCell, kj.mRidge);
+					uint partner = j + CountTrailingZeros(matches);
+					sLinkCell(outCells[i / 3], i % 3, outCells[partner / 3], partner % 3);
+					ridge_keys[partner] = cLinked;
 					break;
 				}
 			}
@@ -420,23 +419,11 @@ public:
 
 private:
 	/// Create a new cell
-	Cell *				CreateCell(int inIdx0, int inIdx1, int inIdx2, int inIdx3)
+	Cell *				CreateCell(int inIdx0, int inIdx1, int inIdx2, int inIdx3, float inClosestDistSq = FLT_MAX)
 	{
-		Cell *c = mFactory.CreateCell(inIdx0, inIdx1, inIdx2, inIdx3, mPositions.data());
+		Cell *c = mFactory.CreateCell(inIdx0, inIdx1, inIdx2, inIdx3, mPositions.data(), mInteriorPoint, inClosestDistSq);
 		if (c == nullptr)
 			return nullptr;
-
-		// TODO(4D): orient the cell normal outward. The normal's sign comes from the vertex winding
-		// (sCross of the edge vectors), and neither Initialize (which just omits one vertex at a time)
-		// nor the brute-force ridge linking maintains a consistent winding across cells, so roughly
-		// half of them would point inward. That breaks IsFacing()/IsFacingOrigin() and makes EPA bail
-		// out immediately. mInteriorPoint is a point known to be inside the hull, so "outward" is
-		// simply "away from it"; the hull only ever grows, so it stays interior.
-		if (c->mNormal.Dot(c->mCentroid - mInteriorPoint) < 0.0f)
-		{
-			c->mNormal = -c->mNormal;
-			c->mClosestLenSq = -c->mClosestLenSq;	// signed distance flips with the normal
-		}
 
 #ifdef JPH_EPA_CONVEX_BUILDER_DRAW
 		c->mIteration = mIteration;
@@ -458,9 +445,9 @@ private:
 		JPH_ASSERT(inC2->mNeighbour[inR2] == nullptr);
 
 		inC1->mNeighbour[inR1] = inC2;
-		inC1->mNeighbourRidge[inR1] = inR2;
+		inC1->mNeighbourRidge[inR1] = uint8(inR2);
 		inC2->mNeighbour[inR2] = inC1;
-		inC2->mNeighbourRidge[inR2] = inR1;
+		inC2->mNeighbourRidge[inR2] = uint8(inR1);
 	}
 
 	/// Unlink a cell from its neighbours
@@ -553,46 +540,6 @@ private:
 		return outRidges.size() >= 4;
 	}
 
-	/// Try to link two cells if they share a ridge (3 common vertices)
-	static bool			sTryLinkCells(Cell *inC1, Cell *inC2)
-	{
-		// Only check ridges that aren't already linked
-		for (int r1 = 0; r1 < 4; ++r1)
-		{
-			if (inC1->mNeighbour[r1] != nullptr)
-				continue;
-
-			for (int r2 = 0; r2 < 4; ++r2)
-			{
-				if (inC2->mNeighbour[r2] != nullptr)
-					continue;
-
-				// Count matching vertices between the two ridges
-				int count = 0;
-				for (int a = 0; a < 4; ++a)
-				{
-					if (a == r1) continue;
-					for (int b = 0; b < 4; ++b)
-					{
-						if (b == r2) continue;
-						if (inC1->mIdx[a] == inC2->mIdx[b])
-						{
-							++count;
-							break;
-						}
-					}
-				}
-
-				if (count == 3)
-				{
-					sLinkCell(inC1, r1, inC2, r2);
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
 #ifdef JPH_EPA_CONVEX_BUILDER_VALIDATE
 	void				ValidateCell(const Cell *inC) const
 	{
@@ -671,13 +618,16 @@ private:
 // Disable fmadd for numerical precision in the Cell constructor
 JPH_PRECISE_MATH_ON
 
-EPAConvexHullBuilder::Cell::Cell(int inIdx0, int inIdx1, int inIdx2, int inIdx3, const Vec4 *inPositions)
+EPAConvexHullBuilder::Cell::Cell(int inIdx0, int inIdx1, int inIdx2, int inIdx3, const Vec4 *inPositions, Vec4Arg inInteriorPoint, float inClosestDistSq)
 {
 	// Fill in indices
-	mIdx[0] = inIdx0;
-	mIdx[1] = inIdx1;
-	mIdx[2] = inIdx2;
-	mIdx[3] = inIdx3;
+	static_assert(cMaxPoints < 65536);
+	JPH_ASSERT(inIdx0 >= 0 && inIdx0 < cMaxPoints && inIdx1 >= 0 && inIdx1 < cMaxPoints
+		&& inIdx2 >= 0 && inIdx2 < cMaxPoints && inIdx3 >= 0 && inIdx3 < cMaxPoints);
+	mIdx[0] = uint16(inIdx0);
+	mIdx[1] = uint16(inIdx1);
+	mIdx[2] = uint16(inIdx2);
+	mIdx[3] = uint16(inIdx3);
 
 	// Clear links
 	for (int i = 0; i < 4; ++i)
@@ -729,6 +679,23 @@ EPAConvexHullBuilder::Cell::Cell(int inIdx0, int inIdx1, int inIdx2, int inIdx3,
 	float c_dot_n = mCentroid.Dot(mNormal);
 	mClosestLenSq = abs(c_dot_n) * c_dot_n / normal_len_sq;
 
+	// Winding does not orient every new cell consistently. The seed centroid remains
+	// inside the growing hull, so use it to orient the normal before testing the bound.
+	if (mNormal.Dot(mCentroid - inInteriorPoint) < 0.0f)
+	{
+		mNormal = -mNormal;
+		mClosestLenSq = -mClosestLenSq;
+	}
+
+	// Such a cell is never queued by AddPoint: only its normal and connectivity are
+	// needed for later horizon traversal. Avoid the Gram solve, but keep defined data.
+	if (mClosestLenSq >= inClosestDistSq && mClosestLenSq >= 0.0f)
+	{
+		mLambda[0] = mLambda[1] = mLambda[2] = 0.0f;
+		mLambdaRelativeTo0 = true;
+		return;
+	}
+
 	// Barycentric coordinates of the closest point, by solving the 3x3 Gram system. This is only used
 	// to reconstruct the closest point later; the distance above is computed from the normal because
 	// that is much more accurate (see the same note in 3D Jolt and in ClosestPoint::GetClosestPointOnTriangle).
@@ -749,9 +716,12 @@ EPAConvexHullBuilder::Cell::Cell(int inIdx0, int inIdx1, int inIdx2, int inIdx3,
 	float b1 = -y0.Dot(e2);
 	float b2 = -y0.Dot(e3);
 
-	float l0 = (b0 * C00 + b1 * C01 + b2 * C02) / determinant;
-	float l1 = (b0 * C01 + b1 * C11 + b2 * C12) / determinant;
-	float l2 = (b0 * C02 + b1 * C12 + b2 * C22) / determinant;
+	// Divide the three numerators together, preserving full division accuracy (no
+	// approximate reciprocal) and the scalar expressions' summation order.
+	Lane4 lambda = Lane4(b0 * C00 + b1 * C01 + b2 * C02,
+		b0 * C01 + b1 * C11 + b2 * C12,
+		b0 * C02 + b1 * C12 + b2 * C22, 0.0f) / Lane4::sReplicate(determinant);
+	float l0 = lambda.GetX(), l1 = lambda.GetY(), l2 = lambda.GetZ();
 	mLambda[0] = l0;
 	mLambda[1] = l1;
 	mLambda[2] = l2;

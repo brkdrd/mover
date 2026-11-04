@@ -52,20 +52,13 @@ Vec4 Vec4::sCross(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC)
 	// | a.x  a.y  a.z  a.w |
 	// | b.x  b.y  b.z  b.w |
 	// | c.x  c.y  c.z  c.w |
-	float ax = inA.mF32[0], ay = inA.mF32[1], az = inA.mF32[2], aw = inA.mF32[3];
-	float bx = inB.mF32[0], by = inB.mF32[1], bz = inB.mF32[2], bw = inB.mF32[3];
-	float cx = inC.mF32[0], cy = inC.mF32[1], cz = inC.mF32[2], cw = inC.mF32[3];
-
-	// Cofactor for e1 (x): det of 3x3 minor excluding column 0
-	float x =  ay * (bz * cw - bw * cz) - az * (by * cw - bw * cy) + aw * (by * cz - bz * cy);
-	// Cofactor for e2 (y): det of 3x3 minor excluding column 1 (negated)
-	float y = -(ax * (bz * cw - bw * cz) - az * (bx * cw - bw * cx) + aw * (bx * cz - bz * cx));
-	// Cofactor for e3 (z): det of 3x3 minor excluding column 2
-	float z =  ax * (by * cw - bw * cy) - ay * (bx * cw - bw * cx) + aw * (bx * cy - by * cx);
-	// Cofactor for e4 (w): det of 3x3 minor excluding column 3 (negated)
-	float w = -(ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx));
-
-	return Vec4(x, y, z, w);
+	// Evaluate the four 3x3 cofactors in parallel. Each lane keeps the scalar
+	// expression's multiplication and addition order; only Y and W change sign.
+	Lane4 aj = inA.Swizzle<1, 0, 0, 0>(), ak = inA.Swizzle<2, 2, 1, 1>(), al = inA.Swizzle<3, 3, 3, 2>();
+	Lane4 bj = inB.Swizzle<1, 0, 0, 0>(), bk = inB.Swizzle<2, 2, 1, 1>(), bl = inB.Swizzle<3, 3, 3, 2>();
+	Lane4 cj = inC.Swizzle<1, 0, 0, 0>(), ck = inC.Swizzle<2, 2, 1, 1>(), cl = inC.Swizzle<3, 3, 3, 2>();
+	Lane4 cofactors = aj * (bk * cl - bl * ck) - ak * (bj * cl - bl * cj) + al * (bj * ck - bk * cj);
+	return Vec4(Lane4::sXor(cofactors, UVec4(0, 0x80000000U, 0, 0x80000000U).ReinterpretAsFloat()));
 }
 
 Vec4 Vec4::GetNormalizedPerpendicular() const
@@ -99,6 +92,18 @@ void Vec4::GetNormalizedPerpendicularBasis(Vec4 &outPerp1, Vec4 &outPerp2, Vec4 
 	// sCross(a, b, c) is perpendicular to all three of its arguments
 	outPerp2 = sCross(*this, outPerp1, seed).Normalized();
 	outPerp3 = sCross(*this, outPerp1, outPerp2).Normalized();
+}
+
+void Vec4::GetContinuousPerpendicularBasis(Vec4 &outPerp1, Vec4 &outPerp2, Vec4 &outPerp3) const
+{
+	JPH_ASSERT(IsNormalized(1.0e-5f));
+	// S^3 admits a continuous tangent frame. These three signed permutations are
+	// mutually orthogonal, perpendicular to n, and have |n|, without normalization.
+	// Unlike choosing a least-aligned coordinate axis, this does not abruptly rotate
+	// the friction frame when a nearly axis-aligned contact normal changes slightly.
+	outPerp1 = Lane4::sXor(Swizzle<1, 0, 3, 2>(), UVec4(0x80000000U, 0, 0, 0x80000000U).ReinterpretAsFloat());
+	outPerp2 = Lane4::sXor(Swizzle<2, 3, 0, 1>(), UVec4(0x80000000U, 0x80000000U, 0, 0).ReinterpretAsFloat());
+	outPerp3 = Lane4::sXor(Swizzle<3, 2, 1, 0>(), UVec4(0x80000000U, 0, 0x80000000U, 0).ReinterpretAsFloat());
 }
 
 JPH_NAMESPACE_END

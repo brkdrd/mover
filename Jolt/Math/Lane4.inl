@@ -980,7 +980,11 @@ Lane4 Lane4::Reciprocal() const
 Lane4 Lane4::DotV(Lane4Arg inV2) const
 {
 #if defined(JPH_USE_SSE4_1)
-	return _mm_dp_ps(mValue, inV2.mValue, 0xff);
+	// Explicit pairwise reduction avoids the high latency of DPPS on some CPUs.
+	// Keep its (x + y) + (z + w) order, without a reciprocal or fused operations.
+	__m128 product = _mm_mul_ps(mValue, inV2.mValue);
+	__m128 pairs = _mm_add_ps(product, _mm_shuffle_ps(product, product, _MM_SHUFFLE(2, 3, 0, 1)));
+	return _mm_add_ps(pairs, _mm_shuffle_ps(pairs, pairs, _MM_SHUFFLE(1, 0, 3, 2)));
 #elif defined(JPH_USE_NEON)
 	float32x4_t mul = vmulq_f32(mValue, inV2.mValue);
 	return vdupq_n_f32(vaddvq_f32(mul));
@@ -1002,7 +1006,7 @@ Lane4 Lane4::DotV(Lane4Arg inV2) const
 float Lane4::Dot(Lane4Arg inV2) const
 {
 #if defined(JPH_USE_SSE4_1)
-	return _mm_cvtss_f32(_mm_dp_ps(mValue, inV2.mValue, 0xff));
+	return DotV(inV2).GetX();
 #elif defined(JPH_USE_NEON)
 	float32x4_t mul = vmulq_f32(mValue, inV2.mValue);
 	return vaddvq_f32(mul);
@@ -1020,7 +1024,7 @@ float Lane4::Dot(Lane4Arg inV2) const
 float Lane4::LengthSq() const
 {
 #if defined(JPH_USE_SSE4_1)
-	return _mm_cvtss_f32(_mm_dp_ps(mValue, mValue, 0xff));
+	return Dot(*this);
 #elif defined(JPH_USE_NEON)
 	float32x4_t mul = vmulq_f32(mValue, mValue);
 	return vaddvq_f32(mul);
@@ -1037,7 +1041,7 @@ float Lane4::LengthSq() const
 float Lane4::Length() const
 {
 #if defined(JPH_USE_SSE4_1)
-	return _mm_cvtss_f32(_mm_sqrt_ss(_mm_dp_ps(mValue, mValue, 0xff)));
+	return _mm_cvtss_f32(_mm_sqrt_ss(DotV(*this).mValue));
 #elif defined(JPH_USE_NEON)
 	float32x4_t mul = vmulq_f32(mValue, mValue);
 	float32x2_t sum = vdup_n_f32(vaddvq_f32(mul));
@@ -1110,7 +1114,7 @@ JPH_INLINE Lane4 Lane4::FlipSign() const
 Lane4 Lane4::Normalized() const
 {
 #if defined(JPH_USE_SSE4_1)
-	return _mm_div_ps(mValue, _mm_sqrt_ps(_mm_dp_ps(mValue, mValue, 0xff)));
+	return _mm_div_ps(mValue, _mm_sqrt_ps(DotV(*this).mValue));
 #elif defined(JPH_USE_NEON)
 	float32x4_t mul = vmulq_f32(mValue, mValue);
 	float32x4_t sum = vdupq_n_f32(vaddvq_f32(mul));

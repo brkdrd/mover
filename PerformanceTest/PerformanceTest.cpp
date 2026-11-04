@@ -51,7 +51,6 @@ JPH_SUPPRESS_WARNINGS
 #include "MaxBodiesScene.h"
 
 // Time step for physics
-constexpr float cDeltaTime = 1.0f / 60.0f;
 
 static void TraceImpl(const char *inFMT, ...)
 {
@@ -98,6 +97,8 @@ int main(int argc, char** argv)
 	unique_ptr<PerformanceTestScene> scene;
 	const char *validate_hash = nullptr;
 	int repeat = 1;
+	float cache_distance = -1.0f;
+	float step_frequency = 60.0f;
 	for (int argidx = 1; argidx < argc; ++argidx)
 	{
 		const char *arg = argv[argidx];
@@ -178,6 +179,21 @@ int main(int argc, char** argv)
 			// Parse repeat count
 			repeat = atoi(arg + 8);
 		}
+		else if (strncmp(arg, "-cache_distance=", 16) == 0)
+		{
+			char *end = nullptr;
+			cache_distance = strtof(arg + 16, &end);
+			if (end == arg + 16 || *end != '\0' || !isfinite(cache_distance) || cache_distance < 0.0f)
+				return 1;
+		}
+		else if (strncmp(arg, "-hz=", 4) == 0)
+		{
+			char *end = nullptr;
+			step_frequency = strtof(arg + 4, &end);
+			if (end == arg + 4 || *end != '\0' || !isfinite(step_frequency) || step_frequency <= 0.0f
+				|| !isfinite(1.0f / step_frequency) || 1.0f / step_frequency == 0.0f)
+				return 1;
+		}
 		else if (strcmp(arg, "-h") == 0)
 		{
 			// Print usage
@@ -194,12 +210,16 @@ int main(int argc, char** argv)
 				  "-rs: Record state\n"
 				  "-vs: Validate state\n"
 				  "-validate_hash=<hash>: Validate hash (return 0 if successful, 1 if failed)\n"
-				  "-repeat=<num>: Repeat all tests <num> times");
+				  "-repeat=<num>: Repeat all tests <num> times\n"
+				  "-cache_distance=<meters>: Override body-pair cache translation tolerance\n"
+				  "-hz=<frequency>: Physics integration frequency (default 60)");
 			return 0;
 		}
 	}
 
 	// Create a factory
+	const float delta_time = 1.0f / step_frequency;
+	Trace("Physics frequency: %g Hz", double(step_frequency));
 	Factory::sInstance = new Factory();
 
 	// Register all Jolt physics types
@@ -300,6 +320,12 @@ int main(int argc, char** argv)
 
 				// Start test scene
 				scene->StartTest(physics_system, motion_quality);
+				if (cache_distance >= 0.0f)
+				{
+					PhysicsSettings settings = physics_system.GetPhysicsSettings();
+					settings.mBodyPairCacheMaxDeltaPositionSq = Square(cache_distance);
+					physics_system.SetPhysicsSettings(settings);
+				}
 
 				// Disable sleeping if requested
 				if (disable_sleep)
@@ -361,10 +387,15 @@ int main(int argc, char** argv)
 					chrono::high_resolution_clock::time_point clock_start = chrono::high_resolution_clock::now();
 
 					// Update the test
-					scene->UpdateTest(physics_system, temp_allocator, cDeltaTime);
+					scene->UpdateTest(physics_system, temp_allocator, delta_time);
 
 					// Do a physics step
-					physics_system.Update(cDeltaTime, 1, &temp_allocator, &job_system);
+					EPhysicsUpdateError error = physics_system.Update(delta_time, 1, &temp_allocator, &job_system);
+					if (error != EPhysicsUpdateError::None)
+					{
+						Trace("Physics update failed: %u", uint(error));
+						return 1;
+					}
 
 					// Stop measuring
 					chrono::high_resolution_clock::time_point clock_end = chrono::high_resolution_clock::now();
@@ -448,6 +479,16 @@ int main(int argc, char** argv)
 					RVec4 pos = bi.GetPosition(id);
 					hash = HashBytes(&pos, 4 * sizeof(Real), hash);
 					Rotor rot = bi.GetRotation(id);
+					bool finite = true;
+					for (uint component = 0; component < 4; ++component)
+						finite &= isfinite(pos[component]);
+					for (uint component = 0; component < 8; ++component)
+						finite &= isfinite(rot.GetVec8()[component]);
+					if (!finite)
+					{
+						Trace("Invalid final body transform");
+						return 1;
+					}
 					hash = HashBytes(&rot, sizeof(Rotor), hash);
 				}
 

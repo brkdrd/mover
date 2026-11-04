@@ -73,6 +73,8 @@ JPH_INLINE void ContactConstraintManager::WorldContactPoint::TemplatedCalculateF
 
 	const MotionProperties *mp1 = inBody1.GetMotionPropertiesUnchecked();
 	const MotionProperties *mp2 = inBody2.GetMotionPropertiesUnchecked();
+	r1.StoreFloat4(&mR1);
+	r2.StoreFloat4(&mR2);
 
 	// Calculate velocity of collision points
 	Vec4 relative_velocity;
@@ -748,13 +750,13 @@ JPH_INLINE void ContactConstraintManager::TemplatedCalculateFrictionAndNonPenetr
 	// Calculate scaled mass and the world space inverse inertia. TODO(4D): the inverse inertia is a
 	// 6x6 operator on bivectors rather than upstream's Mat44, but like upstream's it is built once
 	// here and reused by all 24 rows of the contact - see InverseInertiaOperator.
-	InverseInertiaOperator inv_i1 = Type1 == EMotionType::Dynamic? inBody1.GetMotionPropertiesUnchecked()->GetInverseInertiaForRotation(inTransformBody1.GetRotor(), inSettings.mInvInertiaScale1) : InverseInertiaOperator::sZero();
+	InverseInertiaOperator inv_i1 = Type1 == EMotionType::Dynamic? inBody1.GetMotionPropertiesUnchecked()->GetInverseInertiaForRotation(inBody1.GetRotation(), inSettings.mInvInertiaScale1) : InverseInertiaOperator::sZero();
 	if constexpr (Type1 == EMotionType::Dynamic)
 		ioConstraint.mInvMass1 = inSettings.mInvMassScale1 * inBody1.GetMotionPropertiesUnchecked()->GetInverseMass();
 	else
 		ioConstraint.mInvMass1 = 0.0f;
 
-	InverseInertiaOperator inv_i2 = Type2 == EMotionType::Dynamic? inBody2.GetMotionPropertiesUnchecked()->GetInverseInertiaForRotation(inTransformBody2.GetRotor(), inSettings.mInvInertiaScale2) : InverseInertiaOperator::sZero();
+	InverseInertiaOperator inv_i2 = Type2 == EMotionType::Dynamic? inBody2.GetMotionPropertiesUnchecked()->GetInverseInertiaForRotation(inBody2.GetRotation(), inSettings.mInvInertiaScale2) : InverseInertiaOperator::sZero();
 	if constexpr (Type2 == EMotionType::Dynamic)
 		ioConstraint.mInvMass2 = inSettings.mInvMassScale2 * inBody2.GetMotionPropertiesUnchecked()->GetInverseMass();
 	else
@@ -989,6 +991,7 @@ void ContactConstraintManager::GetContactsFromCache(ContactAllocator &ioContactA
 				wcp.mNonPenetrationConstraint.SetTotalLambda(ccp.mNonPenetrationLambda);
 				wcp.mFrictionConstraint1.SetTotalLambda(ccp.mFrictionLambda[0]);
 				wcp.mFrictionConstraint2.SetTotalLambda(ccp.mFrictionLambda[1]);
+				wcp.mFrictionConstraint3.SetTotalLambda(ccp.mFrictionLambda[2]);
 				wcp.mContactPoint = &ccp;
 			}
 
@@ -1604,22 +1607,68 @@ template void ContactConstraintManager::WarmStartVelocityConstraints<DummyCalcul
 template <EMotionType Type1, EMotionType Type2>
 JPH_INLINE bool ContactConstraintManager::sSolveVelocityConstraint(ContactConstraint &ioConstraint, MotionProperties *ioMotionProperties1, MotionProperties *ioMotionProperties2)
 {
+	// A manifold owns both bodies while it is solved. Keep their velocities local
+	// across its rows, avoiding repeated aliased loads/stores and DOF-mask creation.
+	struct LocalVelocity
+	{
+		explicit LocalVelocity(const MotionProperties *inProperties)
+		{
+			if (inProperties != nullptr)
+			{
+				mLinear = inProperties->GetLinearVelocity();
+				mAngular = inProperties->GetAngularVelocity();
+				mMask = inProperties->GetLinearDOFsMask().ReinterpretAsFloat();
+			}
+		}
+		Vec4 GetPointVelocityCOM(Vec4Arg inR) const { return mLinear + mAngular.Contract(inR); }
+		void AddLinearVelocityStep(Vec4Arg inDelta) { mLinear = Vec4::sAnd(mLinear + inDelta, mMask); }
+		void SubLinearVelocityStep(Vec4Arg inDelta) { mLinear = Vec4::sAnd(mLinear - inDelta, mMask); }
+		void AddAngularVelocityStep(BivecArg inDelta) { mAngular += inDelta; }
+		void SubAngularVelocityStep(BivecArg inDelta) { mAngular -= inDelta; }
+		Vec4 mLinear = Vec4::sZero();
+		Bivec mAngular = Bivec::sZero();
+		Vec4 mMask = Vec4::sZero();
+	};
+	LocalVelocity state1(ioMotionProperties1), state2(ioMotionProperties2);
 	bool any_impulse_applied = false;
+	auto relative_point_velocity = [&](const WorldContactPoint &point) {
+		Vec4 velocity = Vec4::sZero();
+		if constexpr (Type1 != EMotionType::Static)
+			velocity = state1.GetPointVelocityCOM(Vec4::sLoadFloat4(&point.mR1));
+		if constexpr (Type2 != EMotionType::Static)
+			velocity -= state2.GetPointVelocityCOM(Vec4::sLoadFloat4(&point.mR2));
+		return velocity;
+	};
 
 	// Calculate tangents (3 of them in 4D)
 	Vec4 t1, t2, t3;
 	ioConstraint.GetTangents(t1, t2, t3);
 
 	// First apply all friction constraints (non-penetration is more important than friction)
+	// Evaluate the three tangent projections together. Transpose once per manifold,
+	// then retain Dot's pairwise sum order for every point.
+	Mat44 tangent_projection = Mat44(t1, t2, t3, Vec4::sZero()).Transposed();
 	for (WorldContactPoint &wcp : ioConstraint.mContactPoints)
 	{
 		// Check if friction is enabled
 		if (wcp.mFrictionConstraint1.IsActive() || wcp.mFrictionConstraint2.IsActive() || wcp.mFrictionConstraint3.IsActive())
 		{
+			// With no normal impulse the friction cone has zero radius. If there is
+			// no accumulated friction to undo, this point cannot change either body.
+			float max_lambda_f = ioConstraint.mCombinedFriction * wcp.mNonPenetrationConstraint.GetTotalLambda();
+			if (max_lambda_f == 0.0f
+				&& wcp.mFrictionConstraint1.GetTotalLambda() == 0.0f
+				&& wcp.mFrictionConstraint2.GetTotalLambda() == 0.0f
+				&& wcp.mFrictionConstraint3.GetTotalLambda() == 0.0f)
+				continue;
+
 			// Calculate impulse to stop motion in tangential direction
-			float lambda1 = wcp.mFrictionConstraint1.TemplatedSolveVelocityConstraintGetTotalLambda<Type1, Type2>(ioMotionProperties1, ioMotionProperties2, t1);
-			float lambda2 = wcp.mFrictionConstraint2.TemplatedSolveVelocityConstraintGetTotalLambda<Type1, Type2>(ioMotionProperties1, ioMotionProperties2, t2);
-			float lambda3 = wcp.mFrictionConstraint3.TemplatedSolveVelocityConstraintGetTotalLambda<Type1, Type2>(ioMotionProperties1, ioMotionProperties2, t3);
+			Vec4 velocity = relative_point_velocity(wcp);
+			Lane4 projected = (tangent_projection.GetColumn4(0) * velocity.SplatX() + tangent_projection.GetColumn4(1) * velocity.SplatY())
+				+ (tangent_projection.GetColumn4(2) * velocity.SplatZ() + tangent_projection.GetColumn4(3) * velocity.SplatW());
+			float lambda1 = wcp.mFrictionConstraint1.GetTotalLambdaFromVelocity(projected.GetX());
+			float lambda2 = wcp.mFrictionConstraint2.GetTotalLambdaFromVelocity(projected.GetY());
+			float lambda3 = wcp.mFrictionConstraint3.GetTotalLambdaFromVelocity(projected.GetZ());
 
 			// TODO(4D): the Coulomb friction cone constrains the *magnitude* of the tangential impulse,
 			// which now has 3 components instead of 2. The cone is still |lambda_t| <= mu * lambda_n; only
@@ -1629,8 +1678,6 @@ JPH_INLINE bool ContactConstraintManager::sSolveVelocityConstraint(ContactConstr
 			// Calculate max impulse that can be applied. Note that we're using the non-penetration impulse from the previous iteration here.
 			// We do this because non-penetration is more important so is solved last (the last things that are solved in an iterative solver
 			// contribute the most).
-			float max_lambda_f = ioConstraint.mCombinedFriction * wcp.mNonPenetrationConstraint.GetTotalLambda();
-
 			// If the total lambda that we will apply is too large, scale it back
 			if (total_lambda_sq > Square(max_lambda_f))
 			{
@@ -1641,11 +1688,11 @@ JPH_INLINE bool ContactConstraintManager::sSolveVelocityConstraint(ContactConstr
 			}
 
 			// Apply the friction impulse
-			if (wcp.mFrictionConstraint1.TemplatedSolveVelocityConstraintApplyLambda<Type1, Type2>(ioMotionProperties1, ioConstraint.mInvMass1, ioMotionProperties2, ioConstraint.mInvMass2, t1, lambda1))
+			if (wcp.mFrictionConstraint1.TemplatedSolveVelocityConstraintApplyLambda<Type1, Type2>(&state1, ioConstraint.mInvMass1, &state2, ioConstraint.mInvMass2, t1, lambda1))
 				any_impulse_applied = true;
-			if (wcp.mFrictionConstraint2.TemplatedSolveVelocityConstraintApplyLambda<Type1, Type2>(ioMotionProperties1, ioConstraint.mInvMass1, ioMotionProperties2, ioConstraint.mInvMass2, t2, lambda2))
+			if (wcp.mFrictionConstraint2.TemplatedSolveVelocityConstraintApplyLambda<Type1, Type2>(&state1, ioConstraint.mInvMass1, &state2, ioConstraint.mInvMass2, t2, lambda2))
 				any_impulse_applied = true;
-			if (wcp.mFrictionConstraint3.TemplatedSolveVelocityConstraintApplyLambda<Type1, Type2>(ioMotionProperties1, ioConstraint.mInvMass1, ioMotionProperties2, ioConstraint.mInvMass2, t3, lambda3))
+			if (wcp.mFrictionConstraint3.TemplatedSolveVelocityConstraintApplyLambda<Type1, Type2>(&state1, ioConstraint.mInvMass1, &state2, ioConstraint.mInvMass2, t3, lambda3))
 				any_impulse_applied = true;
 		}
 	}
@@ -1656,10 +1703,18 @@ JPH_INLINE bool ContactConstraintManager::sSolveVelocityConstraint(ContactConstr
 	for (WorldContactPoint &wcp : ioConstraint.mContactPoints)
 	{
 		// Solve non penetration velocities
-		if (wcp.mNonPenetrationConstraint.TemplatedSolveVelocityConstraint<Type1, Type2>(ioMotionProperties1, ioConstraint.mInvMass1, ioMotionProperties2, ioConstraint.mInvMass2, ws_normal, 0.0f, FLT_MAX))
+		float lambda = Clamp(wcp.mNonPenetrationConstraint.GetTotalLambdaFromVelocity(ws_normal.Dot(relative_point_velocity(wcp))), 0.0f, FLT_MAX);
+		if (wcp.mNonPenetrationConstraint.TemplatedSolveVelocityConstraintApplyLambda<Type1, Type2>(&state1, ioConstraint.mInvMass1, &state2, ioConstraint.mInvMass2, ws_normal, lambda))
 			any_impulse_applied = true;
 	}
 
+	if (any_impulse_applied)
+	{
+		if constexpr (Type1 == EMotionType::Dynamic)
+			ioMotionProperties1->SetVelocityStep(state1.mLinear, state1.mAngular);
+		if constexpr (Type2 == EMotionType::Dynamic)
+			ioMotionProperties2->SetVelocityStep(state2.mLinear, state2.mAngular);
+	}
 	return any_impulse_applied;
 }
 

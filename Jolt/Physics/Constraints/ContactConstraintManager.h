@@ -430,10 +430,14 @@ private:
 		JPH_INLINE void			TemplatedCalculateFrictionAndNonPenetrationConstraintProperties(float inDeltaTime, Vec4Arg inGravity, const Body &inBody1, const Body &inBody2, float inInvM1, float inInvM2, const InverseInertiaOperator &inInvI1, const InverseInertiaOperator &inInvI2, RVec4Arg inWorldSpacePosition1, RVec4Arg inWorldSpacePosition2, Vec4Arg inWorldSpaceNormal, Vec4Arg inWorldSpaceTangent1, Vec4Arg inWorldSpaceTangent2, Vec4Arg inWorldSpaceTangent3, const ContactSettings &inSettings, float inMinVelocityForRestitution);
 
 		/// The constraint parts
-		AxisConstraintPart		mNonPenetrationConstraint;
-		AxisConstraintPart		mFrictionConstraint1;
-		AxisConstraintPart		mFrictionConstraint2;
-		AxisConstraintPart		mFrictionConstraint3;			///< TODO(4D): 4D contacts have a 3D tangent space
+		ContactConstraintPart	mNonPenetrationConstraint;
+		ContactConstraintPart	mFrictionConstraint1;
+		ContactConstraintPart	mFrictionConstraint2;
+		ContactConstraintPart	mFrictionConstraint3;
+
+		/// Lever arms shared by all four rows, replacing eight stored angular Jacobians.
+		Float4					mR1;
+		Float4					mR2;
 
 		/// Contact cache
 		CachedContactPoint *	mContactPoint;
@@ -459,12 +463,7 @@ private:
 		/// Get the tangents for this contact constraint.
 		/// TODO(4D): there are 3 of them -- the space perpendicular to a 4D contact normal is a
 		/// hyperplane, so Coulomb friction acts in a 3D tangent space instead of a 2D one.
-		/// TODO(4D): cached rather than derived on the fly. In 3D a tangent frame is one
-		/// GetNormalizedPerpendicular plus a cross product; in 4D it is an orthonormal 3-frame,
-		/// which costs three square roots and a conditioning search. The solver asks for it once
-		/// per constraint per iteration, and the normal does not change within a step, so the frame
-		/// is built once when the normal is stored. The three Float4s cost 48 bytes against three
-		/// square roots x ten velocity iterations.
+		/// The continuous S^3 tangent frame is built once when the normal is stored.
 		JPH_INLINE void			GetTangents(Vec4 &outTangent1, Vec4 &outTangent2, Vec4 &outTangent3) const
 		{
 			outTangent1 = Vec4::sLoadFloat4(&mWorldSpaceTangent1);
@@ -477,7 +476,7 @@ private:
 		{
 			inNormal.StoreFloat4(&mWorldSpaceNormal);
 			Vec4 t1, t2, t3;
-			inNormal.GetNormalizedPerpendicularBasis(t1, t2, t3);
+			inNormal.GetContinuousPerpendicularBasis(t1, t2, t3);
 			t1.StoreFloat4(&mWorldSpaceTangent1);
 			t2.StoreFloat4(&mWorldSpaceTangent2);
 			t3.StoreFloat4(&mWorldSpaceTangent3);

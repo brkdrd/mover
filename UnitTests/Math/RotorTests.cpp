@@ -210,7 +210,7 @@ TEST_SUITE("RotorTests")
 	TEST_CASE("TestRotorToRotationMatrix")
 	{
 		UnitTestRandom random(89012);
-		for (int n = 0; n < 20; ++n)
+		for (int n = 0; n < 1000; ++n)
 		{
 			Rotor r = sRandomRotor(random);
 			Mat44 m = r.ToRotationMatrix();
@@ -219,6 +219,13 @@ TEST_SUITE("RotorTests")
 			Vec4 v = sRandomUnit(random);
 			CHECK_APPROX_EQUAL(Vec4(m * Lane4(v)), r * v, 1.0e-4f);
 			CHECK(Mat44::sRotation(r).IsClose(m, 1.0e-8f));
+			for (int column = 0; column < 4; ++column)
+			{
+				Vec4 basis = Vec4::sZero();
+				basis[column] = 1.0f;
+				Cl4Ref::MV reference = Cl4Ref::Sandwich(Cl4Ref::FromRotor(r), Cl4Ref::FromVec4(basis));
+				CHECK(Cl4Ref::FromVec4(Vec4(m.GetColumn4(column))).MaxAbsDiff(reference) < 1.0e-5);
+			}
 
 			// The matrix must be orthonormal
 			CHECK((m.Transposed() * m).IsClose(Mat44::sIdentity(), 1.0e-8f));
@@ -388,7 +395,7 @@ TEST_SUITE("RotorTests")
 	{
 		UnitTestRandom random(778899);
 		uniform_real_distribution<float> dist(-1.0f, 1.0f);
-		for (int n = 0; n < 50; ++n)
+		for (int n = 0; n < 1000; ++n)
 		{
 			Rotor r = sRandomRotor(random);
 			Bivec b(dist(random), dist(random), dist(random), dist(random), dist(random), dist(random));

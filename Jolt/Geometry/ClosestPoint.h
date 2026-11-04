@@ -1,4 +1,4 @@
-﻿// Jolt Physics Library (https://github.com/jrouwe/JoltPhysics)
+// Jolt Physics Library (https://github.com/jrouwe/JoltPhysics)
 // SPDX-FileCopyrightText: 2021 Jorrit Rouwe
 // SPDX-License-Identifier: MIT
 
@@ -518,7 +518,6 @@ namespace ClosestPoint
 		// Taken from: Real-Time Collision Detection - Christer Ericson (Section: Closest Point on Tetrahedron to Point)
 		// With p = 0
 
-		// Start out assuming the origin projects into the tetrahedron.
 		// TODO(4D): in 3D a tetrahedron is a solid and "inside all 4 halfspaces" means the closest
 		// point IS the origin. In 4D four points span only a 3-flat, so the tetrahedron has no
 		// 4-volume and the origin is generally off that flat: the closest point is the orthogonal
@@ -526,14 +525,22 @@ namespace ClosestPoint
 		// pentachoron - 5 points - that can actually contain the origin in 4D, see
 		// GetClosestPointOnPentachoron.) GetBaryCentricCoordinates solves exactly that projection
 		// via the 3x3 Gram system, and fills the coordinates even in the degenerate case.
-		uint32 closest_set = 0b1111;
-		float bary_u, bary_v, bary_w, bary_x;
-		GetBaryCentricCoordinates(inA, inB, inC, inD, bary_u, bary_v, bary_w, bary_x);
-		Vec4 closest_point = bary_u * inA + bary_v * inB + bary_w * inC + bary_x * inD;
-		float best_dist_sq = FLT_MAX;
 
 		// Determine for each of the faces of the tetrahedron if the origin is in front of the plane
 		UVec4 origin_out_of_planes = OriginOutsideOfTetrahedronPlanes(inA, inB, inC, inD);
+		if (origin_out_of_planes.GetTrues() == 0)
+		{
+			float bary_u, bary_v, bary_w, bary_x;
+			GetBaryCentricCoordinates(inA, inB, inC, inD, bary_u, bary_v, bary_w, bary_x);
+			outSet = 0b1111;
+			return bary_u * inA + bary_v * inB + bary_w * inC + bary_x * inD;
+		}
+
+		// At least one face will supply the closest point. Do not solve the interior
+		// projection only to overwrite it during the face tests below.
+		uint32 closest_set = 0b1111;
+		Vec4 closest_point = Vec4::sZero();
+		float best_dist_sq = FLT_MAX;
 
 		// If point outside face abc then compute closest point on abc
 		if (origin_out_of_planes.GetX()) // OriginOutsideOfPlane(inA, inB, inC, inD)

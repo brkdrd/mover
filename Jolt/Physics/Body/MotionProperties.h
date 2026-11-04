@@ -185,7 +185,7 @@ public:
 	/// Returns a UVec4 mask where the linear components allowed by mAllowedDOFs are 0xffffffff and the rest are 0
 	JPH_INLINE UVec4		GetLinearDOFsMask() const
 	{
-		UVec4 mask(uint32(EAllowedDOFs::TranslationX), uint32(EAllowedDOFs::TranslationY), uint32(EAllowedDOFs::TranslationZ), uint32(EAllowedDOFs::TranslationW));
+		UVec4 mask { uint32(EAllowedDOFs::TranslationX), uint32(EAllowedDOFs::TranslationY), uint32(EAllowedDOFs::TranslationZ), uint32(EAllowedDOFs::TranslationW) };
 		return UVec4::sEquals(UVec4::sAnd(UVec4::sReplicate(uint32(mAllowedDOFs)), mask), mask);
 	}
 
@@ -204,7 +204,7 @@ public:
 		// call, and this is called twice per MultiplyWorldSpaceInverseInertiaByVector - i.e. twice
 		// per constraint row per body per solver iteration.
 		UVec4 dofs = UVec4::sReplicate(uint32(mAllowedDOFs));
-		UVec4 mask_lo(uint32(EAllowedDOFs::RotationXY), uint32(EAllowedDOFs::RotationXZ), uint32(EAllowedDOFs::RotationXW), uint32(EAllowedDOFs::RotationYZ));
+		UVec4 mask_lo { uint32(EAllowedDOFs::RotationXY), uint32(EAllowedDOFs::RotationXZ), uint32(EAllowedDOFs::RotationXW), uint32(EAllowedDOFs::RotationYZ) };
 		UVec4 mask_hi(uint32(EAllowedDOFs::RotationYW), uint32(EAllowedDOFs::RotationZW), 0, 0);
 		Lane4 lo = UVec4::sEquals(UVec4::sAnd(dofs, mask_lo), mask_lo).ReinterpretAsFloat();
 
@@ -256,6 +256,15 @@ public:
 
 	///@name Update linear and angular velocity (used during constraint solving)
 	///@{
+	/// Write back a local solver state without clamping intermediate solver velocities.
+	inline void SetVelocityStep(Vec4Arg inLinearVelocity, BivecArg inAngularVelocity)
+	{
+		JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite));
+		JPH_ASSERT(!inLinearVelocity.IsNaN() && !inAngularVelocity.IsNaN());
+		mLinearVelocity = LockTranslation(inLinearVelocity);
+		mAngularVelocity = inAngularVelocity;
+		JPH_DET_LOG("SetVelocityStep: " << mLinearVelocity << " " << mAngularVelocity);
+	}
 	inline void				AddLinearVelocityStep(Vec4Arg inLinearVelocityChange)			{ JPH_DET_LOG("AddLinearVelocityStep: " << inLinearVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mLinearVelocity = LockTranslation(mLinearVelocity + inLinearVelocityChange); JPH_ASSERT(!mLinearVelocity.IsNaN()); }
 	inline void				SubLinearVelocityStep(Vec4Arg inLinearVelocityChange)			{ JPH_DET_LOG("SubLinearVelocityStep: " << inLinearVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mLinearVelocity = LockTranslation(mLinearVelocity - inLinearVelocityChange); JPH_ASSERT(!mLinearVelocity.IsNaN()); }
 	inline void				AddAngularVelocityStep(BivecArg inAngularVelocityChange)		{ JPH_DET_LOG("AddAngularVelocityStep: " << inAngularVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mAngularVelocity += inAngularVelocityChange; JPH_ASSERT(!mAngularVelocity.IsNaN()); }

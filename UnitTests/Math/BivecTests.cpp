@@ -31,7 +31,7 @@ TEST_SUITE("BivecTests")
 	TEST_CASE("TestBivecWedgeVsReference")
 	{
 		UnitTestRandom random(13579);
-		for (int n = 0; n < 50; ++n)
+		for (int n = 0; n < 1000; ++n)
 		{
 			Vec4 a = sRandomVec(random), b = sRandomVec(random);
 
@@ -64,7 +64,7 @@ TEST_SUITE("BivecTests")
 	TEST_CASE("TestBivecContractIsRotationGenerator")
 	{
 		UnitTestRandom random(35791);
-		for (int n = 0; n < 50; ++n)
+		for (int n = 0; n < 1000; ++n)
 		{
 			Bivec b = sRandomBivec(random);
 			Vec4 v = sRandomVec(random);

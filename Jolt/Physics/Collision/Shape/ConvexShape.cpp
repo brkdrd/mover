@@ -61,8 +61,11 @@ void ConvexShape::sCollideConvexVsConvex(const Shape *inShape1, const Shape *inS
 	shape1_bbox.ExpandBy(Vec4::sReplicate(max_separation_distance));
 	AABox shape2_bbox = shape2->GetLocalBounds().Scaled(inScale2);
 
-	// Check if they overlap
-	if (!OrientedBox(rotation_2_to_1, translation_2_to_1, shape2_bbox).Overlaps(shape1_bbox))
+	// This is only a rejection filter; GJK below performs the actual shape test.
+	// A full 4D OBB SAT tests 56 axes even for overlapping pairs. Use conservative
+	// transformed bounds here instead, retaining the previous filter's tolerance.
+	shape1_bbox.ExpandBy(Vec4::sReplicate(1.0e-6f));
+	if (!shape2_bbox.Transformed(rotation_2_to_1, translation_2_to_1).Overlaps(shape1_bbox))
 		return;
 
 	// Note: As we don't remember the penetration axis from the last iteration, and it is likely that shape2 is pushed out of

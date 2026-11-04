@@ -28,8 +28,32 @@ JPH_NAMESPACE_BEGIN
 ///
 /// n = constraint axis (normalized), p1/p2 = constraint points, r1 = p1 - x1, r2 = p2 - x2,
 /// u = p2 - p1, x1/x2 = center of mass. v = [v1, w1, v2, w2] with w1/w2 bivector angular velocities.
-class AxisConstraintPart
+template <bool StoreAngularJacobians>
+class AxisConstraintPartT
 {
+	/// Solver rows are streamed on every iteration. Store only the six physical components,
+	/// reconstructing the two zero SIMD lanes on load. Arithmetic still uses Bivec/Vec8.
+	class StoredBivec
+	{
+	public:
+		JPH_INLINE StoredBivec &operator = (const Bivec &inValue)
+		{
+			for (uint i = 0; i < 6; ++i)
+				mComponents[i] = inValue[i];
+			return *this;
+		}
+
+		JPH_INLINE Bivec Load() const
+		{
+			return Bivec(mComponents[0], mComponents[1], mComponents[2],
+				mComponents[3], mComponents[4], mComponents[5]);
+		}
+
+	private:
+		float mComponents[6];
+	};
+	static_assert(sizeof(StoredBivec) == 6 * sizeof(float));
+
 	/// Build the world-space inverse inertia operator for a body, or a zero operator if it has none.
 	/// TODO(4D): the operator is built once per body here and reused for every row; see
 	/// InverseInertiaOperator for why that matters far more in 4D than it does in 3D.
@@ -39,8 +63,8 @@ class AxisConstraintPart
 	}
 
 	/// Internal helper function to update velocities of bodies after Lagrange multiplier is calculated
-	template <EMotionType Type1, EMotionType Type2>
-	JPH_INLINE bool				ApplyVelocityStep(MotionProperties *ioMotionProperties1, float inInvMass1, MotionProperties *ioMotionProperties2, float inInvMass2, Vec4Arg inWorldSpaceAxis, float inLambda) const
+	template <EMotionType Type1, EMotionType Type2, class VelocityState>
+	JPH_INLINE bool				ApplyVelocityStep(VelocityState *ioMotionProperties1, float inInvMass1, VelocityState *ioMotionProperties2, float inInvMass2, Vec4Arg inWorldSpaceAxis, float inLambda) const
 	{
 		// Apply impulse if delta is not zero
 		if (inLambda != 0.0f)
@@ -49,12 +73,12 @@ class AxisConstraintPart
 			if constexpr (Type1 == EMotionType::Dynamic)
 			{
 				ioMotionProperties1->SubLinearVelocityStep((inLambda * inInvMass1) * inWorldSpaceAxis);
-				ioMotionProperties1->SubAngularVelocityStep(inLambda * mInvI1_R1PlusUxAxis);
+				ioMotionProperties1->SubAngularVelocityStep(inLambda * mInvI1_R1PlusUxAxis.Load());
 			}
 			if constexpr (Type2 == EMotionType::Dynamic)
 			{
 				ioMotionProperties2->AddLinearVelocityStep((inLambda * inInvMass2) * inWorldSpaceAxis);
-				ioMotionProperties2->AddAngularVelocityStep(inLambda * mInvI2_R2xAxis);
+				ioMotionProperties2->AddAngularVelocityStep(inLambda * mInvI2_R2xAxis.Load());
 			}
 			return true;
 		}
@@ -71,18 +95,25 @@ class AxisConstraintPart
 		// Angular Jacobian bivectors n ^ r (the 4D analog of the 3D r x n has its operands swapped,
 		// because Bivec::Contract is the negative adjoint of the wedge -- this is what makes
 		// <n ^ r, w> equal n . (w _| r), the constrained component of the point velocity)
+		Bivec r1_axis, r2_axis;
 		if constexpr (Type1 != EMotionType::Static)
-			mR1PlusUxAxis = Bivec::sWedge(inWorldSpaceAxis, inR1PlusU);
+		{
+			r1_axis = Bivec::sWedge(inWorldSpaceAxis, inR1PlusU);
+			if constexpr (StoreAngularJacobians) mR1PlusUxAxis = r1_axis;
+		}
 		if constexpr (Type2 != EMotionType::Static)
-			mR2xAxis = Bivec::sWedge(inWorldSpaceAxis, inR2);
+		{
+			r2_axis = Bivec::sWedge(inWorldSpaceAxis, inR2);
+			if constexpr (StoreAngularJacobians) mR2xAxis = r2_axis;
+		}
 
 		// Calculate inverse effective mass: K = J M^-1 J^T
 		float inv_effective_mass;
 
 		if constexpr (Type1 == EMotionType::Dynamic)
 		{
-			mInvI1_R1PlusUxAxis = inInvI1.Multiply(mR1PlusUxAxis);
-			inv_effective_mass = inInvMass1 + mInvI1_R1PlusUxAxis.Dot(mR1PlusUxAxis);
+			mInvI1_R1PlusUxAxis = inInvI1.Multiply(r1_axis);
+			inv_effective_mass = inInvMass1 + mInvI1_R1PlusUxAxis.Load().Dot(r1_axis);
 		}
 		else
 		{
@@ -91,8 +122,8 @@ class AxisConstraintPart
 
 		if constexpr (Type2 == EMotionType::Dynamic)
 		{
-			mInvI2_R2xAxis = inInvI2.Multiply(mR2xAxis);
-			inv_effective_mass += inInvMass2 + mInvI2_R2xAxis.Dot(mR2xAxis);
+			mInvI2_R2xAxis = inInvI2.Multiply(r2_axis);
+			inv_effective_mass += inInvMass2 + mInvI2_R2xAxis.Load().Dot(r2_axis);
 		}
 
 		return inv_effective_mass;
@@ -162,7 +193,7 @@ public:
 			mSpringPart.CalculateSpringPropertiesWithBias(inBias);
 		}
 
-		JPH_DET_LOG("TemplatedCalculateConstraintProperties: invM1: " << inInvMass1 << " invM2: " << inInvMass2 << " bias: " << inBias << " r1PlusUxAxis: " << mR1PlusUxAxis << " r2xAxis: " << mR2xAxis << " invI1_R1PlusUxAxis: " << mInvI1_R1PlusUxAxis << " invI2_R2xAxis: " << mInvI2_R2xAxis << " effectiveMass: " << mEffectiveMass << " totalLambda: " << mTotalLambda);
+		JPH_DET_LOG("TemplatedCalculateConstraintProperties: invM1: " << inInvMass1 << " invM2: " << inInvMass2 << " bias: " << inBias << " r1PlusUxAxis: " << Bivec::sWedge(inWorldSpaceAxis, inR1PlusU) << " r2xAxis: " << Bivec::sWedge(inWorldSpaceAxis, inR2) << " invI1_R1PlusUxAxis: " << mInvI1_R1PlusUxAxis.Load() << " invI2_R2xAxis: " << mInvI2_R2xAxis.Load() << " effectiveMass: " << mEffectiveMass << " totalLambda: " << mTotalLambda);
 	}
 
 	/// Calculate properties used during the functions below
@@ -284,6 +315,7 @@ public:
 	template <EMotionType Type1, EMotionType Type2>
 	JPH_INLINE float			TemplatedSolveVelocityConstraintGetTotalLambda(const MotionProperties *ioMotionProperties1, const MotionProperties *ioMotionProperties2, Vec4Arg inWorldSpaceAxis) const
 	{
+		static_assert(StoreAngularJacobians, "Contact rows use the shared point velocity instead");
 		// Calculate jacobian multiplied by linear velocity
 		float jv;
 		if constexpr (Type1 != EMotionType::Static && Type2 != EMotionType::Static)
@@ -297,20 +329,23 @@ public:
 
 		// Calculate jacobian multiplied by angular velocity (bivector inner products)
 		if constexpr (Type1 != EMotionType::Static)
-			jv += mR1PlusUxAxis.Dot(ioMotionProperties1->GetAngularVelocity());
+			jv += mR1PlusUxAxis.Load().Dot(ioMotionProperties1->GetAngularVelocity());
 		if constexpr (Type2 != EMotionType::Static)
-			jv -= mR2xAxis.Dot(ioMotionProperties2->GetAngularVelocity());
+			jv -= mR2xAxis.Load().Dot(ioMotionProperties2->GetAngularVelocity());
 
-		// Lagrange multiplier is: lambda = -K^-1 (J v + b)
-		float lambda = mEffectiveMass * (jv - mSpringPart.GetBias(mTotalLambda));
+		return GetTotalLambdaFromVelocity(jv);
+	}
 
-		// Return the total accumulated lambda
-		return mTotalLambda + lambda;
+	/// Contact rows share a point velocity across all tangents. By the wedge/contraction
+	/// adjoint identity, axis . relative_point_velocity is the same Jacobian product.
+	JPH_INLINE float GetTotalLambdaFromVelocity(float inJacobianVelocity) const
+	{
+		return mTotalLambda + mEffectiveMass * (inJacobianVelocity - mSpringPart.GetBias(mTotalLambda));
 	}
 
 	/// Templated form of SolveVelocityConstraint with the motion types baked in, part 2: apply new lambda
-	template <EMotionType Type1, EMotionType Type2>
-	JPH_INLINE bool				TemplatedSolveVelocityConstraintApplyLambda(MotionProperties *ioMotionProperties1, float inInvMass1, MotionProperties *ioMotionProperties2, float inInvMass2, Vec4Arg inWorldSpaceAxis, float inTotalLambda)
+	template <EMotionType Type1, EMotionType Type2, class VelocityState>
+	JPH_INLINE bool				TemplatedSolveVelocityConstraintApplyLambda(VelocityState *ioMotionProperties1, float inInvMass1, VelocityState *ioMotionProperties2, float inInvMass2, Vec4Arg inWorldSpaceAxis, float inTotalLambda)
 	{
 		float delta_lambda = inTotalLambda - mTotalLambda; // Calculate change in lambda
 		mTotalLambda = inTotalLambda; // Store accumulated impulse
@@ -435,12 +470,12 @@ public:
 			if (ioBody1.IsDynamic())
 			{
 				ioBody1.SubPositionStep((lambda * ioBody1.GetMotionProperties()->GetInverseMass()) * inWorldSpaceAxis);
-				ioBody1.SubRotationStep(lambda * mInvI1_R1PlusUxAxis);
+				ioBody1.SubRotationStep(lambda * mInvI1_R1PlusUxAxis.Load());
 			}
 			if (ioBody2.IsDynamic())
 			{
 				ioBody2.AddPositionStep((lambda * ioBody2.GetMotionProperties()->GetInverseMass()) * inWorldSpaceAxis);
-				ioBody2.AddRotationStep(lambda * mInvI2_R2xAxis);
+				ioBody2.AddRotationStep(lambda * mInvI2_R2xAxis.Load());
 			}
 			return true;
 		}
@@ -458,12 +493,12 @@ public:
 			if (ioBody1.IsDynamic())
 			{
 				ioBody1.SubPositionStep((lambda * inInvMass1) * inWorldSpaceAxis);
-				ioBody1.SubRotationStep(lambda * mInvI1_R1PlusUxAxis);
+				ioBody1.SubRotationStep(lambda * mInvI1_R1PlusUxAxis.Load());
 			}
 			if (ioBody2.IsDynamic())
 			{
 				ioBody2.AddPositionStep((lambda * inInvMass2) * inWorldSpaceAxis);
-				ioBody2.AddRotationStep(lambda * mInvI2_R2xAxis);
+				ioBody2.AddRotationStep(lambda * mInvI2_R2xAxis.Load());
 			}
 			return true;
 		}
@@ -496,13 +531,31 @@ public:
 	}
 
 private:
-	Bivec						mR1PlusUxAxis;			///< Angular Jacobian bivector (r1 + u) ^ n
-	Bivec						mR2xAxis;				///< Angular Jacobian bivector r2 ^ n
-	Bivec						mInvI1_R1PlusUxAxis;	///< I1^-1 applied to the body 1 angular Jacobian
-	Bivec						mInvI2_R2xAxis;			///< I2^-1 applied to the body 2 angular Jacobian
+	struct NoJacobian { };
+	// Contact rows have restitution / surface-velocity bias, but no spring softness.
+	// Removing the unused coefficient also makes a compact contact row one cache line.
+	class ContactBias
+	{
+	public:
+		void CalculateSpringPropertiesWithBias(float inBias) { mBias = inBias; }
+		float GetBias(float) const { return mBias; }
+		bool IsActive() const { return false; }
+	private:
+		float mBias = 0.0f;
+	};
+	using AngularJacobian = std::conditional_t<StoreAngularJacobians, StoredBivec, NoJacobian>;
+	AngularJacobian				mR1PlusUxAxis;			///< Angular Jacobian bivector (r1 + u) ^ n
+	AngularJacobian				mR2xAxis;				///< Angular Jacobian bivector r2 ^ n
+	StoredBivec					mInvI1_R1PlusUxAxis;	///< I1^-1 applied to the body 1 angular Jacobian
+	StoredBivec					mInvI2_R2xAxis;			///< I2^-1 applied to the body 2 angular Jacobian
 	float						mEffectiveMass = 0.0f;
-	SpringPart					mSpringPart;
+	std::conditional_t<StoreAngularJacobians, SpringPart, ContactBias> mSpringPart;
 	float						mTotalLambda = 0.0f;
 };
+
+using AxisConstraintPart = AxisConstraintPartT<true>;
+using ContactConstraintPart = AxisConstraintPartT<false>;
+static_assert(sizeof(ContactConstraintPart) < sizeof(AxisConstraintPart));
+static_assert(sizeof(ContactConstraintPart) == 64);
 
 JPH_NAMESPACE_END

@@ -607,6 +607,8 @@ bool ObjectStreamIn::SkipAttributeData(int inArrayDepth, EOSDataType inDataType,
 						break;
 					}
 
+				case EOSDataType::T_Rotor:
+				case EOSDataType::T_Bivec:
 				case EOSDataType::Array:
 				case EOSDataType::Object:
 				case EOSDataType::Declare:

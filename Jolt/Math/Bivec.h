@@ -25,7 +25,7 @@ JPH_NAMESPACE_BEGIN
 ///     of the wedge. See UnitTests/Physics/DynamicsConventionsTest.cpp.
 ///   - Angular momentum is a bivector: L = I * Omega
 ///   - The inertia tensor maps bivectors to bivectors (6x6 matrix)
-class [[nodiscard]] alignas(JPH_VECTOR_ALIGNMENT) Bivec
+class [[nodiscard]] alignas(Vec8) Bivec
 {
 public:
 	JPH_OVERRIDE_NEW_DELETE
@@ -132,16 +132,11 @@ public:
 	/// because Contract is the negative adjoint of the wedge: <B _| r, v> == -<B, r ^ v>.
 	JPH_INLINE static Bivec		sWedge(Vec4Arg inA, Vec4Arg inB)
 	{
-		float a1 = inA.GetX(), a2 = inA.GetY(), a3 = inA.GetZ(), a4 = inA.GetW();
-		float b1 = inB.GetX(), b2 = inB.GetY(), b3 = inB.GetZ(), b4 = inB.GetW();
-		return Bivec(
-			a1 * b2 - a2 * b1,  // e12
-			a1 * b3 - a3 * b1,  // e13
-			a1 * b4 - a4 * b1,  // e14
-			a2 * b3 - a3 * b2,  // e23
-			a2 * b4 - a4 * b2,  // e24
-			a3 * b4 - a4 * b3   // e34
-		);
+		Lane4 low = inA.Swizzle<0, 0, 0, 1>() * inB.Swizzle<1, 2, 3, 2>()
+			- inA.Swizzle<1, 2, 3, 2>() * inB.Swizzle<0, 0, 0, 1>();
+		Lane4 high = inA.Swizzle<1, 2, 1, 2>() * inB.Swizzle<3, 3, 3, 3>()
+			- inA.Swizzle<3, 3, 3, 3>() * inB.Swizzle<1, 2, 1, 2>();
+		return Bivec(Vec8(low, Lane4::sAnd(high, UVec4(0xffffffff, 0xffffffff, 0, 0).ReinterpretAsFloat())));
 	}
 
 	/// Left contraction with a vector: Omega _| v (returns a vector)
@@ -151,15 +146,14 @@ public:
 	/// (Omega _| v)_i = sum_j Omega_ij * v_j   where Omega_ij is antisymmetric
 	JPH_INLINE Vec4				Contract(Vec4Arg inV) const
 	{
-		float v1 = inV.GetX(), v2 = inV.GetY(), v3 = inV.GetZ(), v4 = inV.GetW();
-		float e12 = mValue[0], e13 = mValue[1], e14 = mValue[2];
-		float e23 = mValue[3], e24 = mValue[4], e34 = mValue[5];
-		return Vec4(
-			 e12 * v2 + e13 * v3 + e14 * v4,    // (Omega _| v).x
-			-e12 * v1 + e23 * v3 + e24 * v4,    // (Omega _| v).y
-			-e13 * v1 - e23 * v2 + e34 * v4,    // (Omega _| v).z
-			-e14 * v1 - e24 * v2 - e34 * v3     // (Omega _| v).w
-		);
+		// Evaluate the four rows together, retaining the scalar expression's sum order.
+		Lane4 low = mValue.GetLow(), high = mValue.GetHigh();
+		Lane4 a = Lane4::sXor(low.Swizzle<0, 0, 1, 2>(), UVec4(0, 0x80000000, 0x80000000, 0x80000000).ReinterpretAsFloat());
+		Lane4 b = Lane4::sSelect(low.Swizzle<1, 3, 3, 0>(), high.Swizzle<0, 0, 0, 0>(), UVec4(0, 0, 0, 0xffffffff));
+		b = Lane4::sXor(b, UVec4(0, 0, 0x80000000, 0x80000000).ReinterpretAsFloat());
+		Lane4 c = Lane4::sSelect(low.Swizzle<2, 2, 2, 2>(), high.Swizzle<0, 0, 1, 1>(), UVec4(0, 0xffffffff, 0xffffffff, 0xffffffff));
+		c = Lane4::sXor(c, UVec4(0, 0, 0, 0x80000000).ReinterpretAsFloat());
+		return a * inV.Swizzle<1, 0, 0, 0>() + b * inV.Swizzle<2, 2, 1, 1>() + c * inV.Swizzle<3, 3, 3, 2>();
 	}
 
 	///@}

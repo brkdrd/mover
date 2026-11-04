@@ -21,6 +21,99 @@ TEST_SUITE("WholeBodySimulationTests")
 {
 	using namespace JPH::literals;
 
+	TEST_CASE("TestFactoredContactRowMatchesAngularJacobian")
+	{
+		PhysicsTestContext c;
+		Body &a = c.CreateBox(RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4(0.4f, 0.5f, 0.6f, 0.7f));
+		Body &b = c.CreateBox(RVec4(2, 0, 0, 0), Rotor::sRotation(Vec4::sAxisY(), Vec4::sAxisW(), 0.8f), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4(0.7f, 0.3f, 0.9f, 0.5f));
+		a.SetLinearVelocity(Vec4(0.7f, -1.3f, 0.4f, 2.0f));
+		b.SetLinearVelocity(Vec4(-0.2f, 0.9f, -1.1f, 0.8f));
+		a.SetAngularVelocity(Bivec(0.4f, -0.7f, 1.1f, 0.2f, -0.9f, 0.5f));
+		b.SetAngularVelocity(Bivec(-0.3f, 0.8f, -0.4f, 1.3f, 0.6f, -0.2f));
+		const MotionProperties *ma = a.GetMotionProperties(), *mb = b.GetMotionProperties();
+		InverseInertiaOperator ia = ma->GetInverseInertiaForRotation(a.GetRotation());
+		InverseInertiaOperator ib = mb->GetInverseInertiaForRotation(b.GetRotation());
+		for (int sample = 0; sample < 100; ++sample)
+		{
+			float t = 0.07f * sample;
+			Vec4 r1(t, -0.3f, 0.5f, 1.0f), r2(-0.7f, t, 0.9f, -0.4f);
+			Vec4 axis = Rotor::sExp(Bivec(t, -0.3f * t, 0.1f, 0.2f, 0.5f * t, -t)) * Vec4::sAxisX();
+			AxisConstraintPart reference;
+			ContactConstraintPart factored;
+			reference.TemplatedCalculateConstraintProperties<EMotionType::Dynamic, EMotionType::Dynamic>(ma->GetInverseMass(), ia, r1, mb->GetInverseMass(), ib, r2, axis, 0.25f);
+			factored.TemplatedCalculateConstraintProperties<EMotionType::Dynamic, EMotionType::Dynamic>(ma->GetInverseMass(), ia, r1, mb->GetInverseMass(), ib, r2, axis, 0.25f);
+			reference.SetTotalLambda(0.125f);
+			factored.SetTotalLambda(0.125f);
+			float expected = reference.TemplatedSolveVelocityConstraintGetTotalLambda<EMotionType::Dynamic, EMotionType::Dynamic>(ma, mb, axis);
+			float actual = factored.GetTotalLambdaFromVelocity(axis.Dot(ma->GetPointVelocityCOM(r1) - mb->GetPointVelocityCOM(r2)));
+			CHECK(abs(actual - expected) < 1.0e-5f * max(1.0f, abs(expected)));
+		}
+	}
+
+	TEST_CASE("TestInverseInertiaOperatorMatchesRotatedReference")
+	{
+		PhysicsTestContext c;
+		for (Vec4 extent : { Vec4(0.5f, 0.5f, 0.5f, 0.5f), Vec4(0.3f, 0.5f, 0.7f, 0.9f) })
+			for (EAllowedDOFs dofs : { EAllowedDOFs::All, EAllowedDOFs::AllTranslation | EAllowedDOFs::RotationXY })
+			{
+				Rotor rotation = Rotor::sRotation(Vec4::sAxisX(), Vec4::sAxisW(), 0.7f)
+					* Rotor::sRotation(Vec4::sAxisY(), Vec4::sAxisZ(), -0.4f);
+				BodyCreationSettings bcs(new BoxShape(extent, 0.0f), RVec4::sZero(), rotation, EMotionType::Dynamic, Layers::MOVING);
+				bcs.mAllowedDOFs = dofs;
+				Body &body = c.CreateBody(bcs, EActivation::Activate);
+				const MotionProperties *mp = body.GetMotionProperties();
+				for (float scale : { 0.0f, 0.5f, 2.0f })
+				{
+					InverseInertiaOperator op = mp->GetInverseInertiaForRotation(rotation, scale);
+					for (int axis = 0; axis < 6; ++axis)
+					{
+						float value[6] = { 0, 0, 0, 0, 0, 0 };
+						value[axis] = 1.0f;
+						Bivec v(value[0], value[1], value[2], value[3], value[4], value[5]);
+						Bivec expected = scale * mp->MultiplyWorldSpaceInverseInertiaByVector(rotation, v);
+						CHECK_APPROX_EQUAL(op.Multiply(v), expected, 1.0e-5f);
+					}
+				}
+			}
+	}
+
+	// Isolate warm starting from the iterative solve. A cached contact must replay the
+	// previous friction impulse along every tangent, just like a regenerated manifold.
+	TEST_CASE("TestCachedContactRestoresAllFrictionTangents")
+	{
+		for (bool use_cache : { false, true })
+			for (int axis : { 0, 2, 3 })
+			{
+				CAPTURE(use_cache); CAPTURE(axis);
+				PhysicsTestContext c;
+				c.CreateFloor();
+				PhysicsSettings settings = c.GetSystem()->GetPhysicsSettings();
+				settings.mUseBodyPairContactCache = use_cache;
+				c.GetSystem()->SetPhysicsSettings(settings);
+				BodyCreationSettings bcs(new BoxShape(Vec4::sReplicate(0.5f), 0.0f),
+					RVec4(0, 0.5f, 0, 0), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+				bcs.mAllowedDOFs = EAllowedDOFs::AllTranslation;
+				bcs.mAllowSleeping = false;
+				bcs.mLinearDamping = 0.0f;
+				Body &body = c.CreateBody(bcs, EActivation::Activate);
+				CHECK(c.SimulateSingleStep() == EPhysicsUpdateError::None);
+
+				Vec4 velocity = Vec4::sZero();
+				velocity[axis] = 0.01f;
+				body.SetLinearVelocity(velocity);
+				CHECK(c.SimulateSingleStep() == EPhysicsUpdateError::None);
+				CHECK(abs(body.GetLinearVelocity()[axis]) < 1.0e-5f);
+
+				// Only replay the accumulated impulse; do not let a new solve hide a missing lane.
+				settings.mNumVelocitySteps = 0;
+				settings.mNumPositionSteps = 0;
+				c.GetSystem()->SetPhysicsSettings(settings);
+				body.SetLinearVelocity(Vec4::sZero());
+				CHECK(c.SimulateSingleStep() == EPhysicsUpdateError::None);
+				CHECK(body.GetLinearVelocity()[axis] == doctest::Approx(-0.01f).epsilon(1.0e-4f));
+			}
+	}
+
 	// Forward inertia operator I = Ad(R) D Ad(R^-1), the inverse of
 	// MotionProperties::MultiplyWorldSpaceInverseInertiaByVector. Needed to state angular momentum;
 	// the body only ever needs I^-1 so it does not store this.
@@ -208,42 +301,46 @@ TEST_SUITE("WholeBodySimulationTests")
 	// enough to reach its fallback path (see sCollideConvexVsConvex).
 	TEST_CASE("TestTesseractPyramidIsStable")
 	{
-		PhysicsTestContext c;
-		c.CreateFloor();
-
-		// A 4D pyramid has three horizontal axes, so its body count is a sum of cubes: height 4
-		// gives (4*5/2)^2 = 100 bodies, which is enough to be a real island and still quick
-		const float cHalfExtent = 0.5f;
-		const float cSize = 2.0f * cHalfExtent;
-		const int cHeight = 4;
-
-		Array<Body *> bodies;
-		Array<int> level;
-		for (int i = 0; i < cHeight; ++i)
-			for (int j = i / 2; j < cHeight - (i + 1) / 2; ++j)
-				for (int k = i / 2; k < cHeight - (i + 1) / 2; ++k)
-					for (int l = i / 2; l < cHeight - (i + 1) / 2; ++l)
-					{
-						float offset = (i & 1)? cHalfExtent : 0.0f;
-						// A small vertical gap so they settle onto each other rather than starting interpenetrating
-						RVec4 pos(Real(-cHeight + cSize * j + offset), Real(cHalfExtent + (cSize + 0.01f) * i), Real(-cHeight + cSize * k + offset), Real(-cHeight + cSize * l + offset));
-						bodies.push_back(&c.CreateBox(pos, Rotor::sIdentity(), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4::sReplicate(cHalfExtent)));
-						level.push_back(i);
-					}
-		CHECK(bodies.size() == 100);
-
-		c.Simulate(3.0f);
-
-		const float cSlop = c.GetSystem()->GetPhysicsSettings().mPenetrationSlop;
-		for (size_t n = 0; n < bodies.size(); ++n)
+		for (float frequency : { 60.0f, 120.0f, 150.0f })
 		{
-			RVec4 pos = bodies[n]->GetPosition();
+			CAPTURE(frequency);
+			PhysicsTestContext c(1.0f / frequency);
+			c.CreateFloor();
 
-			// Nothing sank through the floor or through the body below it. Allow the solver's
-			// penetration at each of the interfaces underneath, plus a little settling.
-			float expected_y = cHalfExtent + level[n] * cSize;
-			CHECK(float(pos.GetY()) > expected_y - (level[n] + 1) * 2.0f * cSlop);
-			CHECK(float(pos.GetY()) < expected_y + cSlop);
+			// A 4D pyramid has three horizontal axes, so its body count is a sum of cubes: height 4
+			// gives (4*5/2)^2 = 100 bodies, which is enough to be a real island and still quick
+			const float cHalfExtent = 0.5f;
+			const float cSize = 2.0f * cHalfExtent;
+			const int cHeight = 4;
+
+			Array<Body *> bodies;
+			Array<int> level;
+			for (int i = 0; i < cHeight; ++i)
+				for (int j = i / 2; j < cHeight - (i + 1) / 2; ++j)
+					for (int k = i / 2; k < cHeight - (i + 1) / 2; ++k)
+						for (int l = i / 2; l < cHeight - (i + 1) / 2; ++l)
+						{
+							float offset = (i & 1)? cHalfExtent : 0.0f;
+							// A small vertical gap so they settle onto each other rather than starting interpenetrating
+							RVec4 pos(Real(-cHeight + cSize * j + offset), Real(cHalfExtent + (cSize + 0.01f) * i), Real(-cHeight + cSize * k + offset), Real(-cHeight + cSize * l + offset));
+							bodies.push_back(&c.CreateBox(pos, Rotor::sIdentity(), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4::sReplicate(cHalfExtent)));
+							level.push_back(i);
+						}
+			CHECK(bodies.size() == 100);
+
+			c.Simulate(3.0f);
+
+			const float cSlop = c.GetSystem()->GetPhysicsSettings().mPenetrationSlop;
+			for (size_t n = 0; n < bodies.size(); ++n)
+			{
+				RVec4 pos = bodies[n]->GetPosition();
+
+				// Nothing sank through the floor or through the body below it. Allow the solver's
+				// penetration at each of the interfaces underneath, plus a little settling.
+				float expected_y = cHalfExtent + level[n] * cSize;
+				CHECK(float(pos.GetY()) > expected_y - (level[n] + 1) * 2.0f * cSlop);
+				CHECK(float(pos.GetY()) < expected_y + cSlop);
+			}
 		}
 	}
 
@@ -251,40 +348,44 @@ TEST_SUITE("WholeBodySimulationTests")
 	// constraint part: they are statements about the whole solve.
 	TEST_CASE("TestCollisionConservesMomentum")
 	{
-		PhysicsTestContext c;
-		c.ZeroGravity();
+		for (float frequency : { 60.0f, 120.0f, 150.0f })
+		{
+			CAPTURE(frequency);
+			PhysicsTestContext c(1.0f / frequency);
+			c.ZeroGravity();
 
-		// Offset the impact in W as well as Z so the collision is genuinely four dimensional and
-		// imparts angular velocity in planes containing W
-		Body &body1 = c.CreateBox(RVec4(-2.0_r, 0.0_r, 0.1_r, 0.15_r), Rotor::sIdentity(), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4::sReplicate(0.5f));
-		Body &body2 = c.CreateBox(RVec4(2.0_r, 0.0_r, -0.1_r, -0.15_r), Rotor::sIdentity(), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4::sReplicate(0.5f));
-		body1.SetLinearVelocity(Vec4(2.0f, 0.0f, 0.0f, 0.0f));
-		body2.SetLinearVelocity(Vec4(-2.0f, 0.0f, 0.0f, 0.0f));
+			// Offset the impact in W as well as Z so the collision is genuinely four dimensional and
+			// imparts angular velocity in planes containing W
+			Body &body1 = c.CreateBox(RVec4(-2.0_r, 0.0_r, 0.1_r, 0.15_r), Rotor::sIdentity(), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4::sReplicate(0.5f));
+			Body &body2 = c.CreateBox(RVec4(2.0_r, 0.0_r, -0.1_r, -0.15_r), Rotor::sIdentity(), EMotionType::Dynamic, EMotionQuality::Discrete, Layers::MOVING, Vec4::sReplicate(0.5f));
+			body1.SetLinearVelocity(Vec4(2.0f, 0.0f, 0.0f, 0.0f));
+			body2.SetLinearVelocity(Vec4(-2.0f, 0.0f, 0.0f, 0.0f));
 
-		float mass = 1.0f / body1.GetMotionProperties()->GetInverseMass();
-		Vec4 p_before = mass * (body1.GetLinearVelocity() + body2.GetLinearVelocity());
-		Bivec l_before = sAngularMomentum(body1) + sAngularMomentum(body2);
-		float e_before = sKineticEnergy(body1) + sKineticEnergy(body2);
+			float mass = 1.0f / body1.GetMotionProperties()->GetInverseMass();
+			Vec4 p_before = mass * (body1.GetLinearVelocity() + body2.GetLinearVelocity());
+			Bivec l_before = sAngularMomentum(body1) + sAngularMomentum(body2);
+			float e_before = sKineticEnergy(body1) + sKineticEnergy(body2);
 
-		// Long enough for them to meet and separate again
-		c.Simulate(2.0f);
+			// Long enough for them to meet and separate again
+			c.Simulate(2.0f);
 
-		Vec4 p_after = mass * (body1.GetLinearVelocity() + body2.GetLinearVelocity());
-		Bivec l_after = sAngularMomentum(body1) + sAngularMomentum(body2);
-		float e_after = sKineticEnergy(body1) + sKineticEnergy(body2);
+			Vec4 p_after = mass * (body1.GetLinearVelocity() + body2.GetLinearVelocity());
+			Bivec l_after = sAngularMomentum(body1) + sAngularMomentum(body2);
+			float e_after = sKineticEnergy(body1) + sKineticEnergy(body2);
 
-		// They did collide, otherwise this proves nothing
-		CHECK(e_after < 0.99f * e_before);
+			// They did collide, otherwise this proves nothing
+			CHECK(e_after < 0.99f * e_before);
 
-		// Contacts are internal forces, so they can only move momentum between the two bodies.
-		// Angular momentum is checked relative to its own magnitude: |L| is 721 here (the bodies are
-		// 1000 kg tesseracts two metres off the axis), and the measured drift is 1.2e-3, i.e. 1.7e-6
-		// relative - float round-off over 120 steps, not a leak. Linear momentum comes out exact.
-		CHECK_APPROX_EQUAL(p_after, p_before, 1.0e-3f);
-		CHECK(Bivec(l_after - l_before).Length() < 1.0e-5f * l_before.Length());
+			// Contacts are internal forces, so they can only move momentum between the two bodies.
+			// Angular momentum is checked relative to its own magnitude: |L| is 721 here (the bodies are
+			// 1000 kg tesseracts two metres off the axis), and the measured drift is 1.2e-3, i.e. 1.7e-6
+			// relative - float round-off over 120 steps, not a leak. Linear momentum comes out exact.
+			CHECK_APPROX_EQUAL(p_after, p_before, 1.0e-3f);
+			CHECK(Bivec(l_after - l_before).Length() < 1.0e-5f * l_before.Length());
 
-		// And with the default restitution of 0 the collision can only take energy out
-		CHECK(e_after <= e_before + 1.0e-3f);
+			// And with the default restitution of 0 the collision can only take energy out
+			CHECK(e_after <= e_before + 1.0e-3f);
+		}
 	}
 
 	// Determinism. Jolt's central guarantee, and in 4D it is also a check that nothing reads

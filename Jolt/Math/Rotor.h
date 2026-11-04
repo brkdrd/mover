@@ -25,7 +25,7 @@ JPH_NAMESPACE_BEGIN
 /// For a unit rotor (|R| = 1), the sandwich product R*v*~R rotates a vector v in 4D.
 /// Simple rotations (in a single plane) have P = 0 and behave like quaternions.
 /// Double rotations (isoclinic) have nonzero pseudoscalar and rotate in two planes simultaneously.
-class [[nodiscard]] alignas(JPH_VECTOR_ALIGNMENT) Rotor
+class [[nodiscard]] alignas(Vec8) Rotor
 {
 public:
 	JPH_OVERRIDE_NEW_DELETE

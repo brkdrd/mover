@@ -51,6 +51,10 @@ public:
 	/// This vector must be normalized. The result is deterministic for a given input.
 	JPH_INLINE void				GetNormalizedPerpendicularBasis(Vec4 &outPerp1, Vec4 &outPerp2, Vec4 &outPerp3) const;
 
+	/// Continuous orthonormal tangent frame on S^3, for persistent friction directions.
+	/// Requires a normalized vector; uses signed permutations without branches or square roots.
+	JPH_INLINE void				GetContinuousPerpendicularBasis(Vec4 &outPerp1, Vec4 &outPerp2, Vec4 &outPerp3) const;
+
 	/// To String
 	friend ostream &			operator << (ostream &inStream, Vec4Arg inV)
 	{

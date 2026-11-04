@@ -29,6 +29,35 @@ TEST_SUITE("ClipPolytopeTests")
 		return f;
 	}
 
+	/// Compare the ordered-cell fast path against generic facet enumeration.
+	TEST_CASE("TestBinaryCellHalfSpacesMatchUnorderedHull")
+	{
+		UnitTestRandom random(0xC11F);
+		uniform_real_distribution<float> angle(-JPH_PI, JPH_PI);
+		for (int iteration = 0; iteration < 200; ++iteration)
+		{
+			Rotor rotation = Rotor::sRotation(Vec4::sAxisX(), Vec4::sAxisW(), angle(random))
+				* Rotor::sRotation(Vec4::sAxisY(), Vec4::sAxisZ(), angle(random));
+			Face cell = sCubeCell(Vec4::sZero(), 1.0f, 0.0f);
+			for (Vec4 &v : cell)
+				v = rotation * (v * Vec4(0.7f, 1.3f, 2.1f, 1.0f)) + Vec4(3, -2, 1, 4);
+			Vec4 axis = rotation * Vec4(0.2f, -0.3f, 0.1f, iteration % 5 == 0? 0.0f : 1.0f).Normalized();
+			ClipHalfSpaces fast, reference;
+			GetClipHalfSpaces(cell, axis, fast);
+			// A duplicate vertex leaves the hull unchanged but exercises generic enumeration.
+			cell.push_back(cell.back());
+			GetClipHalfSpaces(cell, axis, reference);
+			CHECK(fast.size() == reference.size());
+			for (const ClipHalfSpace &plane : fast)
+			{
+				bool found = false;
+				for (const ClipHalfSpace &other : reference)
+					found |= plane.mNormal.IsClose(other.mNormal, 1.0e-8f) && abs(plane.mDistance - other.mDistance) < 1.0e-4f;
+				CHECK(found);
+			}
+		}
+	}
+
 	/// Is inPoint inside the axis aligned cube (ignoring w)?
 	static bool sInCube(Vec4Arg inPoint, Vec4Arg inCenter, float inHalf, float inTol)
 	{

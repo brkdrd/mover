@@ -21,7 +21,7 @@ void EstimateCollisionResponse(const Body &inBody1, const Body &inBody2, const C
 	memset(outResult.mImpulses.data(), 0, num_points * sizeof(CollisionEstimationResult::Impulse));
 
 	// Calculate friction directions. TODO(4D): 3 of them, the contact tangent space is a hyperplane.
-	inManifold.mWorldSpaceNormal.GetNormalizedPerpendicularBasis(outResult.mTangent1, outResult.mTangent2, outResult.mTangent3);
+	inManifold.mWorldSpaceNormal.GetContinuousPerpendicularBasis(outResult.mTangent1, outResult.mTangent2, outResult.mTangent3);
 
 	// Get body velocities
 	EMotionType motion_type1 = inBody1.GetMotionType();

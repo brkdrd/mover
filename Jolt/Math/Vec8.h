@@ -10,7 +10,11 @@
 JPH_NAMESPACE_BEGIN
 
 /// 8-component SIMD vector. Used internally by Rotor for 4D rotation algebra.
+#if defined(JPH_USE_AVX)
+class [[nodiscard]] alignas(32) Vec8
+#else
 class [[nodiscard]] alignas(JPH_VECTOR_ALIGNMENT) Vec8
+#endif
 {
 public:
 	JPH_OVERRIDE_NEW_DELETE

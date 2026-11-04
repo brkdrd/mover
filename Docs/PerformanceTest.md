@@ -5,12 +5,10 @@ The performance test application contains a couple of simple scenes to test perf
 ## Commandline options
 
 - -s=[scene]: This allows you to select a scene, [scene] can be;
-    - Ragdoll: A scene with 16 piles of 10 ragdolls (3680 bodies) with motors active dropping on a level section.
-	- RagdollSinglePile: A single pile of 160 ragdolls (3680 bodies) with motors active dropping on a level section.
-    - ConvexVsMesh: A simpler scene of 484 convex shapes (sphere, box, convex hull, capsule) falling on a 2000 triangle mesh.
-	- Pyramid: A pyramid of 1240 boxes stacked on top of each other to profile large island splitting.
-	- LargeMesh: Searches for the biggest MeshShape that can be created and then drops 4410 boxes on that mesh.
+    - Pyramid: A 4D pyramid of 1296 dynamic boxes, with sleeping disabled, to profile large island splitting. The upstream 3D scene contains 1240 boxes.
+    - MaxBodies: The supported 4D body-count stress scene.
 - -i=[iterations]: Number of physics steps before the test finishes.
+- -hz=[frequency]: Physics integration frequency, a finite positive number (default 60). This changes the simulated timestep, not a wall-clock rate limit.
 - -q=[quality]: This limits the motion quality types that the test will run on. By default it will test both. [quality] can be:
     - Discrete: Discrete collision detection
     - LinearCast: Linear cast continous collision detection
@@ -23,6 +21,7 @@ The performance test application contains a couple of simple scenes to test perf
 - -rs: Record the simulation state in state_[tag].bin.
 - -vs: Validate the recorded simulation state from state_[tag].bin. This will after every simulation step check that the state is the same as the recorded state and trigger a breakpoint if this is not the case. This is used to validate cross platform determinism.
 - -repeat=[num]: Repeats all tests num times.
+- -cache_distance=[meters]: Override the body-pair cache translation tolerance for experiments. The default physics setting is unchanged.
 - -validate_hash=[hash]: Will validate that the hash of the simulation matches the supplied hash. Program terminates with return code 1 if it doesn't. Can be used to automatically validate determinism.
 
 ## Output
@@ -33,5 +32,18 @@ The performance test application contains a couple of simple scenes to test perf
 - Hash: A hash of all positions and rotations of the bodies at the end of the test. Can be used to verify that the test was deterministic.
 
 ## Results
+
+For repeatable local comparisons, use `PerformanceTest/run_comparison.py`. It runs binaries sequentially, interleaves repetitions, retains per-frame timings and logs, and checks each binary's final-state hash across repetitions and thread counts:
+
+```sh
+python3 PerformanceTest/run_comparison.py \
+  --binary 3d=build/perf-3d/PerformanceTest \
+  --binary before=build/perf-results/PerformanceTest-baseline \
+  --binary after=build/perf-off/PerformanceTest \
+  --threads 1 6 12 --steps 600 --warmup 100 --repeat 3 \
+  --output build/comparison
+```
+
+The binaries must use matching compiler/build settings. By default the runner retains the existing 1/60-second physics timestep. Its 120-Hz and 150-Hz budget statistics mean execution within 8.333 ms and 6.667 ms, respectively. To also change the integration timestep, pass `--hz 120` or `--hz 150`; every binary in that batch must support `-hz`. For an equal ten seconds of simulated time, use 600 updates at 60 Hz, 1200 at 120 Hz, or 1500 at 150 Hz. Scale the warmup count too (100, 200, or 250 updates). Changing the timestep changes the workload, so keep these results separate from an unchanged-timestep optimization comparison. See [the 4D optimization report](PerformanceOptimization.md) for the measured comparison, pipeline map, and limitations.
 
 If you're interested in how Jolt scales with multiple CPUs and compares to other physics engines, take a look at [this document](https://jrouwe.nl/jolt/JoltPhysicsMulticoreScaling.pdf).

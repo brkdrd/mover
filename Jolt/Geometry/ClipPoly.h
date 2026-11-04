@@ -63,6 +63,54 @@ void GetClipHalfSpaces(const VERTEX_ARRAY &inVertices, Vec4Arg inAxis, ClipHalfS
 		return;
 	float dist_tolerance = 1.0e-4f * extent;
 
+	// Box and plane supporting cells use binary corner order. An affine projection of
+	// such a cell is still a parallelepiped: it has six known facets, not 56 candidates.
+	// Verify the layout before using it, since arbitrary hull faces are unordered.
+	if (n == 8)
+	{
+		Vec4 edges[3] = { inVertices[1] - inVertices[0], inVertices[2] - inVertices[0], inVertices[4] - inVertices[0] };
+		bool is_cell = true;
+		for (int mask = 3; mask < 8 && is_cell; ++mask)
+		{
+			Vec4 expected = inVertices[0];
+			for (int bit = 0; bit < 3; ++bit)
+				if ((mask & (1 << bit)) != 0)
+					expected += edges[bit];
+			is_cell = (expected - inVertices[mask]).LengthSq() <= 1.0e-12f * extent_sq;
+		}
+		if (is_cell)
+		{
+			// Same first representative and order as the generic triple enumeration.
+			constexpr int facets[6][3] = { {0, 1, 2}, {0, 1, 4}, {0, 2, 4}, {1, 3, 5}, {2, 3, 6}, {4, 5, 6} };
+			for (const auto &f : facets)
+			{
+				Vec4 origin = inVertices[f[0]];
+				Vec4 normal = Vec4::sCross(inVertices[f[1]] - origin, inVertices[f[2]] - origin, inAxis);
+				float len_sq = normal.LengthSq();
+				if (len_sq < FLT_EPSILON) { is_cell = false; break; }
+				normal /= sqrt(len_sq);
+				float d = normal.Dot(origin);
+				bool below = true, above = true;
+				for (int m = 0; m < n; ++m)
+				{
+					float dm = normal.Dot(inVertices[m]) - d;
+					below &= dm <= dist_tolerance;
+					above &= dm >= -dist_tolerance;
+				}
+				if (below == above) { is_cell = false; break; } // Flat or ill-conditioned projection.
+				if (!below) { normal = -normal; d = -d; }
+				for (const ClipHalfSpace &h : outHalfSpaces)
+					if (Square(h.mNormal.Dot(normal)) > 0.998f && abs(h.mNormal.Dot(origin) - h.mDistance) < dist_tolerance)
+						is_cell = false;
+				if (!is_cell) break;
+				outHalfSpaces.push_back({ normal, d });
+			}
+			if (is_cell)
+				return;
+			outHalfSpaces.clear();
+		}
+	}
+
 	for (int i = 0; i < n; ++i)
 		for (int j = i + 1; j < n; ++j)
 			for (int k = j + 1; k < n; ++k)

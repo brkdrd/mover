@@ -76,6 +76,39 @@ inline bool Nonnegative(double inValue)
 {
 	return std::isfinite(inValue) && inValue >= 0;
 }
+// Deliberately bounded physical inputs, not a promise to support every binary64 exponent.
+inline bool Physical(double inValue)
+{
+	return inValue == 0 || (inValue >= 1.0e-100 && inValue <= 1.0e100);
+}
+// Reject unsupported intermediate ranges instead of erasing a factor that a later
+// multiply could recover. NaN propagates to the step's transactional validation.
+inline double Product(double inA, double inB)
+{
+	if (!Nonnegative(inA) || !Nonnegative(inB)) return std::numeric_limits<double>::quiet_NaN();
+	if (inA == 0 || inB == 0) return 0;
+	double value = inA * inB;
+	return std::isnormal(value)? value : std::numeric_limits<double>::quiet_NaN();
+}
+inline double Quotient(double inA, double inB)
+{
+	if (!Nonnegative(inA) || !std::isfinite(inB) || inB <= 0) return std::numeric_limits<double>::quiet_NaN();
+	if (inA == 0) return 0;
+	double value = inA / inB;
+	return std::isnormal(value)? value : std::numeric_limits<double>::quiet_NaN();
+}
+inline double Charge(double inImpulse, const Thruster &inThruster, double inRate)
+{
+	if (!Nonnegative(inImpulse)) return std::numeric_limits<double>::quiet_NaN();
+	if (inImpulse == 0 || inRate == 0) return 0;
+	return Product(Quotient(inImpulse, inThruster.mMaxForce), inRate);
+}
+inline double PowerScale(double inBudget, double inPower)
+{
+	if (inBudget == 0) return 0;
+	double scale = std::nextafter(Quotient(inBudget, inPower), 0.0);
+	return std::isnormal(scale)? scale : std::numeric_limits<double>::quiet_NaN();
+}
 inline bool Finite(Vec4Arg inValue)
 {
 	for (uint i = 0; i < 4; ++i) if (!std::isfinite(inValue[i])) return false;
@@ -95,7 +128,7 @@ inline bool Valid(const Thruster &inThruster)
 	for (uint i = 0; i < 4; ++i) norm += double(t.mDirection[i]) * double(t.mDirection[i]);
 	if (std::abs(norm - 1) > 1.0e-5) return false;
 	for (double x : { t.mMaxForce, t.mResponseTime, t.mPropellantRate, t.mPowerDraw, t.mHeatRate, t.mHealth, t.mForce, t.mHeat })
-		if (!Nonnegative(x)) return false;
+		if (!Physical(x)) return false;
 	return t.mHealth <= 1;
 }
 inline double Capacity(const Thruster &inThruster)
@@ -107,19 +140,23 @@ inline double Capacity(const Thruster &inThruster)
 inline double IntegratedForce(const Thruster &inThruster, double inTarget, double inTime)
 {
 	if (inTime == 0) return 0;
-	if (inThruster.mResponseTime == 0) return inTarget * inTime;
-	double x = inTime / inThruster.mResponseTime;
-	double h = x == 0? 1 : -std::expm1(-x) / x;
-	double v = x < 1.0e-3? x * (0.5 + x * (-1.0 / 6 + x * (1.0 / 24 + x * (-1.0 / 120 + x / 720)))) : 1 - h;
-	double mean = inThruster.mForce * h + inTarget * v;
-	return inTime * std::clamp(mean, std::min(inThruster.mForce, inTarget), std::max(inThruster.mForce, inTarget));
+	if (inThruster.mResponseTime == 0) return Product(inTarget, inTime);
+	if (inThruster.mForce == 0 && inTarget == 0) return 0;
+	double x = Quotient(inTime, inThruster.mResponseTime);
+	double h = Quotient(-std::expm1(-x), x);
+	double v = x < 1.0e-3? Product(x, 0.5 + x * (-1.0 / 6 + x * (1.0 / 24 + x * (-1.0 / 120 + x / 720)))) : 1 - h;
+	double mean = Product(inThruster.mForce, h) + Product(inTarget, v);
+	return Product(inTime, std::clamp(mean, std::min(inThruster.mForce, inTarget), std::max(inThruster.mForce, inTarget)));
 }
 
 inline double FinalForce(const Thruster &inThruster, double inTarget, double inTime)
 {
 	if (inThruster.mResponseTime == 0) return inTarget;
-	double x = inTime / inThruster.mResponseTime;
-	double force = inThruster.mForce * std::exp(-x) + inTarget * -std::expm1(-x);
+	if (inTime == 0 || (inThruster.mForce == 0 && inTarget == 0)) return inThruster.mForce;
+	double x = Quotient(inTime, inThruster.mResponseTime);
+	double decay = std::exp(-x);
+	if (inThruster.mForce > 0 && !std::isnormal(decay)) return std::numeric_limits<double>::quiet_NaN();
+	double force = Product(inThruster.mForce, decay) + Product(inTarget, -std::expm1(-x));
 	return std::clamp(force, std::min(inThruster.mForce, inTarget), std::max(inThruster.mForce, inTarget));
 }
 
@@ -153,6 +190,8 @@ inline Bivec Torque(const Wrench &inWrench)
 /// Shared instantaneous power reserves a conservative max(initial, target) envelope, clipping
 /// excessive spool-down state at the boundary when necessary. Failed, disabled, derated and
 /// starved actuators likewise hard-cut to safe capacity; this is not stored mechanical energy.
+/// An outward-rounded post-scaling bound certifies power <= limit without an excess tolerance;
+/// at most eight additional scale corrections are attempted before atomic numeric rejection.
 /// Shared fuel/energy depletion splits the interval at the first event (at most two events),
 /// using a feasible one-ULP double-time bracket in <= 64 evaluations per resource per phase.
 /// Independent actuators continue, but commands are not reallocated until the next caller step.
@@ -172,14 +211,22 @@ inline Bivec Torque(const Wrench &inWrench)
 /// nonunit directions (squared-norm tolerance 1e-5), excess thruster count, numeric overflow or
 /// unrepresentable float outputs return false with outResult unchanged. Allocation failures
 /// follow the host STL/Jolt out-of-memory policy (not converted to false in no-exception builds).
+/// Numeric envelope: each double-valued Thruster field, request weight and delta time is zero
+/// or in [1e-100, 1e100] (health is also <= 1). Resource budgets/power limits remain arbitrary
+/// finite nonnegative doubles, including the default unlimited power. This is NOT an all-exponent
+/// binary64 solver; unsupported intermediate resource/response ranges also reject atomically.
+/// In particular, nonzero products/quotients in resource charges, power scaling and analytic
+/// response must be normal finite doubles; subnormal, underflowed or overflowed intermediates
+/// (including a nonzero state's exponential decay factor) reject. Depletion search is confined
+/// to durations >= 1e-120 seconds; an earlier event rejects, rather than granting free impulse.
 /// Same-build ordering is deterministic; std::exp/expm1 do NOT promise cross-platform bit replay.
 inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector<Thruster> &inThrusters,
 	Vec4Arg inCenterOfMass, const PropulsionResources &inResources, double inDeltaTime, PropulsionResult &outResult)
 {
 	using namespace PropulsionDetail;
 	if (inThrusters.size() > 4096 || !Finite(inCenterOfMass) || !Representable(Pack(inRequest.mForce, inRequest.mTorque))
-		|| !Nonnegative(inDeltaTime) || !Nonnegative(inResources.mPropellant) || !Nonnegative(inResources.mEnergy) || !Nonnegative(inResources.mPowerLimit)) return false;
-	for (double weight : inRequest.mWeights) if (!Nonnegative(weight)) return false;
+		|| !Physical(inDeltaTime) || !Nonnegative(inResources.mPropellant) || !Nonnegative(inResources.mEnergy) || !Nonnegative(inResources.mPowerLimit)) return false;
+	for (double weight : inRequest.mWeights) if (!Physical(weight)) return false;
 	for (const Thruster &t : inThrusters) if (!Valid(t)) return false;
 	PropulsionResult result;
 	result.mResources = inResources;
@@ -224,32 +271,66 @@ inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector
 	double targetPower = 0;
 	for (const auto &a : result.mActuators)
 		if (a.mThruster.mMaxForce > 0)
-			targetPower += a.mTargetForce / a.mThruster.mMaxForce * a.mThruster.mPowerDraw;
+			targetPower += Charge(a.mTargetForce, a.mThruster, a.mThruster.mPowerDraw);
 	if (!std::isfinite(targetPower)) return false;
 	if (targetPower > inResources.mPowerLimit)
 	{
 		result.mPowerLimited = true;
-		double scale = inResources.mPowerLimit == 0? 0 : std::nextafter(inResources.mPowerLimit / targetPower, 0.0);
+		double scale = PowerScale(inResources.mPowerLimit, targetPower);
 		for (auto &a : result.mActuators)
-			if (a.mThruster.mPowerDraw > 0) a.mTargetForce *= scale;
+			if (a.mThruster.mPowerDraw > 0) a.mTargetForce = Product(a.mTargetForce, scale);
 	}
 	targetPower = 0;
 	double excessPower = 0;
 	for (const auto &a : result.mActuators)
 		if (a.mThruster.mMaxForce > 0)
 		{
-			targetPower += a.mTargetForce / a.mThruster.mMaxForce * a.mThruster.mPowerDraw;
-			excessPower += std::max(0.0, a.mThruster.mForce - a.mTargetForce) / a.mThruster.mMaxForce * a.mThruster.mPowerDraw;
+			targetPower += Charge(a.mTargetForce, a.mThruster, a.mThruster.mPowerDraw);
+			excessPower += Charge(std::max(0.0, a.mThruster.mForce - a.mTargetForce), a.mThruster, a.mThruster.mPowerDraw);
 		}
-	if (!std::isfinite(excessPower)) return false;
+	if (!std::isfinite(targetPower) || !std::isfinite(excessPower)) return false;
 	double headroom = std::max(0.0, inResources.mPowerLimit - targetPower);
 	if (excessPower > headroom)
 	{
 		result.mPowerLimited = true;
-		double scale = headroom == 0? 0 : std::nextafter(headroom / excessPower, 0.0);
+		double scale = PowerScale(headroom, excessPower);
 		for (auto &a : result.mActuators)
 			if (a.mThruster.mPowerDraw > 0 && a.mThruster.mForce > a.mTargetForce)
-				a.mThruster.mForce = a.mTargetForce + (a.mThruster.mForce - a.mTargetForce) * scale;
+				a.mThruster.mForce = a.mTargetForce + Product(a.mThruster.mForce - a.mTargetForce, scale);
+	}
+	// One downward ULP on the scale does not bound the rounded products and a many-term
+	// sum. Certify the actual post-scaling envelope with outward-rounded arithmetic.
+	// Each nextafter bounds one correctly rounded nonnegative operation from above;
+	// this remains conservative when long double has no extra precision (e.g. MSVC).
+	auto powerEnvelope = [&]()
+	{
+		double upper = 0;
+		const double infinity = std::numeric_limits<double>::infinity();
+		for (const auto &a : result.mActuators)
+		{
+			if (!Nonnegative(a.mTargetForce) || !Nonnegative(a.mThruster.mForce)) return std::numeric_limits<double>::quiet_NaN();
+			double force = std::max(a.mTargetForce, a.mThruster.mForce);
+			if (force == 0 || a.mThruster.mPowerDraw == 0) continue;
+			double fraction = std::nextafter(Quotient(force, a.mThruster.mMaxForce), infinity);
+			double power = std::nextafter(Product(fraction, a.mThruster.mPowerDraw), infinity);
+			upper = std::nextafter(upper + power, infinity);
+		}
+		return upper;
+	};
+	for (int correction = 0; ; ++correction)
+	{
+		double envelope = powerEnvelope();
+		if (!Nonnegative(envelope)) return false;
+		if (envelope <= inResources.mPowerLimit) break;
+		if (correction == 8) return false;
+		result.mPowerLimited = true;
+		double scale = PowerScale(inResources.mPowerLimit, envelope);
+		for (auto &a : result.mActuators)
+			if (a.mThruster.mPowerDraw > 0)
+			{
+				a.mTargetForce = Product(a.mTargetForce, scale);
+				a.mThruster.mForce = Product(a.mThruster.mForce, scale);
+			}
 	}
 	Wrench desired = Pack(inRequest.mForce, inRequest.mTorque);
 	residual = desired;
@@ -268,9 +349,9 @@ inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector
 		{
 			const auto &a = result.mActuators[i];
 			if (a.mThruster.mMaxForce == 0) continue;
-			double seconds = IntegratedForce(a.mThruster, targets[i], time) / a.mThruster.mMaxForce;
-			if (a.mThruster.mPropellantRate > 0) cost[0] += seconds * a.mThruster.mPropellantRate;
-			if (a.mThruster.mPowerDraw > 0) cost[1] += seconds * a.mThruster.mPowerDraw;
+			double impulse = IntegratedForce(a.mThruster, targets[i], time);
+			cost[0] += Charge(impulse, a.mThruster, a.mThruster.mPropellantRate);
+			cost[1] += Charge(impulse, a.mThruster, a.mThruster.mPowerDraw);
 		}
 		return cost;
 	};
@@ -287,6 +368,7 @@ inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector
 				result.mActuators[i].mThruster.mForce = 0;
 			}
 		auto fullCost = usage(remaining);
+		if (!Nonnegative(fullCost[0]) || !Nonnegative(fullCost[1])) return false;
 		std::array<double, 2> budget { result.mResources.mPropellant, result.mResources.mEnergy };
 		std::array<double, 2> eventTime { remaining, remaining };
 		std::array<bool, 2> exhaust { false, false };
@@ -295,10 +377,14 @@ inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector
 			{
 				exhaust[r] = true;
 				// IEEE positive-double bit patterns are ordered. Bisect representable times,
-				// not a fixed absolute time grid: even tiny budgets get their impulse. At most
+				// not a fixed absolute time grid: supported tiny budgets get their impulse. At most
 				// 64 evaluations leave adjacent doubles (one-ULP event bracket), low feasible.
 				static_assert(sizeof(double) == sizeof(uint64) && std::numeric_limits<double>::is_iec559, "IEEE binary64 required");
-				uint64 low = 0, high;
+				double minimumTime = std::min(remaining, 1.0e-120);
+				auto minimumCost = usage(minimumTime);
+				if (!Nonnegative(minimumCost[0]) || !Nonnegative(minimumCost[1]) || minimumCost[r] > budget[r]) return false;
+				uint64 low, high;
+				std::memcpy(&low, &minimumTime, sizeof(low));
 				std::memcpy(&high, &remaining, sizeof(high));
 				if (fullCost[r] == budget[r]) low = high;
 				for (int iteration = 0; iteration < 64 && high - low > 1; ++iteration)
@@ -306,7 +392,9 @@ inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector
 					uint64 key = low + (high - low) / 2;
 					double mid;
 					std::memcpy(&mid, &key, sizeof(mid));
-					if (usage(mid)[r] <= budget[r]) low = key;
+					auto middleCost = usage(mid);
+					if (!Nonnegative(middleCost[0]) || !Nonnegative(middleCost[1])) return false;
+					if (middleCost[r] <= budget[r]) low = key;
 					else high = key;
 				}
 				std::memcpy(&eventTime[r], &low, sizeof(double));
@@ -324,7 +412,9 @@ inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector
 			double delivered = IntegratedForce(a.mThruster, targets[i], duration);
 			a.mDeliveredImpulse += delivered;
 			a.mThruster.mForce = FinalForce(a.mThruster, targets[i], duration);
-			double heat = a.mThruster.mMaxForce == 0? 0 : delivered / a.mThruster.mMaxForce * a.mThruster.mHeatRate;
+			double heat = Charge(delivered, a.mThruster, a.mThruster.mHeatRate);
+			// Validate before a subsequent resource hard-cut can overwrite a failed state.
+			if (!Nonnegative(delivered) || !Nonnegative(a.mThruster.mForce) || !Nonnegative(heat)) return false;
 			a.mThruster.mHeat += heat;
 			result.mHeatGenerated += heat;
 		}

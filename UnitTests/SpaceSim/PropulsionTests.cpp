@@ -2,6 +2,7 @@
 #include "UnitTestFramework.h"
 
 #include <Jolt/SpaceSim/Propulsion.h>
+#include <random>
 using namespace JPH::SpaceSim;
 
 TEST_SUITE("PropulsionTests")
@@ -276,6 +277,40 @@ TEST_SUITE("PropulsionTests")
 		CHECK(result.mActuators[0].mThruster.mForce == 0);
 	}
 
+	TEST_CASE("SharedPowerEnvelopeNeverExceedsLimitAfterRoundedScaling")
+	{
+		std::mt19937_64 random(56248);
+		std::uniform_real_distribution<double> value(0.1, 100);
+		const double limit = 2.99341;
+		for (int sample = 0; sample < 32; ++sample)
+		{
+			std::vector<Thruster> rig;
+			for (int i = 0; i < 128; ++i)
+			{
+				Thruster t;
+				t.mID = uint64(i);
+				t.mMaxForce = value(random);
+				t.mPowerDraw = value(random);
+				t.mForce = t.mMaxForce * value(random) / 100;
+				t.mResponseTime = 1;
+				rig.push_back(t);
+			}
+			for (bool spoolDown : { false, true })
+			{
+				PropulsionRequest request;
+				if (!spoolDown) request.mForce = Vec4(1.0e6f, 0, 0, 0);
+				PropulsionResult result;
+				bool ok = StepPropulsion(request, rig, Vec4::sZero(), { 0, 100, limit }, 0, result);
+				CHECK(ok);
+				if (!ok) return;
+				long double envelope = 0;
+				for (const auto &a : result.mActuators)
+					envelope += (long double)std::max(a.mTargetForce, a.mThruster.mForce) * (long double)a.mThruster.mPowerDraw / (long double)a.mThruster.mMaxForce;
+				CHECK(envelope <= (long double)limit);
+			}
+		}
+	}
+
 	TEST_CASE("PowerLimitedResponseRefinesToSameAnalyticalSolution")
 	{
 		for (int count : { 1, 60, 120, 240 })
@@ -501,6 +536,122 @@ TEST_SUITE("PropulsionTests")
 		for (size_t i = 0; i < tooMany.size(); ++i) tooMany[i].mID = uint64(i);
 		reject(request, tooMany, Vec4::sZero(), {}, 1);
 		reject(request, { valid }, Vec4::sZero(), {}, std::numeric_limits<double>::max());
+		for (double outside : { std::nextafter(1.0e-100, 0.0), std::nextafter(1.0e100, std::numeric_limits<double>::infinity()) })
+		{
+			reject(request, { valid }, Vec4::sZero(), {}, outside);
+			PropulsionRequest r = request;
+			r.mWeights[9] = outside;
+			reject(r, { valid }, Vec4::sZero(), {}, 1);
+			for (double Thruster::*field : { &Thruster::mMaxForce, &Thruster::mResponseTime, &Thruster::mPropellantRate,
+				&Thruster::mPowerDraw, &Thruster::mHeatRate, &Thruster::mHealth, &Thruster::mForce, &Thruster::mHeat })
+			{
+				Thruster bad = valid;
+				bad.*field = outside;
+				reject(request, { bad }, Vec4::sZero(), {}, 1);
+			}
+		}
+	}
+
+	TEST_CASE("NumericEnvelopeEndpointsRetainRepresentableTinyImpulseAndResponse")
+	{
+		Thruster t;
+		t.mMaxForce = t.mForce = t.mHealth = t.mResponseTime = 1.0e-100;
+		t.mPropellantRate = t.mPowerDraw = t.mHeatRate = t.mHeat = 1.0e-100;
+		PropulsionRequest request;
+		request.mForce = Vec4::sAxisX();
+		PropulsionResult result;
+		bool ok = StepPropulsion(request, { t }, Vec4::sZero(), { 1, 1, 1 }, 1.0e-100, result);
+		CHECK(ok);
+		if (!ok) return;
+		CHECK(std::abs(result.mActuators[0].mDeliveredImpulse / 1.0e-300 - 1) < 1.0e-14);
+		CHECK(std::abs(result.mHeatGenerated / 1.0e-300 - 1) < 1.0e-14);
+		t = Thruster();
+		t.mMaxForce = t.mResponseTime = t.mHeat = 1.0e100;
+		request.mForce = Vec4(1.0e30f, 0, 0, 0);
+		request.mWeights.fill(1.0e100);
+		ok = StepPropulsion(request, { t }, Vec4::sZero(), {}, 1.0e-100, result);
+		CHECK(ok);
+		if (!ok) return;
+		double target = double(request.mForce.GetX());
+		CHECK(std::abs(result.mActuators[0].mDeliveredImpulse / (target * 5.0e-301) - 1) < 1.0e-14);
+		CHECK(std::abs(result.mActuators[0].mThruster.mForce / (target * 1.0e-200) - 1) < 1.0e-14);
+		CHECK(StepPropulsion({}, {}, Vec4::sZero(), {}, 1.0e100, result));
+	}
+
+	TEST_CASE("UnsupportedNumericRangesRejectAtomicallyInsteadOfDeliveringPhantomThrust")
+	{
+		PropulsionResult output;
+		output.mImpulse = Vec4(1, 2, 3, 4);
+		output.mEnergyConsumed = 17;
+		Thruster sentinel;
+		sentinel.mID = 123;
+		output.mActuators.push_back({ sentinel, 7, 8 });
+		auto reject = [&](Thruster t, float force, double dt, PropulsionResources resources)
+		{
+			PropulsionRequest request;
+			request.mForce = Vec4(force, 0, 0, 0);
+			CHECK_FALSE(StepPropulsion(request, { t }, Vec4::sZero(), resources, dt, output));
+			CHECK(output.mImpulse == Vec4(1, 2, 3, 4));
+			CHECK(output.mEnergyConsumed == 17);
+			CHECK(output.mActuators.size() == 1);
+			CHECK(output.mActuators[0].mThruster.mID == 123);
+			CHECK(output.mActuators[0].mTargetForce == 7);
+			CHECK(output.mActuators[0].mDeliveredImpulse == 8);
+		};
+		Thruster t;
+		t.mMaxForce = t.mPropellantRate = t.mPowerDraw = t.mHeatRate = 1.0e308;
+		// Division-first resource accounting used to erase all three nonzero charges.
+		reject(t, 1, 1.0e-30, { 1.0e-31, 1.0e-31, 1 });
+		t.mPropellantRate = t.mHeatRate = 0;
+		// Division-first instantaneous power used to permit thrust at a zero limit.
+		reject(t, 1.0e-30f, 1.0e30, { 0, 10, 0 });
+		t = Thruster();
+		t.mMaxForce = t.mForce = 1.0e200;
+		t.mResponseTime = 1.0e-200;
+		// dt / tau overflow used to erase a representable unit spool-down impulse.
+		reject(t, 0, 1.0e200, {});
+		t = Thruster();
+		t.mMaxForce = 1.0e30;
+		t.mResponseTime = 1.0e30;
+		// dt / tau underflows, although target * dt / tau is representable.
+		reject(t, 1.0e30f, 1.0e-300, {});
+	}
+
+	TEST_CASE("DerivedResourceResponseAndPowerUnderflowRejectAtomically")
+	{
+		PropulsionResult output;
+		output.mHeatGenerated = 123;
+		PropulsionRequest request;
+		request.mForce = Vec4::sAxisX();
+		auto reject = [&](Thruster t, PropulsionResources resources, double dt)
+		{
+			output = PropulsionResult();
+			output.mHeatGenerated = 123;
+			CHECK_FALSE(StepPropulsion(request, { t }, Vec4::sZero(), resources, dt, output));
+			CHECK(output.mHeatGenerated == 123);
+			CHECK(output.mActuators.empty());
+		};
+		Thruster t;
+		t.mMaxForce = t.mPropellantRate = 1.0e100;
+		// The input envelope alone is insufficient: a tiny depletion event can still
+		// make impulse / max underflow and then multiply back to a representable charge.
+		reject(t, { 1.0e-300, 0, 0 }, 1);
+		t.mPropellantRate = 0;
+		t.mHeatRate = 1.0e100;
+		t.mResponseTime = 1.0e100;
+		reject(t, {}, 1.0e-100);
+		// All three analytic response quantities must be checked, not only dt / tau.
+		t.mResponseTime = 1.0e-100;
+		t.mPropellantRate = 1.0e100;
+		reject(t, { 1.0e-300, 0, 0 }, 1);
+		t = Thruster();
+		t.mMaxForce = t.mPowerDraw = 10;
+		reject(t, { 0, 10, std::numeric_limits<double>::denorm_min() }, 1.0e100);
+		// A later depletion hard-cut must not hide an unsupported analytic end state.
+		t = Thruster();
+		t.mMaxForce = t.mForce = t.mPropellantRate = t.mResponseTime = 1;
+		request.mForce = Vec4::sZero();
+		reject(t, { 1, 0, 0 }, 800);
 	}
 
 	TEST_CASE("EmptyZeroDurationAndUnreachableRequestsHaveNoImplicitForces")

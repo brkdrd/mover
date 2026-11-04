@@ -17,6 +17,7 @@ set(JOLT_PHYSICS_SRC_FILES
 #	${JOLT_PHYSICS_ROOT}/AABBTree/AABBTreeToBuffer.h
 #	${JOLT_PHYSICS_ROOT}/AABBTree/NodeCodec/NodeCodecQuadTreeHalfFloat.h
 #	${JOLT_PHYSICS_ROOT}/AABBTree/TriangleCodec/TriangleCodecIndexed8BitPackSOA4Flags.h
+	${JOLT_PHYSICS_ROOT}/SpaceSim/MassModel.h
 	${JOLT_PHYSICS_ROOT}/ConfigurationString.h
 	${JOLT_PHYSICS_ROOT}/Compute/ComputeBuffer.h
 	${JOLT_PHYSICS_ROOT}/Compute/ComputeQueue.h

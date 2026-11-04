@@ -59,7 +59,7 @@ bool ObjectStreamTextIn::ReadDataType(EOSDataType &outType)
 			outType = EOSDataType::T_Double3;
 		else if (token == "vec3")
 			outType = EOSDataType::T_Vec3;
-		else if (token == "dvec3")
+		else if (token == "dvec4")
 			outType = EOSDataType::T_DVec4;
 		else if (token == "vec4")
 			outType = EOSDataType::T_Vec4;
@@ -327,10 +327,10 @@ bool ObjectStreamTextIn::ReadPrimitiveData(Vec3 &outPrimitive)
 
 bool ObjectStreamTextIn::ReadPrimitiveData(DVec4 &outPrimitive)
 {
-	double x, y, z;
-	if (!ReadPrimitiveData(x) || !ReadPrimitiveData(y) || !ReadPrimitiveData(z))
+	double x, y, z, w;
+	if (!ReadPrimitiveData(x) || !ReadPrimitiveData(y) || !ReadPrimitiveData(z) || !ReadPrimitiveData(w))
 		return false;
-	outPrimitive = DVec4(x, y, z);
+	outPrimitive = DVec4(x, y, z, w);
 	return true;
 }
 

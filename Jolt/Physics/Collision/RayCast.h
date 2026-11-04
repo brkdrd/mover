@@ -23,8 +23,10 @@ struct RayCastT
 	/// Transform this ray using inTransform (rigid transform with translation)
 	RayCastType					Transformed(typename Mat::ArgType inTransform) const
 	{
-		Vec ray_origin = inTransform * mOrigin;
-		Vec4 ray_direction(inTransform * (mOrigin + mDirection) - ray_origin);
+		Vec ray_origin(inTransform * mOrigin);
+		// Transform a displacement by the linear part only. Endpoint subtraction
+		// loses short rays at large translations (even if positions use doubles).
+		Vec4 ray_direction = inTransform.Multiply3x3(mDirection);
 		return { ray_origin, ray_direction };
 	}
 

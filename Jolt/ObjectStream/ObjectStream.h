@@ -32,7 +32,9 @@ protected:
 	/// Identifier for objects
 	using Identifier = uint32;
 
-	static constexpr int			sVersion = 1;
+	// 4D format: DVec4 now contains four doubles and uses the dvec4 text token.
+	// Reject legacy 1.00 streams rather than interpreting the next field as W.
+	static constexpr int			sVersion = 2;
 	static constexpr int			sRevision = 0;
 	static constexpr Identifier		sNullIdentifier = 0;
 };

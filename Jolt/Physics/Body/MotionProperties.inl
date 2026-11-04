@@ -274,7 +274,7 @@ void MotionProperties::ResetSleepTestSpheres(const RVec4 *inPoints)
 #ifdef JPH_DOUBLE_PRECISION
 	// Make spheres relative to the first point and initialize them to zero radius
 	DVec4 offset = inPoints[0];
-	offset.StoreDouble3(&mSleepTestOffset);
+	offset.StoreDouble4(&mSleepTestOffset);
 	mSleepTestSpheres[0] = Sphere(Vec4::sZero(), 0.0f);
 	for (int i = 1; i < 3; ++i)
 	{

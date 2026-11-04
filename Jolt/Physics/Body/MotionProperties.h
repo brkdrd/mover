@@ -287,7 +287,7 @@ public:
 	uint32					GetIndexInActiveBodiesInternal() const							{ return mIndexInActiveBodies; }
 
 #ifdef JPH_DOUBLE_PRECISION
-	inline DVec4			GetSleepTestOffset() const										{ return DVec4::sLoadDouble3Unsafe(mSleepTestOffset); }
+	inline DVec4			GetSleepTestOffset() const										{ return DVec4(mSleepTestOffset); }
 #endif // JPH_DOUBLE_PRECISION
 
 	/// Reset spheres to center around inPoints with radius 0
@@ -339,7 +339,7 @@ private:
 
 	// Sleep test data
 #ifdef JPH_DOUBLE_PRECISION
-	Double3					mSleepTestOffset;												///< mSleepTestSpheres are relative to this offset to prevent floating point inaccuracies
+	Double4					mSleepTestOffset;												///< mSleepTestSpheres are relative to this offset to prevent floating point inaccuracies
 #endif // JPH_DOUBLE_PRECISION
 	Sphere					mSleepTestSpheres[3];											///< Measure motion for 3 points on the body to see if it is resting
 	float					mSleepTestTimer;												///< How long this body has been within the movement tolerance

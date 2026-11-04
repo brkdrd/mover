@@ -8,6 +8,8 @@ set(UNIT_TESTS_SRC_FILES
 	${UNIT_TESTS_ROOT}/SpaceSim/PropulsionTests.cpp
 	${UNIT_TESTS_ROOT}/Core/ArrayTest.cpp
 	${UNIT_TESTS_ROOT}/Core/BinaryHeapTest.cpp
+	${UNIT_TESTS_ROOT}/Core/DoublePositionDeterminismLogTests.cpp
+	${UNIT_TESTS_ROOT}/Core/DoublePositionStreamTests.cpp
 	${UNIT_TESTS_ROOT}/Core/FPFlushDenormalsTest.cpp
 	${UNIT_TESTS_ROOT}/Core/HashCombineTest.cpp
 	${UNIT_TESTS_ROOT}/Core/InsertionSortTest.cpp
@@ -29,6 +31,7 @@ set(UNIT_TESTS_SRC_FILES
 	${UNIT_TESTS_ROOT}/Geometry/EllipseTest.cpp
 	${UNIT_TESTS_ROOT}/Geometry/EPATests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/GJKTests.cpp
+	${UNIT_TESTS_ROOT}/Geometry/MortonCodeTests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/PlaneTests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/RayAABoxTests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/RaySphereTests.cpp
@@ -71,6 +74,7 @@ set(UNIT_TESTS_SRC_FILES
 	${UNIT_TESTS_ROOT}/Physics/ConstraintPartTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/ConvexVsTrianglesTest.cpp
 #	${UNIT_TESTS_ROOT}/Physics/DistanceConstraintTests.cpp
+	${UNIT_TESTS_ROOT}/Physics/DoublePositionSleepTests.cpp
 	${UNIT_TESTS_ROOT}/Physics/DynamicsConventionsTest.cpp
 	${UNIT_TESTS_ROOT}/Physics/MassRoundTripTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/EstimateCollisionResponseTest.cpp

@@ -36,7 +36,7 @@ public:
 		Write(len);
 		if (!IsFailed())
 		{
-			if constexpr (std::is_same_v<T, Vec3> || std::is_same_v<T, DVec4>)
+			if constexpr (std::is_same_v<T, Vec3>)
 			{
 				// These types have unused components that we don't want to write
 				for (typename Array<T, A>::size_type i = 0; i < len; ++i)
@@ -77,10 +77,10 @@ public:
 		WriteBytes(&inVec, 3 * sizeof(float));
 	}
 
-	/// Write a DVec4 (don't write W)
+	/// Write all four spatial doubles
 	void				Write(const DVec4 &inVec)
 	{
-		WriteBytes(&inVec, 3 * sizeof(double));
+		WriteBytes(&inVec, 4 * sizeof(double));
 	}
 };
 

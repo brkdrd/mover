@@ -500,6 +500,182 @@ TEST_SUITE("SpaceSimMass")
         CHECK(tx.mLedger.mAddedEnergy == 0);
     }
 
+    TEST_CASE("ComovingUnequalMassDockingDoesNotInventSpinUnderBoost")
+    {
+        MassBody a, b;
+        a.mID = 1; b.mID = 2;
+        a.mComponents.push_back(Component(1, 2, {}, { 1, 1, 1, 1 }));
+        b.mComponents.push_back(Component(2, 3, {}, { 1, 1, 1, 1 }));
+        b.mOrigin = { 0, 0.1, 0, 0 };
+        MassTransaction rest, boosted;
+        MASS_REQUIRE(MassModel::Dock({ a, b }, 3, rest));
+        a.mLinearVelocity = b.mLinearVelocity = { 1e8, 0, 0, 0 };
+        MASS_REQUIRE(MassModel::Dock({ a, b }, 3, boosted));
+        CHECK(boosted.mBodies[0].mLinearVelocity == a.mLinearVelocity);
+        CHECK(boosted.mBodies[0].mAngularVelocity == MassBivector {});
+        CHECK(boosted.mLedger.mAddedEnergy == 0);
+        CHECK(boosted.mLedger.mDissipatedEnergy == rest.mLedger.mDissipatedEnergy);
+    }
+
+    TEST_CASE("NonbinaryOffsetFragmentationSurvivesAbsoluteVelocityRounding")
+    {
+        MassBody body;
+        body.mID = 1;
+        body.mComponents = { Component(1, 2, {}, { 1, 1, 1, 1 }), Component(2, 3, { 0, 0.3, 0, 0 }, { 1, 1, 1, 1 }) };
+        body.mAngularVelocity[0] = 1;
+        MassTransaction rest, boosted;
+        MASS_REQUIRE(MassModel::Fragment(body, { { 2, { 1 } }, { 3, { 2 } } }, rest));
+        body.mLinearVelocity = { 1e8, 0, 0, 0 };
+        MASS_REQUIRE(MassModel::Fragment(body, { { 2, { 1 } }, { 3, { 2 } } }, boosted));
+        CHECK(boosted.mLedger.mEnergyFrameVelocity == body.mLinearVelocity);
+        // Output is an absolute double velocity: compare to the correctly rounded sum,
+        // not to an unrealistically exact subtraction of the common boost.
+        CHECK(boosted.mBodies[0].mLinearVelocity[0] == 1e8 - 0.18);
+        CHECK(boosted.mBodies[1].mLinearVelocity[0] == 1e8 + 0.12);
+        for (const auto &piece : boosted.mBodies) CHECK(piece.mAngularVelocity == body.mAngularVelocity);
+        CHECK_APPROX_EQUAL(boosted.mLedger.mBefore.mKineticEnergy, 2.054, 1e-14);
+        CHECK(rest.mLedger.mVelocityRoundingEnergyBound == 0);
+        CHECK(boosted.mLedger.mVelocityRoundingEnergyBound > 0);
+        CHECK(boosted.mLedger.mVelocityRoundingEnergyBound < 1e-8);
+        double error = boosted.mLedger.mAddedEnergy + boosted.mLedger.mDissipatedEnergy;
+        CHECK(error > 1e-9 * boosted.mLedger.mBefore.mKineticEnergy); // Old blanket relative test rejects.
+        CHECK(error <= boosted.mLedger.mVelocityRoundingEnergyBound + 1e-14);
+    }
+
+    TEST_CASE("ComovingPointExpulsionDoesNotInventRetainedSpinUnderBoost")
+    {
+        MassBody body;
+        body.mID = 1;
+        body.mComponents = { Component(1, 2, {}, { 1, 1, 1, 1 }), Component(2, 3, { 0, 0.7, 0, 0 }, {}) };
+        LumpedExhaust gas;
+        gas.mID = 2; gas.mMass = 3; gas.mWorldPosition = { 0, 0.7, 0, 0 };
+        MassTransaction rest, boosted;
+        MASS_REQUIRE(MassModel::Expel(body, { body.mComponents[0] }, { gas }, rest));
+        body.mLinearVelocity = gas.mWorldVelocity = { 1e8, 0, 0, 0 };
+        MASS_REQUIRE(MassModel::Expel(body, { body.mComponents[0] }, { gas }, boosted));
+        CHECK(boosted.mBodies[0].mLinearVelocity == body.mLinearVelocity);
+        CHECK(boosted.mBodies[0].mAngularVelocity == rest.mBodies[0].mAngularVelocity);
+        CHECK(boosted.mLedger.mAddedEnergy == 0);
+        CHECK(boosted.mLedger.mDissipatedEnergy == 0);
+    }
+
+    TEST_CASE("SeededGeneralCoordinatesAndBoostsPreserveCentralTopologyMotion")
+    {
+        UnitTestRandom random(0xB00574D);
+        std::uniform_real_distribution<double> u(-1.0, 1.0);
+        for (int trial = 0; trial < 100; ++trial)
+        {
+            CAPTURE(trial);
+            MassVector boost;
+            for (double &x : boost) x = 1e8 * u(random);
+            MassBody body;
+            body.mID = 1;
+            body.mRotation = Rotor::sExp(Bivec(float(u(random)), float(u(random)), float(u(random)), float(u(random)), float(u(random)), float(u(random))));
+            for (double &x : body.mOrigin) x = 10 * u(random);
+            for (double &x : body.mAngularVelocity) x = 2 * u(random);
+            for (uint64 id = 1; id <= 4; ++id)
+                body.mComponents.push_back(Component(id, float(id + 1), { 2*u(random), 2*u(random), 2*u(random), 2*u(random) }, { 1, 2, 3, 4 }));
+            MassTransaction rest, boosted;
+            MASS_REQUIRE(MassModel::Fragment(body, { { 11, { 1, 3 } }, { 12, { 2, 4 } } }, rest));
+            body.mLinearVelocity = boost;
+            MASS_REQUIRE(MassModel::Fragment(body, { { 11, { 1, 3 } }, { 12, { 2, 4 } } }, boosted));
+            // Independent long-double energy perturbation bound, using the zero-speed
+            // outputs as the ideal local velocities, not the production TwoSum residue.
+            long double bound = 0;
+            for (size_t n = 0; n < rest.mBodies.size(); ++n)
+            {
+                BodyMassData data;
+                MASS_REQUIRE(MassModel::Derive(rest.mBodies[n], data));
+                CHECK(boosted.mBodies[n].mAngularVelocity == rest.mBodies[n].mAngularVelocity);
+                for (size_t i = 0; i < 4; ++i)
+                {
+                    double relative = rest.mBodies[n].mLinearVelocity[i];
+                    double stored = boosted.mBodies[n].mLinearVelocity[i];
+                    CHECK(stored == boost[i] + relative);
+                    long double e = (static_cast<long double>(stored) - boost[i]) - relative;
+                    bound += data.mLocal.mMass * (std::abs(static_cast<long double>(relative) * e) + 0.5L * e * e);
+                }
+            }
+            CHECK_APPROX_EQUAL(boosted.mLedger.mVelocityRoundingEnergyBound, double(bound), 1e-20);
+            CHECK(boosted.mLedger.mAddedEnergy + boosted.mLedger.mDissipatedEnergy
+                <= double(bound) + 1e-9 * boosted.mLedger.mBefore.mKineticEnergy);
+            CHECK(rest.mLedger.mVelocityRoundingEnergyBound == 0);
+
+            // A boost quantizes input velocities too. Express the SAME represented inputs
+            // in a nearby frame; central spin should be bit-identical, not merely close.
+            auto nearby = boosted.mBodies;
+            const MassVector anchor = nearby.front().mLinearVelocity;
+            for (auto &piece : nearby)
+                for (size_t i = 0; i < 4; ++i) piece.mLinearVelocity[i] -= anchor[i];
+            MassTransaction docked, nearbyDocked;
+            MASS_REQUIRE(MassModel::Dock(boosted.mBodies, 30, docked));
+            MASS_REQUIRE(MassModel::Dock(nearby, 30, nearbyDocked));
+            CHECK(docked.mBodies[0].mAngularVelocity == nearbyDocked.mBodies[0].mAngularVelocity);
+            for (size_t i = 0; i < 4; ++i)
+                CHECK(docked.mBodies[0].mLinearVelocity[i] == anchor[i] + nearbyDocked.mBodies[0].mLinearVelocity[i]);
+
+            // Co-moving unequal masses and arbitrary four-lane offsets must never
+            // generate spin or kinetic work, regardless of first-moment roundoff.
+            for (auto &piece : nearby)
+            {
+                piece.mLinearVelocity = boost;
+                piece.mAngularVelocity = {};
+            }
+            MASS_REQUIRE(MassModel::Dock(nearby, 30, docked));
+            CHECK(docked.mBodies[0].mAngularVelocity == MassBivector {});
+            CHECK(docked.mLedger.mAddedEnergy == 0);
+            CHECK(docked.mLedger.mDissipatedEnergy == 0);
+        }
+    }
+
+    TEST_CASE("SeededPointExpulsionUsesTheSameStableVelocityReferenceUnderBoost")
+    {
+        UnitTestRandom random(0xE4B0057);
+        std::uniform_real_distribution<double> u(-1.0, 1.0);
+        for (int trial = 0; trial < 100; ++trial)
+        {
+            CAPTURE(trial);
+            MassBody body;
+            body.mID = 1;
+            for (double &x : body.mOrigin) x = 10 * u(random);
+            for (double &x : body.mLinearVelocity) x = 1e8 * u(random);
+            for (double &x : body.mAngularVelocity) x = u(random);
+            body.mComponents.push_back(Component(1, 2, {}, { 1, 2, 3, 4 }));
+            std::vector<LumpedExhaust> exhaust;
+            for (uint64 id = 2; id <= 4; ++id)
+            {
+                auto c = Component(id, float(id + 1), { u(random), u(random), u(random), u(random) }, {});
+                body.mComponents.push_back(c);
+                LumpedExhaust gas;
+                gas.mID = id; gas.mMass = c.mProperties.mMass;
+                for (size_t i = 0; i < 4; ++i)
+                {
+                    gas.mWorldPosition[i] = body.mOrigin[i] + c.mLocalCOM[i];
+                    gas.mWorldVelocity[i] = body.mLinearVelocity[i] + 3*u(random);
+                }
+                exhaust.push_back(gas);
+            }
+            auto nearbyBody = body;
+            nearbyBody.mLinearVelocity = {};
+            auto nearbyExhaust = exhaust;
+            for (auto &gas : nearbyExhaust)
+                for (size_t i = 0; i < 4; ++i) gas.mWorldVelocity[i] -= body.mLinearVelocity[i];
+            MassTransaction boosted, nearby;
+            MASS_REQUIRE(MassModel::Expel(body, { body.mComponents[0] }, exhaust, boosted));
+            MASS_REQUIRE(MassModel::Expel(nearbyBody, { body.mComponents[0] }, nearbyExhaust, nearby));
+            CHECK(boosted.mBodies[0].mAngularVelocity == nearby.mBodies[0].mAngularVelocity);
+            for (size_t i = 0; i < 4; ++i)
+                CHECK(boosted.mBodies[0].mLinearVelocity[i] == body.mLinearVelocity[i] + nearby.mBodies[0].mLinearVelocity[i]);
+            body.mAngularVelocity = {};
+            for (auto &gas : exhaust) gas.mWorldVelocity = body.mLinearVelocity;
+            MASS_REQUIRE(MassModel::Expel(body, { body.mComponents[0] }, exhaust, boosted));
+            CHECK(boosted.mBodies[0].mAngularVelocity == MassBivector {});
+            CHECK(boosted.mBodies[0].mLinearVelocity == body.mLinearVelocity);
+            CHECK(boosted.mLedger.mAddedEnergy == 0);
+            CHECK(boosted.mLedger.mDissipatedEnergy == 0);
+        }
+    }
+
     TEST_CASE("SymmetricIndefiniteTensorsAndSingularFragmentsReject")
     {
         auto c = Component(1, 2, {}, { 2, 2, 2, 2 });

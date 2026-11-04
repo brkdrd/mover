@@ -76,6 +76,7 @@ struct MassLedger
     MassMomentum mBefore, mAfter, mExported, mResidual;
     double mAddedEnergy = 0; ///< Positive net kinetic work required by this model.
     double mDissipatedEnergy = 0; ///< Positive kinetic energy removed (heat/deformation etc.).
+    double mVelocityRoundingEnergyBound = 0; ///< Fragment-only bound from storing absolute double velocities; not work.
 };
 
 /// Point-mass flux sample at the transaction epoch. World velocity is ABSOLUTE, not nozzle
@@ -297,19 +298,33 @@ inline bool Rotation(const Rotor &rotor, MassMatrix &out)
 ///   must have every Cholesky pivot >1e-10 of its largest diagonal. No pseudo-inverse.
 /// - Mass closure 1e-12 relative; momentum and exhaust first moment closure 1e-9 of
 ///   sums of absolute participant scales (floor 1e-12). Residuals are published, not hidden.
-///   Free fragmentation energy error <=1e-9 relative. Docking may add <=1e-6 relative
-///   kinetic energy solely as a float-Rotor composition budget, explicitly in the ledger.
+///   Free fragmentation accepts |delta K| <=1e-9*max(K_before, 1e-12) + B_v. B_v is
+///   sum_{fragment,axis} m*(|u|*|e| + e^2/2), where u = omega*(COM_fragment-COM_before)
+///   and e is the actual rounding residue of storing V_before+u as an absolute double.
+///   TwoSum measures that residue; mVelocityRoundingEnergyBound publishes the bound.
+///   Actual energy differences remain in the work/dissipation entries, never clamped away.
+///   Docking may add <=1e-6*max(K_before, 1e-12) as a float-Rotor composition budget.
 /// - Ledger kinetic energies use the incoming system's COM-velocity frame to resolve
 ///   small work at large common speed; momenta remain world components. Derive() alone
-///   reports world-frame kinetic energy. Absolute global angular momentum is inherently
-///   ill-conditioned far from its origin; ledger origins are nearby world COMs.
+///   reports world-frame kinetic energy. Central spin solves use relative velocities and
+///   nearby COM offsets, never a difference of world orbital angular momenta. Absolute
+///   global angular momentum is inherently ill-conditioned far from its origin; ledger
+///   origins are nearby world COMs. Already-quantized input velocities cannot be recovered.
+///   Rounding analysis assumes binary64 round-to-nearest without fast-math reassociation;
+///   subnormal-scale accuracy and arbitrary ill-conditioned cancellations are not promised.
 ///
 /// Evidence envelope (MassModelTests): independent 32-particle, general Spin(4) references
 /// and 100 seeded redistribution/fragment/remerge trials at component masses 2..5,
 /// offsets <=2, speeds <=3, spin components <=2; 100 multi-lump exhaust trials; exact
 /// analytical examples; 1e6:1 mass-ratio docking; 1e8 coordinate recentering/quarter-unit
-/// aggregation and 1e8 common-speed docking. Limits above prevent overflow, NOT a uniform accuracy guarantee
-/// over every mass ratio/conditioning. Rebase for tiny features at large coordinates.
+/// aggregation; unequal-mass 0.1-offset docking / 0.3-offset fragmentation at speed 1e8;
+/// 100 additional general-Spin(4) fragment/remerge trials with double-distributed offsets
+/// <=2, origins <=10 and independent common boosts <=1e8 in all four lanes; 100 boosted
+/// multi-point exhaust trials (masses 2..5, offsets <=1, relative speeds <=3). These check
+/// absolute-velocity quantization against an independent long-double bound and central
+/// spin covariance for identical represented relative velocities, including exact zero
+/// spin/work for co-moving participants. Limits above prevent overflow, NOT a uniform
+/// accuracy guarantee over every mass ratio/conditioning. Rebase tiny distant features.
 ///
 /// Not implemented here: live physics commit/locking/cache/shape replacement, collision
 /// separation, joints, chemical/thermal resource authorization, separation impulses,
@@ -392,7 +407,7 @@ public:
         if (!MassDetail::Rotation(body.mRotation, rotation)) return false;
         MassVector shift = MassDetail::Transform(rotation, MassDetail::Sub(before.mLocal.mLocalCOM, target.mLocalCOM));
         for (size_t i = 0; i < 4; ++i) changed.mOrigin[i] += shift[i];
-        if (!SetMomentum(changed, before.mMomentum.mLinear, before.mSpinMomentum, before.mWorldCOM)) return false;
+        if (!SetCentralMomentum(changed, body.mLinearVelocity, before.mSpinMomentum)) return false;
         result.mBodies.push_back(std::move(changed));
         if (!Ledger({ body }, before.mWorldCOM, {}, result)) return false;
         out = std::move(result);
@@ -414,6 +429,7 @@ public:
         if (count != body.mComponents.size()) return false;
         MassTransaction result;
         std::vector<uint64> used, bodyIDs;
+        MassDetail::Sum velocityRoundingEnergyBound;
         used.reserve(count); bodyIDs.reserve(requests.size());
         for (const auto &request : requests)
         {
@@ -432,7 +448,17 @@ public:
             BodyMassData data;
             if (!Derive(piece, data)) return false;
             MassVector velocity = MassDetail::Contract(body.mAngularVelocity, MassDetail::Sub(data.mWorldCOM, initial.mWorldCOM));
-            for (size_t i = 0; i < 4; ++i) piece.mLinearVelocity[i] = body.mLinearVelocity[i] + velocity[i];
+            for (size_t i = 0; i < 4; ++i)
+            {
+                double a = body.mLinearVelocity[i], b = velocity[i], sum = a + b;
+                piece.mLinearVelocity[i] = sum;
+                // TwoSum recovers the actual rounding residue of the absolute-velocity
+                // addition (no overflow in the validated envelope). For e = stored - ideal,
+                // |delta K| <= m (|v_relative| |e| + e^2 / 2), in the incoming COM frame.
+                double bv = sum - a;
+                double e = std::abs((a - (sum - bv)) + (b - bv));
+                velocityRoundingEnergyBound.Add(data.mLocal.mMass * (std::abs(b) * e + 0.5 * e * e));
+            }
             result.mBodies.push_back(std::move(piece));
         }
         std::sort(used.begin(), used.end()); std::sort(bodyIDs.begin(), bodyIDs.end());
@@ -440,8 +466,10 @@ public:
             || std::adjacent_find(bodyIDs.begin(), bodyIDs.end()) != bodyIDs.end()) return false;
         std::sort(result.mBodies.begin(), result.mBodies.end(), [](const MassBody &a, const MassBody &b) { return a.mID < b.mID; });
         if (!Ledger({ body }, initial.mWorldCOM, {}, result)) return false;
+        result.mLedger.mVelocityRoundingEnergyBound = velocityRoundingEnergyBound.Get();
         double energyError = result.mLedger.mAddedEnergy + result.mLedger.mDissipatedEnergy;
-        if (energyError > 1e-9 * std::max(result.mLedger.mBefore.mKineticEnergy, 1e-12)) return false;
+        if (energyError > 1e-9 * std::max(result.mLedger.mBefore.mKineticEnergy, 1e-12)
+            + result.mLedger.mVelocityRoundingEnergyBound) return false;
         out = std::move(result);
         return true;
     }
@@ -465,13 +493,18 @@ public:
         merged.mID = newBodyID;
         merged.mOrigin = first.mWorldCOM;
         MomentumSum sum;
+        std::vector<BodyMassData> incoming;
         uint64 previous = 0;
         for (const auto &body : ordered)
         {
             BodyMassData data;
             if (body.mID == previous || !Derive(body, data, first.mWorldCOM)) return false;
             previous = body.mID;
-            sum.Add(data.mMomentum);
+            incoming.push_back(data);
+            MassMomentum relative = data.mMomentum;
+            for (size_t i = 0; i < 4; ++i)
+                relative.mLinear[i] = data.mLocal.mMass * (body.mLinearVelocity[i] - ordered.front().mLinearVelocity[i]);
+            sum.Add(relative);
             MassMatrix rotation;
             if (!MassDetail::Rotation(body.mRotation, rotation)) return false;
             for (const auto &component : body.mComponents)
@@ -486,7 +519,26 @@ public:
         }
         std::sort(merged.mComponents.begin(), merged.mComponents.end(), [](const ComponentMass &a, const ComponentMass &b) { return a.mID < b.mID; });
         MassMomentum target = sum.Get();
-        if (!SetMomentum(merged, target.mLinear, target.mAngular, first.mWorldCOM)) return false;
+        MassVector mean {}, velocity {};
+        for (size_t i = 0; i < 4; ++i)
+        {
+            mean[i] = target.mLinear[i] / target.mMass;
+            velocity[i] = ordered.front().mLinearVelocity[i] + mean[i];
+        }
+        BodyMassData combined;
+        if (!Derive(merged, combined)) return false;
+        MassDetail::Sum central[6];
+        for (size_t n = 0; n < ordered.size(); ++n)
+        {
+            MassVector p;
+            for (size_t i = 0; i < 4; ++i)
+                p[i] = incoming[n].mLocal.mMass * ((ordered[n].mLinearVelocity[i] - ordered.front().mLinearVelocity[i]) - mean[i]);
+            auto orbital = MassDetail::Wedge(p, MassDetail::Sub(incoming[n].mWorldCOM, combined.mWorldCOM));
+            for (size_t i = 0; i < 6; ++i) central[i].Add(incoming[n].mSpinMomentum[i] + orbital[i]);
+        }
+        MassBivector spin;
+        for (size_t i = 0; i < 6; ++i) spin[i] = central[i].Get();
+        if (!SetCentralMomentum(merged, velocity, spin)) return false;
         MassTransaction result;
         result.mBodies.push_back(std::move(merged));
         if (!Ledger(ordered, first.mWorldCOM, {}, result)) return false;
@@ -496,9 +548,10 @@ public:
         return true;
     }
 
-    /// Instantaneous lumped flux: subtract exported p and p wedge x, then solve remaining
-    /// velocities. Do NOT also apply thrust/recoil for the same exhaust. Retained component
-    /// masses cannot increase; removed mass and first spatial moment must close exactly to
+    /// Instantaneous lumped flux: subtract exported relative p and p wedge x in the incoming
+    /// COM-velocity frame, then solve central spin; world momenta are a separate ledger.
+    /// Do NOT also apply thrust/recoil for the same exhaust. Retained component masses
+    /// cannot increase; removed mass and first spatial moment must close exactly to
     /// the declared tolerance. Central shape changes are caller's explicit lump approximation.
     static bool Expel(const MassBody &body, const std::vector<ComponentMass> &retained,
         const std::vector<LumpedExhaust> &exhaust, MassTransaction &out)
@@ -517,6 +570,7 @@ public:
         std::sort(ordered.begin(), ordered.end(), [](const LumpedExhaust &a, const LumpedExhaust &b) { return a.mID < b.mID; });
         MomentumSum sum;
         MassDetail::Sum first[4];
+        MassDetail::Sum relativeLinear[4], relativeAngular[6];
         double firstScale = 0;
         MassVector restOffset = MassDetail::Sub(rest.mWorldCOM, initial.mWorldCOM);
         for (size_t i = 0; i < 4; ++i)
@@ -542,16 +596,30 @@ public:
             }
             m.mAngular = MassDetail::Wedge(m.mLinear, offset);
             sum.Add(m);
+            MassVector p;
+            for (size_t i = 0; i < 4; ++i)
+            {
+                p[i] = gas.mMass * (gas.mWorldVelocity[i] - body.mLinearVelocity[i]);
+                relativeLinear[i].Add(p[i]);
+            }
+            auto orbital = MassDetail::Wedge(p, offset);
+            for (size_t i = 0; i < 6; ++i) relativeAngular[i].Add(orbital[i]);
         }
         MassMomentum exported = sum.Get();
         if (!NearMass(rest.mLocal.mMass + exported.mMass, initial.mLocal.mMass)) return false;
         for (const auto &moment : first)
             if (std::abs(moment.Get()) > 1e-9 * std::max(firstScale, 1e-12)) return false;
-        MassVector linear;
+        MassVector linear, velocity;
         MassBivector angular;
-        for (size_t i = 0; i < 4; ++i) linear[i] = initial.mMomentum.mLinear[i] - exported.mLinear[i];
-        for (size_t i = 0; i < 6; ++i) angular[i] = initial.mSpinMomentum[i] - exported.mAngular[i];
-        if (!SetMomentum(remaining, linear, angular, initial.mWorldCOM)) return false;
+        for (size_t i = 0; i < 4; ++i)
+        {
+            linear[i] = -relativeLinear[i].Get();
+            velocity[i] = body.mLinearVelocity[i] + linear[i] / rest.mLocal.mMass;
+        }
+        auto orbital = MassDetail::Wedge(linear, restOffset);
+        for (size_t i = 0; i < 6; ++i)
+            angular[i] = initial.mSpinMomentum[i] - relativeAngular[i].Get() - orbital[i];
+        if (!SetCentralMomentum(remaining, velocity, angular)) return false;
         MassTransaction result;
         result.mBodies.push_back(std::move(remaining));
         result.mExhaust = std::move(ordered);
@@ -648,18 +716,17 @@ private:
         return x == y;
     }
 
-    /// angular is about reference, not necessarily about this body's COM.
-    static bool SetMomentum(MassBody &body, const MassVector &linear, const MassBivector &angular, const MassVector &reference)
+    /// Solve central spin directly; never recover it by subtracting world orbital momenta.
+    static bool SetCentralMomentum(MassBody &body, const MassVector &velocity, const MassBivector &spin)
     {
         BodyMassData data;
-        if (!Derive(body, data, reference)) return false;
-        MassBivector orbital = MassDetail::Wedge(linear, MassDetail::Sub(data.mWorldCOM, reference));
+        if (!Derive(body, data)) return false;
         MassDetail::InertiaMatrix l;
         if (!MassDetail::Factor(data.mWorldSecondMoment, l)) return false;
         MassBivector y {}, omega {};
         for (size_t i = 0; i < 6; ++i)
         {
-            double v = angular[i] - orbital[i];
+            double v = spin[i];
             for (size_t j = 0; j < i; ++j) v -= l[i][j] * y[j];
             y[i] = v / l[i][i];
         }
@@ -670,8 +737,8 @@ private:
             omega[n] = v / l[n][n];
         }
         body.mAngularVelocity = omega;
-        for (size_t i = 0; i < 4; ++i) body.mLinearVelocity[i] = linear[i] / data.mLocal.mMass;
-        return Derive(body, data, reference);
+        body.mLinearVelocity = velocity;
+        return Derive(body, data);
     }
 
     struct MomentumSum
@@ -703,11 +770,14 @@ private:
         {
             BodyMassData data;
             if (!Derive(body, data, reference)) return false;
+            for (size_t i = 0; i < 4; ++i)
+                data.mMomentum.mLinear[i] = data.mLocal.mMass * (body.mLinearVelocity[i] - before.front().mLinearVelocity[i]);
             initial.Add(data.mMomentum);
         }
         MassMomentum total = initial.Get();
         if (!(total.mMass > 0)) return false;
-        for (size_t i = 0; i < 4; ++i) ledger.mEnergyFrameVelocity[i] = total.mLinear[i] / total.mMass;
+        for (size_t i = 0; i < 4; ++i)
+            ledger.mEnergyFrameVelocity[i] = before.front().mLinearVelocity[i] + total.mLinear[i] / total.mMass;
         // Momentum closure makes kinetic-work differences invariant under this common boost.
         // Evaluate squared relative velocities directly, not by subtracting huge world energies.
         ledger.mExported.mKineticEnergy = 0;

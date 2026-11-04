@@ -130,7 +130,7 @@ TEST_SUITE("SpaceSimPhysicsBridge")
         }
     }
 
-    TEST_CASE("GyroscopicClampFailStopsEvenWithoutAnyDelivery")
+    TEST_CASE("GyroscopicEndpointSpeedLimitFailStopsEvenWithoutAnyDelivery")
     {
         for (bool deliver : { false, true })
         {
@@ -146,7 +146,8 @@ TEST_SUITE("SpaceSimPhysicsBridge")
             JPH::SpaceSim::WorldImpulseIntegral delivery;
             delivery.mBody = body.GetID();
             CHECK(bridge.Step(deliver ? &delivery : nullptr, deliver ? 1 : 0) == JPH::SpaceSim::BridgeResult::NumericalFailure);
-            CHECK(bridge.GetLastNumericalError() == JPH::SpaceSim::BridgeNumericalError::AngularVelocityClamped);
+            CHECK(body.GetAngularVelocity().Length() > body.GetMotionProperties()->GetMaxAngularVelocity());
+            CHECK(bridge.GetLastNumericalError() == JPH::SpaceSim::BridgeNumericalError::AngularSpeedLimitExceeded);
             CHECK(bridge.GetLastNumericalBody() == body.GetID());
             CHECK(bridge.IsFailedStopped());
             CHECK(bridge.GetTick() == 0);

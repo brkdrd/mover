@@ -30,9 +30,9 @@ namespace SpaceDynamicsReference
 		auto q = Cl4Ref::FromRotor(r);
 		for (int j = 0; j < 4; ++j)
 		{
-			Cl4Ref::MV axis; axis.mC[1 << j] = 1;
+			Cl4Ref::MV axis; axis.mC[size_t(1) << j] = 1;
 			auto v = Cl4Ref::Mul(Cl4Ref::Mul(q, axis), Cl4Ref::Reverse(q));
-			for (int i = 0; i < 4; ++i) result.a[i][j] = v.mC[1 << i];
+			for (int i = 0; i < 4; ++i) result.a[i][j] = v.mC[size_t(1) << i];
 		}
 		return result;
 	}

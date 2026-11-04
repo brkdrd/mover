@@ -42,7 +42,7 @@ struct WorldImpulseIntegral
 };
 
 enum class BridgeResult { Success, InvalidConfiguration, InvalidDelivery, InvalidBody, PhysicsFailure, FailedStopped, NumericalFailure };
-enum class BridgeNumericalError { None, LinearVelocityClamped, AngularVelocityClamped, NonFiniteState };
+enum class BridgeNumericalError { None, LinearVelocityClamped, AngularVelocityClamped, NonFiniteState, LinearSpeedLimitExceeded, AngularSpeedLimitExceeded };
 
 /// Serial boundary adapter, not a second integrator. The coordinator must own the
 /// world exclusively during Step, including validation, delivery and Update. No
@@ -196,6 +196,21 @@ public:
             if (motion.WasLinearVelocityClamped()) error = BridgeNumericalError::LinearVelocityClamped;
             if (motion.WasAngularVelocityClamped()) error = BridgeNumericalError::AngularVelocityClamped;
             if (motion.HadNonFiniteVelocity() || !IsFiniteState(body)) error = BridgeNumericalError::NonFiniteState;
+            // Conservative gyro drift runs after the velocity kick/clamp. Its
+            // physically valid endpoint can exceed the declared speed envelope
+            // without activating a clamp. Never publish that as an admitted step.
+            if (error == BridgeNumericalError::None)
+            {
+                const Vec4 linear = body.GetLinearVelocity();
+                const Bivec angular = body.GetAngularVelocity();
+                double linear_sq = 0, angular_sq = 0;
+                for (int axis = 0; axis < 4; ++axis) linear_sq += double(linear[axis]) * linear[axis];
+                for (int axis = 0; axis < 6; ++axis) angular_sq += double(angular[axis]) * angular[axis];
+                if (linear_sq > double(motion.GetMaxLinearVelocity()) * motion.GetMaxLinearVelocity())
+                    error = BridgeNumericalError::LinearSpeedLimitExceeded;
+                if (angular_sq > double(motion.GetMaxAngularVelocity()) * motion.GetMaxAngularVelocity())
+                    error = BridgeNumericalError::AngularSpeedLimitExceeded;
+            }
             if (error != BridgeNumericalError::None && mLastNumericalError == BridgeNumericalError::None)
             {
                 mLastNumericalError = error;

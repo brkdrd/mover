@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "UnitTestFramework.h"
 #include <Jolt/SpaceSim/World.h>
+#include <cstring>
 #include <limits>
 #include <random>
 using namespace JPH::SpaceSim;
@@ -673,6 +674,157 @@ TEST_SUITE("SpaceSimWorldTests")
 		GlobalPosition unchanged;
 		CHECK_FALSE(frame.OriginAt(1, 1, unchanged));
 		CHECK(unchanged.mSector[0] == 0);
+	}
+
+	TEST_CASE("ElapsedRejectsFiniteProductOverflowWithNativeTrapsAndAtomicOutputs")
+	{
+		[[maybe_unused]] FPExceptionsEnable enable_exceptions;
+#if defined(JPH_FLOATING_POINT_EXCEPTIONS_ENABLED) && defined(JPH_USE_SSE)
+		const uint masks = _mm_getcsr() & _MM_MASK_MASK;
+		const uint invalid = _mm_getcsr() & _MM_EXCEPT_INVALID;
+		CHECK((masks & (_MM_MASK_INVALID | _MM_MASK_DIV_ZERO | _MM_MASK_OVERFLOW)) == 0);
+		auto check_fp = [&] {
+			CHECK((_mm_getcsr() & _MM_MASK_MASK) == masks);
+			CHECK((_mm_getcsr() & _MM_EXCEPT_INVALID) == invalid);
+		};
+#else
+		auto check_fp = [] { };
+#endif
+		const double step = std::numeric_limits<double>::max();
+		for (bool backwards : {false, true})
+		{
+			Tick from = backwards? 2 : 0, to = backwards? 0 : 2;
+			double elapsed = 123;
+			CHECK_FALSE(Elapsed(from, to, step, elapsed));
+			CHECK(elapsed == 123);
+			check_fp();
+			ObjectState object; object.mID = 1; object.mFrame = 1; object.mEpoch = from;
+			ObjectState output; output.mID = 123; output.mPosition = {11, 12, 13, 14};
+			std::array<unsigned char, sizeof(ObjectState)> saved;
+			std::memcpy(saved.data(), &output, sizeof(output));
+			CHECK_FALSE(object.Evaluate(to, step, output));
+			CHECK(std::memcmp(saved.data(), &output, sizeof(output)) == 0);
+			check_fp();
+			std::memcpy(saved.data(), &object, sizeof(object));
+			CHECK_FALSE(object.Evaluate(to, step, object));
+			CHECK(std::memcmp(saved.data(), &object, sizeof(object)) == 0);
+			check_fp();
+			Frame frame; frame.mID = 1; frame.mEpoch = from;
+			GlobalPosition position; position.mSector = {1, 2, 3, 4}; position.mOffset = {11, 12, 13, 14};
+			CHECK_FALSE(frame.OriginAt(to, step, position));
+			CHECK(position.mSector == std::array<int64_t, 4>{1, 2, 3, 4});
+			CHECK(position.mOffset == Vector{11, 12, 13, 14});
+			check_fp();
+			// The largest representable elapsed value is still accepted.
+			CHECK(Elapsed(from, 1, step, elapsed));
+			CHECK(elapsed == (backwards? -step : step));
+			check_fp();
+		}
+	}
+
+	TEST_CASE("SplitSumRejectsExceptionalInputsAndRetainsFiniteCancellationWithNativeTraps")
+	{
+		[[maybe_unused]] FPExceptionsEnable enable_exceptions;
+#if defined(JPH_FLOATING_POINT_EXCEPTIONS_ENABLED) && defined(JPH_USE_SSE)
+		const uint masks = _mm_getcsr() & _MM_MASK_MASK;
+		const uint invalid = _mm_getcsr() & _MM_EXCEPT_INVALID;
+		CHECK((masks & (_MM_MASK_INVALID | _MM_MASK_DIV_ZERO | _MM_MASK_OVERFLOW)) == 0);
+		auto check_fp = [&] {
+			CHECK((_mm_getcsr() & _MM_MASK_MASK) == masks);
+			CHECK((_mm_getcsr() & _MM_EXCEPT_INVALID) == invalid);
+		};
+#else
+		auto check_fp = [] { };
+#endif
+		SUBCASE("FiniteOperandsOverflow")
+		{
+			for (double sign : {1.0, -1.0})
+			{
+				double out = 123;
+				CHECK_FALSE(CheckedSum(sign * std::numeric_limits<double>::max(), sign * 0x1p971, out));
+				CHECK(out == 123);
+				check_fp();
+			}
+		}
+		SUBCASE("NonfiniteOperands")
+		{
+			for (double bad : {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
+			{
+				double head = 123, tail = 456;
+				CHECK_FALSE(SplitSum(bad, -bad, head, tail));
+				check_fp();
+			}
+		}
+		SUBCASE("FiniteCancellationMustNotOverflowTwoSumIntermediate")
+		{
+			// Exact dyadic oracle: a + b = head + tail. The original
+			// head - a overflows although both inputs and the sum are finite.
+			for (bool swap : {false, true})
+				for (double sign : {1.0, -1.0})
+				{
+					double a = sign * -0x1.2bccdcc2ad898p1019;
+					double b = sign * 0x1.fffffffffffffp1023;
+					double head = 0, tail = 0;
+					CHECK(SplitSum(swap? b : a, swap? a : b, head, tail));
+					CHECK(head == sign * 0x1.ed433233d5276p1023);
+					CHECK(tail == sign * -0x1p970);
+					check_fp();
+				}
+		}
+		SUBCASE("TransferErrorBudgetIsUnchanged")
+		{
+			double out = 123;
+			CHECK(CheckedSum(0x1p20, 0x1p-40, out));
+			CHECK(out == 0x1p20);
+			CHECK_FALSE(CheckedSum(0x1p30, 0x1p-29, out));
+			CHECK(out == 0x1p20);
+			check_fp();
+		}
+	}
+
+	TEST_CASE("EvaluateRejectsOverflowWithNativeTrapsWithoutChangingAnySnapshotByte")
+	{
+		[[maybe_unused]] FPExceptionsEnable enable_exceptions;
+#if defined(JPH_FLOATING_POINT_EXCEPTIONS_ENABLED) && defined(JPH_USE_SSE)
+		const uint masks = _mm_getcsr() & _MM_MASK_MASK;
+		const uint invalid = _mm_getcsr() & _MM_EXCEPT_INVALID;
+		CHECK((masks & (_MM_MASK_INVALID | _MM_MASK_DIV_ZERO | _MM_MASK_OVERFLOW)) == 0);
+		auto check_fp = [&] {
+			CHECK((_mm_getcsr() & _MM_MASK_MASK) == masks);
+			CHECK((_mm_getcsr() & _MM_EXCEPT_INVALID) == invalid);
+		};
+#else
+		auto check_fp = [] { };
+#endif
+		for (size_t axis = 0; axis < 4; ++axis)
+			for (double sign : {1.0, -1.0})
+				for (Tick tick : {Tick(75), Tick(2)})
+				{
+					ObjectState object; object.mID = 1; object.mFrame = 1;
+					object.mVelocity[axis] = sign * std::numeric_limits<double>::max();
+					object.mHealth = 0.5; object.mHistoryRevision = 987;
+					// At 75 ticks, dt rounds to 1 but its positive remainder
+					// makes finite MAX + finite correction overflow in CheckedSum.
+					// At 2 ticks the initial drift fma itself overflows.
+					double step = tick == 75? 1.0 / 75.0 : 1.0;
+					ObjectState output; output.mID = 123; output.mFrame = 456;
+					output.mEpoch = 789; output.mPosition = {11, 12, 13, 14};
+					std::array<unsigned char, sizeof(ObjectState)> saved;
+					std::memcpy(saved.data(), &output, sizeof(output));
+					CHECK_FALSE(object.Evaluate(tick, step, output));
+					CHECK(std::memcmp(saved.data(), &output, sizeof(output)) == 0);
+					check_fp();
+					std::memcpy(saved.data(), &object, sizeof(object));
+					CHECK_FALSE(object.Evaluate(tick, step, object));
+					CHECK(std::memcmp(saved.data(), &object, sizeof(object)) == 0);
+					check_fp();
+				}
+		ObjectState object; object.mID = 1; object.mFrame = 1;
+		object.mVelocity = {1, 2, 3, 4};
+		CHECK(object.Evaluate(2, 1, object));
+		CHECK(object.mPosition == Vector{2, 4, 6, 8});
+		CHECK(object.mEpoch == 2);
+		check_fp();
 	}
 
 	TEST_CASE("SchedulingHorizonsAreCheckedDirectlyAtArbitraryEpochs")

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <Jolt/Jolt.h>
+#include <Jolt/Core/FPException.h>
 #include <Jolt/Math/Vec4.h>
 #include <Jolt/Math/Rotor.h>
 #include <Jolt/Math/Bivec.h>
@@ -133,8 +134,17 @@ struct GlobalPosition
 inline constexpr double cTransferError = 1.0e-9;
 inline bool SplitSum(double a, double b, double &head, double &tail)
 {
-	head = a + b;
+	if (!std::isfinite(a) || !std::isfinite(b)) return false;
+	{
+		// Finite operands can still overflow. Mask only this speculative add,
+		// then reject before TwoSum can form invalid infinity differences.
+		[[maybe_unused]] FPExceptionDisableOverflow disable_overflow;
+		head = a + b;
+	}
 	if (!std::isfinite(head)) return false;
+	// Put the larger operand first: otherwise head - a can overflow even
+	// when a, b and head are finite (large opposite-sign cancellation).
+	if (std::abs(a) < std::abs(b)) std::swap(a, b);
 	double z = head - a;
 	tail = (a - (head - z)) + (b - z);
 	return std::isfinite(tail);
@@ -153,9 +163,17 @@ inline bool Elapsed(Tick from, Tick to, double seconds_per_tick, double &out)
 {
 	uint64_t count = to >= from? to - from : from - to;
 	if (!std::isfinite(seconds_per_tick) || seconds_per_tick <= 0 || count > (UINT64_C(1) << 53)) return false;
-	out = double(count) * seconds_per_tick;
-	if (to < from) out = -out;
-	return std::isfinite(out);
+	// Materialize inside the guard even under /fp:precise scheduling.
+	volatile double elapsed;
+	{
+		// A valid finite step can overflow at a valid tick count. Reject it
+		// without trapping or changing the caller's elapsed-time output.
+		[[maybe_unused]] FPExceptionDisableOverflow disable_overflow;
+		elapsed = double(count) * seconds_per_tick;
+	}
+	if (!std::isfinite(elapsed)) return false;
+	out = to < from? -elapsed : elapsed;
+	return true;
 }
 
 inline double ElapsedRemainder(Tick from, Tick to, double step, double elapsed)
@@ -290,8 +308,16 @@ struct ObjectState
 		double time_tail = ElapsedRemainder(mEpoch, tick, step, dt);
 		for (size_t i = 0; i < 4; ++i)
 		{
-			result.mPosition[i] = std::fma(mVelocity[i], dt, mPosition[i]);
-			if (!CheckedSum(result.mPosition[i], mVelocity[i] * time_tail, result.mPosition[i])) return false;
+			double correction;
+			{
+				// Only speculative drift arithmetic may overflow; validate it before
+				// error-free summation or publishing any part of the snapshot.
+				[[maybe_unused]] FPExceptionDisableOverflow disable_overflow;
+				result.mPosition[i] = std::fma(mVelocity[i], dt, mPosition[i]);
+				correction = mVelocity[i] * time_tail;
+			}
+			if (!std::isfinite(result.mPosition[i]) || !std::isfinite(correction)
+				|| !CheckedSum(result.mPosition[i], correction, result.mPosition[i])) return false;
 			if (!std::isfinite(result.mPosition[i]) || std::abs(result.mPosition[i]) > cMaxLocalRange) return false;
 		}
 		result.mEpoch = tick;

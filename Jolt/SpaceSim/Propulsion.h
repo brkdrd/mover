@@ -79,7 +79,7 @@ inline bool Nonnegative(double inValue)
 // Deliberately bounded physical inputs, not a promise to support every binary64 exponent.
 inline bool Physical(double inValue)
 {
-	return inValue == 0 || (inValue >= 1.0e-100 && inValue <= 1.0e100);
+	return std::isfinite(inValue) && (inValue == 0 || (inValue >= 1.0e-100 && inValue <= 1.0e100));
 }
 // Reject unsupported intermediate ranges instead of erasing a factor that a later
 // multiply could recover. NaN propagates to the step's transactional validation.
@@ -277,6 +277,7 @@ inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector
 	{
 		result.mPowerLimited = true;
 		double scale = PowerScale(inResources.mPowerLimit, targetPower);
+		if (!Nonnegative(scale)) return false;
 		for (auto &a : result.mActuators)
 			if (a.mThruster.mPowerDraw > 0) a.mTargetForce = Product(a.mTargetForce, scale);
 	}
@@ -294,6 +295,7 @@ inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector
 	{
 		result.mPowerLimited = true;
 		double scale = PowerScale(headroom, excessPower);
+		if (!Nonnegative(scale)) return false;
 		for (auto &a : result.mActuators)
 			if (a.mThruster.mPowerDraw > 0 && a.mThruster.mForce > a.mTargetForce)
 				a.mThruster.mForce = a.mTargetForce + Product(a.mThruster.mForce - a.mTargetForce, scale);
@@ -325,6 +327,7 @@ inline bool StepPropulsion(const PropulsionRequest &inRequest, const std::vector
 		if (correction == 8) return false;
 		result.mPowerLimited = true;
 		double scale = PowerScale(inResources.mPowerLimit, envelope);
+		if (!Nonnegative(scale)) return false;
 		for (auto &a : result.mActuators)
 			if (a.mThruster.mPowerDraw > 0)
 			{

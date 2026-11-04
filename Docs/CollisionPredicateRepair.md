@@ -2,6 +2,10 @@
 
 **Latest bounded result (baseline `aee62ba5`): the unchanged 18,432-query small-scale envelope now passes, with zero material misses, false hits, or distance failures.** The final registered assertions-enabled suite passes 556/556 cases at its original accuracy bounds. See [the final lower-dimensional repair](#final-lower-dimensional-repair-measured-envelope-passes) for attribution, RED evidence, coverage limits, and measured cost. Earlier FAIL statements below describe the previous revisions, not this final measured envelope. This is not a general collision-robustness or SpaceSim readiness certification.
 
+## Reproducible collision-envelope gate
+
+[Tools/CollisionEnvelope](../Tools/CollisionEnvelope/README.md) packages the unchanged 18,432-query acceptance sweep. The parent reproduced the failed baseline and, after integrating `81161f8b`, rebuilt and observed **zero material misses, false hits, distance failures or oracle failures**, exit 0. Independent review approved this repair and independently reproduced baseline failure/repaired success. Parent integrated native (577 cases) and whole-engine sanitizer (576 cases) runs passed. This does not certify arbitrary collision/CCD workloads.
+
 ## Scope
 
 Baseline: `ecfb0c386e9497fe446905dfab5b2610d49f698e`. The exact Windows-generated sphere–box pair has an analytic overlap of approximately 0.105954, yet raw GJK returned false. Its five-point support simplex strictly contains the origin: independently solved barycentrics are `[0.29662915, 0.30951689, 0.28358813, 0.09363796, 0.01662787]`. Float Gram/cofactor cancellation made the last numerator negative, incorrectly excluding the interior.

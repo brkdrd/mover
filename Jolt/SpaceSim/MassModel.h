@@ -314,6 +314,10 @@ inline bool Rotation(const Rotor &rotor, MassMatrix &out)
 ///   are rounded outward. Only Redistribute adds B to the unchanged 1e-9 angular test.
 ///   Both bounds and the uncorrected angular residual are published. No compensating
 ///   spin, extra work, or allowance for an independently displaced physical COM is added.
+///   A separate boost-invariant central test requires each |spin_after - spin_before| <=
+///   1e-9*max(2*sum_k(|spin_before_k| + |spin_after_k|), 1e-12), the original fixed-COM
+///   angular scale. Neither orbital rounding bounds nor orbital momentum enter that gate.
+///   The rounding bounds share the subnormal-scale accuracy exclusion below.
 ///   Docking may add <=1e-6*max(K_before, 1e-12) as a float-Rotor composition budget.
 /// - Ledger kinetic energies use the incoming system's COM-velocity frame to resolve
 ///   small work at large common speed; momenta remain world components. Derive() alone
@@ -336,7 +340,11 @@ inline bool Rotation(const Rotor &rotor, MassMatrix &out)
 /// spin covariance for identical represented relative velocities, including exact zero
 /// spin/work for co-moving participants; 3000 additional general-Spin(4) redistribution
 /// trials at rest and under ordinary, axial 1e8 and four-lane 1e8 boosts, with zero and
-/// nonzero spin, independently bound COM reconstruction by the two half-ULP budgets.
+/// nonzero spin, independently bound COM reconstruction by the two half-ULP budgets;
+/// an exact ill-conditioned central-solve failure plus 4608 redistribution attempts over
+/// 24 diagonal-axis permutations, both spin/Rotor signs, tensor scales 2^-10..2^10,
+/// target anisotropy 4..4e9 and eight common boosts check the separate spin gate and atomic
+/// rejection. Well-conditioned controls must succeed; rejected solves get no extra budget.
 /// Limits above prevent overflow, NOT a uniform
 /// accuracy guarantee over every mass ratio/conditioning. Rebase tiny distant features.
 ///
@@ -440,6 +448,18 @@ public:
         if (!SetCentralMomentum(changed, body.mLinearVelocity, before.mSpinMomentum)) return false;
         BodyMassData after;
         if (!Derive(changed, after, before.mWorldCOM)) return false;
+        // Close physical spin separately, before the orbital representation allowance.
+        // At a fixed COM the original Ledger scale counts each participant's spin twice
+        // (angular momentum and spin). Preserve that scale and coefficient, but never
+        // let a common boost, a COM rounding residue, or caller ledger fields fund a solve error.
+        double centralScale = 0;
+        for (size_t k = 0; k < 6; ++k)
+            centralScale += 2 * std::abs(before.mSpinMomentum[k]) + 2 * std::abs(after.mSpinMomentum[k]);
+        for (size_t k = 0; k < 6; ++k)
+        {
+            double residual = after.mSpinMomentum[k] - before.mSpinMomentum[k];
+            if (!std::isfinite(residual) || std::abs(residual) > 1e-9 * std::max(centralScale, 1e-12)) return false;
+        }
         for (size_t i = 0; i < 4; ++i)
             if (std::abs(after.mWorldCOM[i] - before.mWorldCOM[i]) > positionBound[i]) return false;
         MassBivector angularBound {};

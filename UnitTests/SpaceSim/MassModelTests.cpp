@@ -79,6 +79,14 @@ void CheckRedistributionRepresentation(const MassBody &body, const MassTransacti
         scale += std::abs(a.mSpinMomentum[k]) + std::abs(b.mSpinMomentum[k])
             + std::abs(a.mSpinMomentum[k]) + std::abs(b.mMomentum.mAngular[k]);
     long double tolerance = 1e-9L * std::max(scale, 1e-12L);
+    // Independent central closure: neither orbital terms nor position budgets may fund it.
+    long double centralScale = 0;
+    for (size_t n = 0; n < 6; ++n)
+        centralScale += 2 * std::abs(static_cast<long double>(a.mSpinMomentum[n]))
+            + 2 * std::abs(static_cast<long double>(b.mSpinMomentum[n]));
+    for (size_t n = 0; n < 6; ++n)
+        CHECK(std::abs(static_cast<long double>(b.mSpinMomentum[n]) - a.mSpinMomentum[n])
+            <= 1e-9L * std::max(centralScale, 1e-12L));
     size_t k = 0;
     for (size_t i = 0; i < 4; ++i)
         for (size_t j = i + 1; j < 4; ++j, ++k)
@@ -100,6 +108,59 @@ void CheckRedistributionRepresentation(const MassBody &body, const MassTransacti
             CHECK(tx.mLedger.mResidual.mAngular[k] == b.mMomentum.mAngular[k] - a.mSpinMomentum[k]);
             CHECK(std::abs(tx.mLedger.mResidual.mAngular[k]) <= tolerance + tx.mLedger.mCOMRoundingAngularBound[k]);
         }
+}
+
+void CheckTransactionUnchanged(const MassTransaction &tx, const MassTransaction &saved)
+{
+    CHECK(tx.mBodies.size() == saved.mBodies.size());
+    if (tx.mBodies.size() != saved.mBodies.size()) return;
+    for (size_t n = 0; n < tx.mBodies.size(); ++n)
+    {
+        const auto &a = tx.mBodies[n], &b = saved.mBodies[n];
+        CHECK(a.mID == b.mID);
+        CHECK(a.mOrigin == b.mOrigin);
+        CHECK(a.mRotation == b.mRotation);
+        CHECK(a.mLinearVelocity == b.mLinearVelocity);
+        CHECK(a.mAngularVelocity == b.mAngularVelocity);
+        CHECK(a.mComponents.size() == b.mComponents.size());
+        if (a.mComponents.size() != b.mComponents.size()) return;
+        for (size_t c = 0; c < a.mComponents.size(); ++c)
+        {
+            CHECK(a.mComponents[c].mID == b.mComponents[c].mID);
+            CHECK(a.mComponents[c].mLocalCOM == b.mComponents[c].mLocalCOM);
+            CHECK(a.mComponents[c].mLocalRotation == b.mComponents[c].mLocalRotation);
+            CHECK(a.mComponents[c].mProperties.mMass == b.mComponents[c].mProperties.mMass);
+            for (uint i = 0; i < 4; ++i)
+                for (uint j = 0; j < 4; ++j)
+                    CHECK(a.mComponents[c].mProperties.mInertia(i, j) == b.mComponents[c].mProperties.mInertia(i, j));
+        }
+    }
+    CHECK(tx.mExhaust.size() == saved.mExhaust.size());
+    if (tx.mExhaust.size() != saved.mExhaust.size()) return;
+    for (size_t n = 0; n < tx.mExhaust.size(); ++n)
+    {
+        CHECK(tx.mExhaust[n].mID == saved.mExhaust[n].mID);
+        CHECK(tx.mExhaust[n].mMass == saved.mExhaust[n].mMass);
+        CHECK(tx.mExhaust[n].mWorldPosition == saved.mExhaust[n].mWorldPosition);
+        CHECK(tx.mExhaust[n].mWorldVelocity == saved.mExhaust[n].mWorldVelocity);
+    }
+    auto momentum = [](const MassMomentum &a, const MassMomentum &b)
+    {
+        CHECK(a.mMass == b.mMass);
+        CHECK(a.mLinear == b.mLinear);
+        CHECK(a.mAngular == b.mAngular);
+        CHECK(a.mKineticEnergy == b.mKineticEnergy);
+    };
+    const auto &a = tx.mLedger, &b = saved.mLedger;
+    momentum(a.mBefore, b.mBefore); momentum(a.mAfter, b.mAfter);
+    momentum(a.mExported, b.mExported); momentum(a.mResidual, b.mResidual);
+    CHECK(a.mReferenceOrigin == b.mReferenceOrigin);
+    CHECK(a.mEnergyFrameVelocity == b.mEnergyFrameVelocity);
+    CHECK(a.mAddedEnergy == b.mAddedEnergy);
+    CHECK(a.mDissipatedEnergy == b.mDissipatedEnergy);
+    CHECK(a.mVelocityRoundingEnergyBound == b.mVelocityRoundingEnergyBound);
+    CHECK(a.mCOMRoundingPositionBound == b.mCOMRoundingPositionBound);
+    CHECK(a.mCOMRoundingAngularBound == b.mCOMRoundingAngularBound);
 }
 
 void CheckGlobalConservation(const std::vector<MassBody> &before, const MassTransaction &tx, double tolerance = 1e-7)
@@ -276,6 +337,132 @@ TEST_SUITE("SpaceSimMass")
             CHECK(tx.mLedger.mCOMRoundingAngularBound[0] >= 2 * speed * 0x1p-55);
             if (speed != 0) CHECK(std::abs(tx.mLedger.mResidual.mAngular[0]) > 1e-21);
         }
+    }
+
+    TEST_CASE("RedistributionOrbitalRoundoffCannotExcuseCentralSolveError")
+    {
+        MassBody body;
+        body.mID = 1;
+        body.mOrigin = { 1e8, 1e8, 1e8, 1e8 };
+        body.mComponents = { Component(1, 2, { 0, 0.1, 0, 0 }, { 1, 2, 3, 4 }) };
+        // Exact binary64 input and binary32 rotor from the independent failure fixture.
+        body.mAngularVelocity = { 0x1.aa8d35388773p-4, 0x1.6019e3fe75478p-1,
+            0x1.13f821cea33e2p-1, 0x1.0fe43d285d5p-3, 0x1.7e9392bb97e8cp-1, -0x1.0c7f96d9411d6p-2 };
+        auto replacement = std::vector<ComponentMass> { Component(1, 2, { 0.7, 0.7, 0.7, 0.7 }, { 4e9, 1, 1, 1 }) };
+        replacement[0].mLocalRotation = Rotor(0x1.4aef24p-1f, -0x1.efaaf4p-4f, -0x1.ecac3p-6f, -0x1.a6dbd4p-2f,
+            0x1.57471p-3f, -0x1.138c1p-2f, -0x1.163dc2p-1f, -0x1.24a6ap-6f);
+        for (double speed : { 0.0, 1e8, -1e8 })
+        {
+            CAPTURE(speed);
+            body.mLinearVelocity = { speed, -speed, speed, -speed };
+            BodyMassData before;
+            MASS_REQUIRE(MassModel::Derive(body, before));
+            AggregateMass target;
+            MASS_REQUIRE(MassModel::Aggregate(replacement, target)); // Valid inputs, not a singular-state rejection.
+            MassTransaction tx;
+            tx.mBodies = { body };
+            tx.mExhaust = { { 99, 3, { 1, 2, 3, 4 }, { 5, 6, 7, 8 } } };
+            tx.mLedger.mAddedEnergy = 123;
+            tx.mLedger.mDissipatedEnergy = 456;
+            tx.mLedger.mCOMRoundingPositionBound = { 1e300, 2e300, 3e300, 4e300 };
+            tx.mLedger.mCOMRoundingAngularBound = { 1e300, 2e300, 3e300, 4e300, 5e300, 6e300 };
+            const MassTransaction saved = tx; // Caller budgets cannot authorize a bad solve.
+            bool accepted = MassModel::Redistribute(body, replacement, tx);
+            CHECK_FALSE(accepted);
+            if (accepted)
+            {
+                BodyMassData after;
+                MASS_REQUIRE(MassModel::Derive(tx.mBodies[0], after, before.mWorldCOM));
+                CHECK(after.mWorldCOM == before.mWorldCOM); // Even zero actual orbital error used to bypass closure.
+                double scale = 0, error = 0;
+                for (size_t k = 0; k < 6; ++k)
+                {
+                    scale += 2 * std::abs(before.mSpinMomentum[k]) + 2 * std::abs(after.mSpinMomentum[k]);
+                    error = std::max(error, std::abs(after.mSpinMomentum[k] - before.mSpinMomentum[k]));
+                }
+                CAPTURE(error);
+                CHECK(error <= 1e-9 * std::max(scale, 1e-12));
+            }
+            else
+                CheckTransactionUnchanged(tx, saved);
+        }
+    }
+
+    TEST_CASE("RedistributionCentralClosureIsIndependentOfBoostSignPermutationAndScale")
+    {
+        const Rotor targetRotation(0x1.4aef24p-1f, -0x1.efaaf4p-4f, -0x1.ecac3p-6f, -0x1.a6dbd4p-2f,
+            0x1.57471p-3f, -0x1.138c1p-2f, -0x1.163dc2p-1f, -0x1.24a6ap-6f);
+        const MassBivector spin { 0x1.aa8d35388773p-4, 0x1.6019e3fe75478p-1,
+            0x1.13f821cea33e2p-1, 0x1.0fe43d285d5p-3, 0x1.7e9392bb97e8cp-1, -0x1.0c7f96d9411d6p-2 };
+        const MassVector boosts[] = { {}, { 1, -2, 3, -4 }, { 1e8, 0, 0, 0 }, { 0, -1e8, 0, 0 },
+            { 0, 0, 1e8, 0 }, { 0, 0, 0, -1e8 }, { 1e8, -1e8, 1e8, -1e8 }, { -1e8, 1e8, -1e8, 1e8 } };
+        std::array<size_t, 4> permutation { 0, 1, 2, 3 };
+        size_t acceptedCount = 0, rejectedCount = 0, shapeCount = 0;
+        do
+        {
+            for (double scale : { 0x1p-10, 1.0, 0x1p10 })
+                for (double sign : { -1.0, 1.0 })
+                    for (double condition : { 4.0, 1e3, 1e6, 4e9 })
+                    {
+                        CAPTURE(shapeCount);
+                        CAPTURE(scale);
+                        CAPTURE(sign);
+                        CAPTURE(condition);
+                        ++shapeCount;
+                        MassBody body;
+                        body.mID = 1;
+                        body.mOrigin = { 1e8, -1e8, 1e8, -1e8 };
+                        MassVector center {}, diagonal {}, targetDiagonal {};
+                        center[permutation[1]] = sign * 0.1;
+                        for (size_t i = 0; i < 4; ++i)
+                        {
+                            diagonal[permutation[i]] = scale * (i + 1);
+                            targetDiagonal[permutation[i]] = scale * (i == 0? condition : 1);
+                        }
+                        body.mComponents = { Component(1, 2, center, diagonal) };
+                        for (size_t k = 0; k < 6; ++k) body.mAngularVelocity[k] = sign * spin[k];
+                        auto replacement = std::vector<ComponentMass> { Component(1, 2,
+                            { sign * 0.7, sign * 0.7, sign * 0.7, sign * 0.7 }, targetDiagonal) };
+                        replacement[0].mLocalRotation = sign < 0? -targetRotation : targetRotation;
+                        AggregateMass aggregate;
+                        MASS_REQUIRE(MassModel::Aggregate(replacement, aggregate));
+                        MassTransaction rest;
+                        bool restAccepted = MassModel::Redistribute(body, replacement, rest);
+                        if (condition == 4) CHECK(restAccepted); // Well-conditioned positive control at every scale/sign/permutation.
+                        for (const auto &boost : boosts)
+                        {
+                            body.mLinearVelocity = boost;
+                            MassTransaction tx;
+                            tx.mBodies = { body };
+                            tx.mExhaust = { { 99, 3, { 1, 2, 3, 4 }, { 5, 6, 7, 8 } } };
+                            tx.mLedger.mAddedEnergy = 123;
+                            tx.mLedger.mCOMRoundingPositionBound = { 1e300, 2e300, 3e300, 4e300 };
+                            tx.mLedger.mCOMRoundingAngularBound = { 1e300, 2e300, 3e300, 4e300, 5e300, 6e300 };
+                            const MassTransaction saved = tx;
+                            bool accepted = MassModel::Redistribute(body, replacement, tx);
+                            CHECK(accepted == restAccepted);
+                            if (accepted)
+                            {
+                                ++acceptedCount;
+                                MASS_REQUIRE(!rest.mBodies.empty());
+                                CHECK(tx.mBodies[0].mAngularVelocity == rest.mBodies[0].mAngularVelocity);
+                                CHECK(tx.mBodies[0].mLinearVelocity == boost);
+                                CHECK(tx.mLedger.mAddedEnergy == rest.mLedger.mAddedEnergy);
+                                CHECK(tx.mLedger.mDissipatedEnergy == rest.mLedger.mDissipatedEnergy);
+                                CheckRedistributionRepresentation(body, tx);
+                            }
+                            else
+                            {
+                                ++rejectedCount;
+                                CheckTransactionUnchanged(tx, saved);
+                            }
+                        }
+                    }
+        } while (std::next_permutation(permutation.begin(), permutation.end()));
+        CHECK(shapeCount == 576);
+        CHECK(acceptedCount + rejectedCount == 4608);
+        CHECK(acceptedCount > 0);
+        CHECK(rejectedCount > 0);
     }
 
     TEST_CASE("SeededRedistributionPreservesCentralMotionAcrossFourLaneBoosts")

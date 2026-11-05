@@ -2,9 +2,9 @@ name: 4D headless build and tests
 
 on:
   push:
-    branches: [4d]
+    branches: [main, 4d, feat/spacesim]
   pull_request:
-    branches: [4d]
+    branches: [main, 4d, feat/spacesim]
   workflow_dispatch:
 
 permissions:
@@ -12,9 +12,19 @@ permissions:
 
 jobs:
   linux-gcc:
-    name: Linux GCC 13 / Release
+    name: Linux GCC 13 / ${{ matrix.mode }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: Release
+            extra: -DDOUBLE_PRECISION=OFF
+          - mode: Double-position
+            extra: -DDOUBLE_PRECISION=ON
+          - mode: ASAN-UBSAN-assertions
+            extra: -DUSE_ASSERTS=ON -DINTERPROCEDURAL_OPTIMIZATION=OFF -DOVERRIDE_CXX_FLAGS=OFF -DCMAKE_CXX_FLAGS_RELEASE=-O1 -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined
     steps:
       - uses: actions/checkout@v6
       - name: Configure headless 4D build
@@ -23,12 +33,54 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
           -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
           -DPROFILER_IN_DEBUG_AND_RELEASE=OFF
+          -DCROSS_PLATFORM_DETERMINISTIC=ON
           -DTARGET_SAMPLES=OFF -DTARGET_VIEWER=OFF
           -DTARGET_UNIT_TESTS=ON -DTARGET_HELLO_WORLD=ON
-          -DTARGET_PERFORMANCE_TEST=ON
+          -DTARGET_PERFORMANCE_TEST=ON ${{ matrix.extra }}
       - name: Build
         run: cmake --build out/headless --target UnitTests HelloWorld PerformanceTest --parallel 2
       - name: Unit tests
-        run: ctest --test-dir out/headless --output-on-failure
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir out/headless --output-on-failure --no-tests=error
       - name: Simulation smoke test
         run: ./out/headless/HelloWorld
+      - name: Build benchmark diagnostic
+        if: matrix.mode == 'Release'
+        run: |
+          cmake -S Tools/SpaceSimBenchmark -B out/space-benchmark -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build out/space-benchmark --target SpaceSimBenchmark --parallel 2
+      - name: Benchmark CLI and artifact regressions
+        if: matrix.mode == 'Release'
+        run: |
+          ctest --test-dir out/space-benchmark --output-on-failure --no-tests=error
+          ./out/space-benchmark/SpaceSimBenchmark --selftest
+      - name: Standalone collision envelope
+        if: matrix.mode == 'Release'
+        run: |
+          cmake -S Tools/CollisionEnvelope -B out/collision-envelope -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build out/collision-envelope --target CollisionEnvelope --parallel 2
+          ./out/collision-envelope/CollisionEnvelope > out/collision-envelope/results.csv
+  windows-msvc:
+    name: Windows MSVC / Release
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure
+        run: >-
+          cmake -S Build -B out/headless -A x64
+          '-DCMAKE_CXX_FLAGS=/wd4866 /wd4868 /wd5246'
+          -DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF
+          -DPROFILER_IN_DEBUG_AND_RELEASE=OFF
+          -DCROSS_PLATFORM_DETERMINISTIC=ON
+          -DINTERPROCEDURAL_OPTIMIZATION=OFF
+          -DTARGET_SAMPLES=OFF -DTARGET_VIEWER=OFF
+          -DTARGET_UNIT_TESTS=ON -DTARGET_HELLO_WORLD=ON
+      - name: Build
+        run: cmake --build out/headless --config Release --target UnitTests HelloWorld --parallel 2
+      - name: Regression tests
+        run: ctest --test-dir out/headless -C Release --output-on-failure --no-tests=error
+      - name: Simulation smoke test
+        run: ./out/headless/Release/HelloWorld.exe

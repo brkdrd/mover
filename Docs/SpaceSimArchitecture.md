@@ -1,6 +1,6 @@
 # Integrating the 4D space-sim systems
 
-Status: **proposed architecture**, 2026-11-04. Companion to the [engine specification](SpaceSimSpecification.md). Existing types and mathematical conventions are identified explicitly; the scheduler, ship systems, region management and networking described here are future implementation work.
+Status: **target architecture**, 2026-11-04. Companion to the [engine specification](SpaceSimSpecification.md). Mover now supplies prototype subsystem APIs and real-physics boundary adapters; the complete architecture and release gates are not yet satisfied. Consult the [validation record](MoverValidation.md) rather than interpreting this design as an implementation claim.
 
 ## Architecture and ownership
 

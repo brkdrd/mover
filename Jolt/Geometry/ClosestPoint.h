@@ -5,6 +5,8 @@
 #pragma once
 
 #include <Jolt/Math/Bivec.h>
+#include <Jolt/Math/DVec4.h>
+#include <cmath>
 
 JPH_NAMESPACE_BEGIN
 
@@ -29,17 +31,42 @@ namespace ClosestPoint
 		return Bivec::sWedge(inU, inV).LengthSq();
 	}
 
+	// Keep length^4 quantities in double: float area products underflow/overflow even
+	// when every input coordinate, edge and squared edge length is representable.
+	// Wedge components avoid subtracting nearly equal Gram products for slivers.
+	JPH_INLINE double GramDeterminant(DVec4Arg inU, DVec4Arg inV)
+	{
+		double area_sq = 0.0;
+		for (uint i = 0; i < 4; ++i)
+			for (uint j = i + 1; j < 4; ++j)
+				area_sq += Square(inU[i] * inV[j] - inU[j] * inV[i]);
+		return area_sq;
+	}
+
+	// An exact power-of-two change of units bounds coordinates before float
+	// length^2/length^4 products. Double holds the scale even at float exponent
+	// extremes; it is a representation-range guard, not a geometric tolerance.
+	inline double ProjectionScale(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC)
+	{
+		float largest = Vec4::sMax(Vec4::sMax(inA.Abs(), inB.Abs()), inC.Abs()).ReduceMax();
+		int exponent = 0;
+		std::frexp(double(largest), &exponent);
+		return std::ldexp(1.0, exponent);
+	}
+
 	/// Compute barycentric coordinates of closest point to origin for infinite line defined by (inA, inB)
 	/// Point can then be computed as inA * outU + inB * outV
 	/// Returns false if the points inA, inB do not form a line (are at the same point)
 	inline bool GetBaryCentricCoordinates(Vec4Arg inA, Vec4Arg inB, float &outU, float &outV)
 	{
-		Vec4 ab = inB - inA;
+		double scale = ProjectionScale(inA, inB, Vec4::sZero());
+		Vec4 a(DVec4(inA) / scale), b(DVec4(inB) / scale);
+		Vec4 ab = b - a;
 		float denominator = ab.LengthSq();
-		if (denominator < Square(FLT_EPSILON))
+		if (denominator == 0.0f)
 		{
 			// Degenerate line segment, fallback to points
-			if (inA.LengthSq() < inB.LengthSq())
+			if (a.LengthSq() < b.LengthSq())
 			{
 				// A closest
 				outU = 1.0f;
@@ -55,7 +82,7 @@ namespace ClosestPoint
 		}
 		else
 		{
-			outV = -inA.Dot(ab) / denominator;
+			outV = -a.Dot(ab) / denominator;
 			outU = 1.0f - outV;
 		}
 		return true;
@@ -71,23 +98,25 @@ namespace ClosestPoint
 		// Adjusted to always include the shortest edge of the triangle in the calculation to improve numerical accuracy
 
 		// First calculate the three edges
-		Vec4 v0 = inB - inA;
-		Vec4 v1 = inC - inA;
-		Vec4 v2 = inC - inB;
+		DVec4 v0 = DVec4(inB) - DVec4(inA);
+		DVec4 v1 = DVec4(inC) - DVec4(inA);
+		DVec4 v2 = DVec4(inC) - DVec4(inB);
 
 		// Make sure that the shortest edge is included in the calculation to keep the products a * b - c * d as small as possible to preserve accuracy
-		float d00 = v0.LengthSq();
-		float d11 = v1.LengthSq();
-		float d22 = v2.LengthSq();
+		double d00 = v0.LengthSq();
+		double d11 = v1.LengthSq();
+		double d22 = v2.LengthSq();
 		if (d00 <= d22)
 		{
 			// Use v0 and v1 to calculate barycentric coordinates
-			float d01 = v0.Dot(v1);
+			double d01 = v0.Dot(v1);
 
 			// Denominator must be positive:
 			// |v0|^2 * |v1|^2 - (v0 . v1)^2 = |v0|^2 * |v1|^2 * (1 - cos(angle)^2) >= 0
-			float denominator = GramDeterminant(v0, v1);
-			if (denominator < 1.0e-12f)
+			double denominator = GramDeterminant(v0, v1);
+			// length^4 / Hadamard bound: the same dimensionless conditioning policy
+			// as the higher-dimensional simplices, not a minimum triangle area.
+			if (denominator <= 1.0e-6f * d00 * d11)
 			{
 				// Degenerate triangle, return coordinates along longest edge
 				if (d00 > d11)
@@ -104,20 +133,22 @@ namespace ClosestPoint
 			}
 			else
 			{
-				float a0 = inA.Dot(v0);
-				float a1 = inA.Dot(v1);
-				outV = (d01 * a1 - d11 * a0) / denominator;
-				outW = (d01 * a0 - d00 * a1) / denominator;
-				outU = 1.0f - outV - outW;
+				double a0 = DVec4(inA).Dot(v0);
+				double a1 = DVec4(inA).Dot(v1);
+				double v = (d01 * a1 - d11 * a0) / denominator;
+				double w = (d01 * a0 - d00 * a1) / denominator;
+				outV = float(v);
+				outW = float(w);
+				outU = float(1.0 - v - w);
 			}
 		}
 		else
 		{
 			// Use v1 and v2 to calculate barycentric coordinates
-			float d12 = v1.Dot(v2);
+			double d12 = v1.Dot(v2);
 
-			float denominator = GramDeterminant(v1, v2);
-			if (denominator < 1.0e-12f)
+			double denominator = GramDeterminant(v1, v2);
+			if (denominator <= 1.0e-6f * d11 * d22)
 			{
 				// Degenerate triangle, return coordinates along longest edge
 				if (d11 > d22)
@@ -134,11 +165,13 @@ namespace ClosestPoint
 			}
 			else
 			{
-				float c1 = inC.Dot(v1);
-				float c2 = inC.Dot(v2);
-				outU = (d22 * c1 - d12 * c2) / denominator;
-				outV = (d11 * c2 - d12 * c1) / denominator;
-				outW = 1.0f - outU - outV;
+				double c1 = DVec4(inC).Dot(v1);
+				double c2 = DVec4(inC).Dot(v2);
+				double u = (d22 * c1 - d12 * c2) / denominator;
+				double v = (d11 * c2 - d12 * c1) / denominator;
+				outU = float(u);
+				outV = float(v);
+				outW = float(1.0 - u - v);
 			}
 		}
 		return true;
@@ -152,22 +185,32 @@ namespace ClosestPoint
 		// Edge vectors from A; solve the 3x3 Gram system to project the origin onto the affine hull
 		Vec4 e1 = inB - inA, e2 = inC - inA, e3 = inD - inA;
 
+		// Small GJK support tetrahedra can have nearly parallel edges. Retain double
+		// through the Gram solve, promoting coordinates before multiplication/accumulation.
+		auto dot_double = [](Vec4Arg inU, Vec4Arg inV) {
+			return (double(inU.GetX()) * double(inV.GetX()) + double(inU.GetY()) * double(inV.GetY()))
+				+ (double(inU.GetZ()) * double(inV.GetZ()) + double(inU.GetW()) * double(inV.GetW()));
+		};
+
 		// 3x3 Gram matrix G: G_ij = e_i . e_j
-		float d00 = e1.Dot(e1), d01 = e1.Dot(e2), d02 = e1.Dot(e3);
-		float d11 = e2.Dot(e2), d12 = e2.Dot(e3), d22 = e3.Dot(e3);
+		double d00 = dot_double(e1, e1), d01 = dot_double(e1, e2), d02 = dot_double(e1, e3);
+		double d11 = dot_double(e2, e2), d12 = dot_double(e2, e3), d22 = dot_double(e3, e3);
 
 		// Cofactors of the 3x3 Gram matrix
-		float C00 = d11 * d22 - d12 * d12;
-		float C01 = d02 * d12 - d01 * d22;
-		float C02 = d01 * d12 - d02 * d11;
-		float C11 = d00 * d22 - d02 * d02;
-		float C12 = d01 * d02 - d00 * d12;
-		float C22 = d00 * d11 - d01 * d01;
+		double C00 = d11 * d22 - d12 * d12;
+		double C01 = d02 * d12 - d01 * d22;
+		double C02 = d01 * d12 - d02 * d11;
+		double C11 = d00 * d22 - d02 * d02;
+		double C12 = d01 * d02 - d00 * d12;
+		double C22 = d00 * d11 - d01 * d01;
 
 		// Gram determinant (always >= 0)
-		float det = d00 * C00 + d01 * C01 + d02 * C02;
+		double det = d00 * C00 + d01 * C01 + d02 * C02;
 
-		if (det < 1.0e-12f)
+		// det has units length^6: an absolute cutoff discards well-conditioned small
+		// tetrahedra and makes GJK's interior projection disagree with its face predicate.
+		// Use the same scale-invariant Hadamard conditioning limit as that predicate.
+		if (det <= 1.0e-6f * d00 * d11 * d22)
 		{
 			// Degenerate tetrahedron, fall back to best triangle using largest Gram sub-determinant
 			if (C22 >= C00 && C22 >= C11)
@@ -189,13 +232,13 @@ namespace ClosestPoint
 		}
 
 		// RHS: b_i = -A . e_i
-		float b0 = -inA.Dot(e1), b1 = -inA.Dot(e2), b2 = -inA.Dot(e3);
+		double b0 = -dot_double(inA, e1), b1 = -dot_double(inA, e2), b2 = -dot_double(inA, e3);
 
-		// Cramer's rule: lambda = adj(G) * b / det(G)
-		float inv_det = 1.0f / det;
-		outV = (b0 * C00 + b1 * C01 + b2 * C02) * inv_det;
-		outW = (b0 * C01 + b1 * C11 + b2 * C12) * inv_det;
-		outX = (b0 * C02 + b1 * C12 + b2 * C22) * inv_det;
+		// Cramer's rule: lambda = adj(G) * b / det(G). Only round the output weights.
+		double inv_det = 1.0 / det;
+		outV = float((b0 * C00 + b1 * C01 + b2 * C02) * inv_det);
+		outW = float((b0 * C01 + b1 * C11 + b2 * C12) * inv_det);
+		outX = float((b0 * C02 + b1 * C12 + b2 * C22) * inv_det);
 		outU = 1.0f - outV - outW - outX;
 		return true;
 	}
@@ -230,7 +273,7 @@ namespace ClosestPoint
 	/// outSet describes which features are closest: 1 = a, 2 = b, 4 = c, 5 = line segment ac, 7 = triangle interior etc.
 	/// If MustIncludeC is true, the function assumes that C is part of the closest feature (vertex, edge, face) and does less work, if the assumption is not true then a closest point to the other features is returned.
 	template <bool MustIncludeC = false>
-	inline Vec4	GetClosestPointOnTriangle(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, uint32 &outSet)
+	inline Vec4	GetClosestPointOnTriangleScaled(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, uint32 &outSet)
 	{
 		// Taken from: Real-Time Collision Detection - Christer Ericson (Section: Closest Point on Triangle to Point)
 		// With p = 0
@@ -254,8 +297,8 @@ namespace ClosestPoint
 		Vec4 ac = c - a;
 		float n_len_sq = GramDeterminant(ab, ac); // = |ab x ac|^2 in 3D
 
-		// Check degenerate
-		if (n_len_sq < 1.0e-10f) // Square(FLT_EPSILON) was too small and caused numerical problems, see test case TestCollideParallelTriangleVsCapsule
+		// Match the barycentric solve's dimensionless Hadamard conditioning policy.
+		if (n_len_sq <= 1.0e-6f * ab.LengthSq() * ac.LengthSq())
 		{
 			// Degenerate, fallback to vertices and edges
 
@@ -289,7 +332,7 @@ namespace ClosestPoint
 
 			// Edge AC
 			float ac_len_sq = ac.LengthSq();
-			if (ac_len_sq > Square(FLT_EPSILON))
+			if (ac_len_sq > 0.0f)
 			{
 				float v = Clamp(-a.Dot(ac) / ac_len_sq, 0.0f, 1.0f);
 				Vec4 q = a + v * ac;
@@ -305,7 +348,7 @@ namespace ClosestPoint
 			// Edge BC
 			Vec4 bc = inC - inB;
 			float bc_len_sq = bc.LengthSq();
-			if (bc_len_sq > Square(FLT_EPSILON))
+			if (bc_len_sq > 0.0f)
 			{
 				float v = Clamp(-inB.Dot(bc) / bc_len_sq, 0.0f, 1.0f);
 				Vec4 q = inB + v * bc;
@@ -324,7 +367,7 @@ namespace ClosestPoint
 				// Edge AB
 				ab = inB - inA;
 				float ab_len_sq = ab.LengthSq();
-				if (ab_len_sq > Square(FLT_EPSILON))
+				if (ab_len_sq > 0.0f)
 				{
 					float v = Clamp(-inA.Dot(ab) / ab_len_sq, 0.0f, 1.0f);
 					Vec4 q = inA + v * ab;
@@ -414,6 +457,19 @@ namespace ClosestPoint
 		outSet = 0b0111;
 		Bivec plane = Bivec::sWedge(ab, ac);
 		return a + plane.Contract(plane.Contract(a)) * (1.0f / n_len_sq);
+	}
+
+	/// Closest triangle point with a power-of-two change of units. The scaled helper
+	/// retains the established float Voronoi/wedge arithmetic and feature masks.
+	/// Scaling is exact in the normal range and is undone only after projection.
+	/// MustIncludeC has the same precondition as GetClosestPointOnTriangleScaled.
+	template <bool MustIncludeC = false>
+	inline Vec4 GetClosestPointOnTriangle(Vec4Arg inA, Vec4Arg inB, Vec4Arg inC, uint32 &outSet)
+	{
+		double scale = ProjectionScale(inA, inB, inC);
+		Vec4 a(DVec4(inA) / scale), b(DVec4(inB) / scale), c(DVec4(inC) / scale);
+		Vec4 closest = GetClosestPointOnTriangleScaled<MustIncludeC>(a, b, c, outSet);
+		return Vec4(DVec4(closest) * scale);
 	}
 
 	/// Check if the origin is outside the face (inA, inB, inC) of tetrahedron (inA, inB, inC, inD).
@@ -620,61 +676,70 @@ namespace ClosestPoint
 		// Edge vectors from A
 		Vec4 e1 = inB - inA, e2 = inC - inA, e3 = inD - inA, e4 = inE - inA;
 
+		// The Gram/cofactor expansion can cancel enough float precision to reverse an interior
+		// barycentric sign, even above the degeneracy threshold. Promote coordinates BEFORE the
+		// dot products, not just their rounded float results, and retain double through the sign tests.
+		// Keep the existing float-input degeneracy threshold and barycentric slop unchanged.
+		auto dot_double = [](Vec4Arg inU, Vec4Arg inV) {
+			return (double(inU.GetX()) * double(inV.GetX()) + double(inU.GetY()) * double(inV.GetY()))
+				+ (double(inU.GetZ()) * double(inV.GetZ()) + double(inU.GetW()) * double(inV.GetW()));
+		};
+
 		// 4x4 Gram matrix G: G_ij = e_i . e_j (symmetric, 10 unique entries)
-		float d00 = e1.Dot(e1), d01 = e1.Dot(e2), d02 = e1.Dot(e3), d03 = e1.Dot(e4);
-		float d11 = e2.Dot(e2), d12 = e2.Dot(e3), d13 = e2.Dot(e4);
-		float d22 = e3.Dot(e3), d23 = e3.Dot(e4);
-		float d33 = e4.Dot(e4);
+		double d00 = dot_double(e1, e1), d01 = dot_double(e1, e2), d02 = dot_double(e1, e3), d03 = dot_double(e1, e4);
+		double d11 = dot_double(e2, e2), d12 = dot_double(e2, e3), d13 = dot_double(e2, e4);
+		double d22 = dot_double(e3, e3), d23 = dot_double(e3, e4);
+		double d33 = dot_double(e4, e4);
 
 		// RHS: b_i = -A . e_i
-		float b0 = -inA.Dot(e1), b1 = -inA.Dot(e2), b2 = -inA.Dot(e3), b3 = -inA.Dot(e4);
+		double b0 = -dot_double(inA, e1), b1 = -dot_double(inA, e2), b2 = -dot_double(inA, e3), b3 = -dot_double(inA, e4);
 
 		// 2x2 sub-determinants from rows 2,3 of G (6 values)
-		float s23_01 = d02 * d13 - d12 * d03;
-		float s23_02 = d02 * d23 - d22 * d03;
-		float s23_03 = d02 * d33 - d23 * d03;
-		float s23_12 = d12 * d23 - d22 * d13;
-		float s23_13 = d12 * d33 - d23 * d13;
-		float s23_23 = d22 * d33 - d23 * d23;
+		double s23_01 = d02 * d13 - d12 * d03;
+		double s23_02 = d02 * d23 - d22 * d03;
+		double s23_03 = d02 * d33 - d23 * d03;
+		double s23_12 = d12 * d23 - d22 * d13;
+		double s23_13 = d12 * d33 - d23 * d13;
+		double s23_23 = d22 * d33 - d23 * d23;
 
 		// 3x3 cofactors of G — first row (C0j) and second row (C1j)
-		float C00 =  d11 * s23_23 - d12 * s23_13 + d13 * s23_12;
-		float C01 = -(d01 * s23_23 - d12 * s23_03 + d13 * s23_02);
-		float C02 =  d01 * s23_13 - d11 * s23_03 + d13 * s23_01;
-		float C03 = -(d01 * s23_12 - d11 * s23_02 + d12 * s23_01);
+		double C00 =  d11 * s23_23 - d12 * s23_13 + d13 * s23_12;
+		double C01 = -(d01 * s23_23 - d12 * s23_03 + d13 * s23_02);
+		double C02 =  d01 * s23_13 - d11 * s23_03 + d13 * s23_01;
+		double C03 = -(d01 * s23_12 - d11 * s23_02 + d12 * s23_01);
 
-		float C11 =  d00 * s23_23 - d02 * s23_03 + d03 * s23_02;
-		float C12 = -(d00 * s23_13 - d01 * s23_03 + d03 * s23_01);
-		float C13 =  d00 * s23_12 - d01 * s23_02 + d02 * s23_01;
+		double C11 =  d00 * s23_23 - d02 * s23_03 + d03 * s23_02;
+		double C12 = -(d00 * s23_13 - d01 * s23_03 + d03 * s23_01);
+		double C13 =  d00 * s23_12 - d01 * s23_02 + d02 * s23_01;
 
 		// 2x2 sub-determinants from rows 1,3 of G (5 values)
-		float s13_01 = d01 * d13 - d11 * d03;
-		float s13_02 = d01 * d23 - d12 * d03;
-		float s13_03 = d01 * d33 - d13 * d03;
-		float s13_12 = d11 * d23 - d12 * d13;
-		float s13_13 = d11 * d33 - d13 * d13;
+		double s13_01 = d01 * d13 - d11 * d03;
+		double s13_02 = d01 * d23 - d12 * d03;
+		double s13_03 = d01 * d33 - d13 * d03;
+		double s13_12 = d11 * d23 - d12 * d13;
+		double s13_13 = d11 * d33 - d13 * d13;
 
 		// Third row cofactors
-		float C22 =  d00 * s13_13 - d01 * s13_03 + d03 * s13_01;
-		float C23 = -(d00 * s13_12 - d01 * s13_02 + d02 * s13_01);
+		double C22 =  d00 * s13_13 - d01 * s13_03 + d03 * s13_01;
+		double C23 = -(d00 * s13_12 - d01 * s13_02 + d02 * s13_01);
 
 		// 2x2 sub-determinants from rows 1,2 of G (3 values)
-		float s12_01 = d01 * d12 - d11 * d02;
-		float s12_02 = d01 * d22 - d12 * d02;
-		float s12_12 = d11 * d22 - d12 * d12;
+		double s12_01 = d01 * d12 - d11 * d02;
+		double s12_02 = d01 * d22 - d12 * d02;
+		double s12_12 = d11 * d22 - d12 * d12;
 
 		// Fourth row cofactor
-		float C33 = d00 * s12_12 - d01 * s12_02 + d02 * s12_01;
+		double C33 = d00 * s12_12 - d01 * s12_02 + d02 * s12_01;
 
 		// Gram determinant (expansion along first row)
-		float det_G = d00 * C00 + d01 * C01 + d02 * C02 + d03 * C03;
+		double det_G = d00 * C00 + d01 * C01 + d02 * C02 + d03 * C03;
 
 		// Cramer's rule: barycentric coordinate numerators = adj(G) * b
-		float num_B = b0 * C00 + b1 * C01 + b2 * C02 + b3 * C03;
-		float num_C = b0 * C01 + b1 * C11 + b2 * C12 + b3 * C13;
-		float num_D = b0 * C02 + b1 * C12 + b2 * C22 + b3 * C23;
-		float num_E = b0 * C03 + b1 * C13 + b2 * C23 + b3 * C33;
-		float num_A = det_G - num_B - num_C - num_D - num_E;
+		double num_B = b0 * C00 + b1 * C01 + b2 * C02 + b3 * C03;
+		double num_C = b0 * C01 + b1 * C11 + b2 * C12 + b3 * C13;
+		double num_D = b0 * C02 + b1 * C12 + b2 * C22 + b3 * C23;
+		double num_E = b0 * C03 + b1 * C13 + b2 * C23 + b3 * C33;
+		double num_A = det_G - num_B - num_C - num_D - num_E;
 
 		// Origin is outside the face opposite vertex V iff lambda_V < 0, and det_G >= 0 (Gram), so
 		// iff num_V < 0. TODO(4D): the slop must be relative to det_G - see OriginOutsideOfPlane. An
@@ -686,7 +751,7 @@ namespace ClosestPoint
 		if (det_G <= 1.0e-6f * d00 * d11 * d22 * d33)
 			return 0x1f;
 
-		float slop = FLT_EPSILON * det_G;
+		double slop = FLT_EPSILON * det_G;
 		uint32 result = 0;
 		if (num_E < slop) result |= 0x01;	// face ABCD, opposite E
 		if (num_A < slop) result |= 0x02;	// face BCDE, opposite A

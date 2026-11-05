@@ -14,6 +14,8 @@
 #include <Jolt/Geometry/RayCapsule.h>
 #include <Jolt/Geometry/RayCylinder.h>
 #include <random>
+#include <algorithm>
+#include <cmath>
 
 TEST_SUITE("GJKTests")
 {
@@ -83,6 +85,217 @@ TEST_SUITE("GJKTests")
 			Sphere s3(Vec4(0, 0, 0, 1.5f), 1.0f);
 			Vec4 v = Vec4::sZero();
 			CHECK(gjk.Intersects(s1, s3, 1.0e-4f, v));
+		}
+	}
+
+	TEST_CASE("TestGJKSphereVsBoxKnownFalseNegative")
+	{
+		// Exact bits from the Windows performance sample: analytic overlap is about 0.105954.
+		// Float pentachoron cofactors flipped the sign of an interior barycentric coordinate.
+		Sphere sphere(UVec4(1054393960u, 3216155450u, 1030375168u, 3176957120u).ReinterpretAsFloat(),
+			UVec4::sReplicate(1066813470u).ReinterpretAsFloat().GetX());
+		AABox box(UVec4(1026589376u, 3198869184u, 3220510732u, 3203257008u).ReinterpretAsFloat(),
+			UVec4(1050975312u, 1053999968u, 1062061676u, 3185378432u).ReinterpretAsFloat());
+		CHECK(sphere.Overlaps(box));
+		double distance_sq = 0.0;
+		for (int i = 0; i < 4; ++i)
+		{
+			double delta = double(sphere.GetCenter()[i]) - Clamp(double(sphere.GetCenter()[i]), double(box.mMin[i]), double(box.mMax[i]));
+			distance_sq += delta * delta;
+		}
+		CHECK(double(sphere.GetRadius()) - sqrt(distance_sq) > 0.1);
+
+		const Vec4 initial_axes[] = { Vec4::sZero(), Vec4::sAxisX(), Vec4::sAxisW(), Vec4(-1, 2, -3, 4) };
+		for (Vec4 initial_axis : initial_axes)
+		{
+			CAPTURE(initial_axis);
+			for (bool reverse : { false, true })
+			{
+				CAPTURE(reverse);
+				GJKClosestPoint gjk;
+				Vec4 v = initial_axis;
+				CHECK((reverse? gjk.Intersects(box, sphere, 1.0e-4f, v) : gjk.Intersects(sphere, box, 1.0e-4f, v)));
+				v = initial_axis;
+				Vec4 pa, pb;
+				float closest_sq = reverse? gjk.GetClosestPoints(box, sphere, 1.0e-4f, cLargeFloat, v, pa, pb)
+					: gjk.GetClosestPoints(sphere, box, 1.0e-4f, cLargeFloat, v, pa, pb);
+				CHECK(closest_sq <= Square(1.0e-4f));
+			}
+		}
+	}
+
+	TEST_CASE("TestGJKSmallScaleExactMaterialOverlap")
+	{
+		// Frozen binary32 envelope sample, independent corner oracle below uses the actual
+		// represented matrix, not an assumption that its transpose is its exact inverse.
+		const Mat44 rotation(
+			UVec4(1035286842u, 1058415092u, 1057962952u, 1058289307u).ReinterpretAsFloat(),
+			UVec4(1057968802u, 1055779400u, 1039893503u, 3207383394u).ReinterpretAsFloat(),
+			UVec4(1056445746u, 3207187731u, 1058109662u, 1028083674u).ReinterpretAsFloat(),
+			UVec4(3207238319u, 3160778855u, 1058486806u, 3202933138u).ReinterpretAsFloat());
+		const Vec4 extent = UVec4(1006968504u, 1010659492u, 1010995036u, 1013679390u).ReinterpretAsFloat();
+		const AABox local_box(-extent, extent);
+		const TransformedConvexObject<AABox> box(rotation, Vec4::sZero(), local_box);
+		const Sphere sphere(UVec4(987138736u, 3155711121u, 1014467187u, 3167031109u).ReinterpretAsFloat(),
+			UVec4::sReplicate(1004057688u).ReinterpretAsFloat().GetX());
+		// Local sample corner signs are -,+,+,+ (verified from the represented center).
+		double residual[4], distance_sq = 0;
+		for (int j = 0; j < 4; ++j)
+		{
+			double corner = 0;
+			for (int k = 0; k < 4; ++k)
+				corner += double(rotation.GetColumn4(k)[j]) * double((k == 0)? -extent[k] : extent[k]);
+			residual[j] = double(sphere.GetCenter()[j]) - corner;
+			distance_sq += residual[j] * residual[j];
+		}
+		for (int k = 0; k < 4; ++k)
+		{
+			double outward = 0;
+			for (int j = 0; j < 4; ++j) outward += residual[j] * double(rotation.GetColumn4(k)[j]);
+			CHECK(outward * ((k == 0)? -1 : 1) > 0);
+		}
+		const float tolerance = 1.0e-6f;
+		CHECK(double(sphere.GetRadius()) - sqrt(distance_sq) > 9.9e-6);
+		const Vec4 axes[] = { Vec4::sZero(), Vec4::sAxisX(), Vec4::sAxisW(), Vec4(-1, 2, -3, 4) };
+		for (Vec4 initial_axis : axes)
+			for (bool reverse : { false, true })
+			{
+				CAPTURE(initial_axis);
+				CAPTURE(reverse);
+				GJKClosestPoint gjk;
+				Vec4 v = initial_axis, pa, pb;
+				CHECK((reverse? gjk.Intersects(box, sphere, tolerance, v) : gjk.Intersects(sphere, box, tolerance, v)));
+				v = initial_axis;
+				float closest_sq = reverse? gjk.GetClosestPoints(box, sphere, tolerance, cLargeFloat, v, pa, pb)
+					: gjk.GetClosestPoints(sphere, box, tolerance, cLargeFloat, v, pa, pb);
+				CHECK(closest_sq <= Square(tolerance));
+			}
+	}
+
+	TEST_CASE("TestGJKSmallScaleMaterialEnvelope")
+	{
+		UnitTestRandom random(0x4d6a6bu);
+		const Vec4 axes[] = { Vec4::sZero(), Vec4::sAxisX(), Vec4::sAxisW(), Vec4(-1, 2, -3, 4) };
+		unsigned queries = 0;
+		for (int sample = 0; sample < 64; ++sample)
+		{
+			CAPTURE(sample);
+			float angles[6];
+			for (float &angle : angles) angle = float(int(random() & 1023u) - 512) / 512.0f;
+			Rotor rotor = Rotor::sExp(Bivec(angles[0], angles[1], angles[2], angles[3], angles[4], angles[5]));
+			Mat44 rotation = Mat44::sRotation(rotor);
+			Vec4 extent, center;
+			double corner_distance_sq = 0;
+			for (int i = 0; i < 4; ++i)
+			{
+				extent[i] = 0.5f + float(random() & 31u) / 32.0f;
+				float delta = 0.25f + float(random() & 15u) / 64.0f;
+				center[i] = (random() & 1u? 1.0f : -1.0f) * (extent[i] + delta);
+				corner_distance_sq += double(delta) * delta;
+			}
+			for (float scale : { 0.001f, 0.003f, 0.01f, 0.03f, 0.1f, 1.0f })
+			{
+				CAPTURE(scale);
+				AABox local_box(-extent * scale, extent * scale);
+				TransformedConvexObject<AABox> box(rotation, Vec4::sZero(), local_box);
+				for (float margin : { -0.125f, -0.001f, -0.00005f, 0.00005f, 0.001f, 0.125f })
+				{
+					CAPTURE(margin);
+					Sphere sphere(rotor * (center * scale), float(sqrt(corner_distance_sq) + double(margin)) * scale);
+					double residual[4], distance_sq = 0;
+					for (int j = 0; j < 4; ++j)
+					{
+						double corner = 0;
+						for (int k = 0; k < 4; ++k)
+							corner += double(rotation.GetColumn4(k)[j]) * double(center[k] > 0? local_box.mMax[k] : local_box.mMin[k]);
+						residual[j] = double(sphere.GetCenter()[j]) - corner;
+						distance_sq += residual[j] * residual[j];
+					}
+					// The outward normal cone proves this represented corner is the minimizer.
+					for (int k = 0; k < 4; ++k)
+					{
+						double outward = 0;
+						for (int j = 0; j < 4; ++j) outward += residual[j] * double(rotation.GetColumn4(k)[j]);
+						CHECK(outward * (center[k] > 0? 1 : -1) > 0);
+					}
+					double overlap = double(sphere.GetRadius()) - sqrt(distance_sq);
+					float tolerance = 1.0e-4f * scale;
+					for (Vec4 initial_axis : axes)
+						for (bool reverse : { false, true })
+						{
+							CAPTURE(initial_axis);
+							CAPTURE(reverse);
+							GJKClosestPoint gjk;
+							Vec4 v = initial_axis, pa, pb;
+							bool hit = reverse? gjk.Intersects(box, sphere, tolerance, v) : gjk.Intersects(sphere, box, tolerance, v);
+							if (overlap > 2.0 * tolerance) CHECK(hit);
+							if (overlap < -2.0 * tolerance) CHECK_FALSE(hit);
+							v = initial_axis;
+							float closest_sq = reverse? gjk.GetClosestPoints(box, sphere, tolerance, cLargeFloat, v, pa, pb)
+								: gjk.GetClosestPoints(sphere, box, tolerance, cLargeFloat, v, pa, pb);
+							CHECK(std::isfinite(closest_sq));
+							CHECK(closest_sq >= 0);
+							CHECK(abs(sqrt(double(closest_sq)) - std::max(0.0, -overlap)) <= 2.0 * tolerance);
+							++queries;
+						}
+				}
+			}
+		}
+		CHECK(queries == 18432);
+	}
+
+	TEST_CASE("TestGJKSeededRotationsAndScalesAgainstAnalyticIntersections")
+	{
+		UnitTestRandom random(0x4d6a6bu);
+		const Vec4 initial_axes[] = { Vec4::sZero(), Vec4::sAxisX(), Vec4::sAxisW(), Vec4(-1, 2, -3, 4) };
+		for (int sample = 0; sample < 64; ++sample)
+		{
+			CAPTURE(sample);
+			float angles[6];
+			for (float &a : angles)
+				a = float(int(random() & 1023u) - 512) / 512.0f;
+			Rotor rotor = Rotor::sExp(Bivec(angles[0], angles[1], angles[2], angles[3], angles[4], angles[5]));
+			Mat44 rotation = Mat44::sRotation(rotor);
+			Vec4 extent, center;
+			double corner_distance_sq = 0;
+			for (int i = 0; i < 4; ++i)
+			{
+				extent[i] = 0.5f + float(random() & 31u) / 32.0f;
+				float delta = 0.25f + float(random() & 15u) / 64.0f;
+				center[i] = (random() & 1u? 1.0f : -1.0f) * (extent[i] + delta);
+				corner_distance_sq += double(delta) * double(delta);
+			}
+			for (float scale : { 0.01f, 0.1f, 1.0f, 100.0f })
+			{
+				CAPTURE(scale);
+				AABox local_box(-extent * scale, extent * scale);
+				TransformedConvexObject<AABox> box(rotation, Vec4::sZero(), local_box);
+				for (bool intersect : { false, true })
+				{
+					CAPTURE(intersect);
+					// Prescribed corner distance gives an independent sphere-box reference.
+					// Stay 0.125 * scale from contact: this does not excuse any disagreements.
+					float margin = intersect? 0.125f : -0.125f;
+					Sphere sphere(rotor * (center * scale), float(sqrt(corner_distance_sq) + double(margin)) * scale);
+					Sphere sphere_a(Vec4::sZero(), scale);
+					Sphere sphere_b(rotor * (center.Normalized() * ((1.5f - margin) * scale)), 0.5f * scale);
+					CHECK(sphere_a.Overlaps(sphere_b) == intersect);
+					for (Vec4 initial_axis : initial_axes)
+					{
+						CAPTURE(initial_axis);
+						auto check_pair = [&](const auto &inA, const auto &inB, const char *inPair) {
+							CAPTURE(std::string(inPair));
+							GJKClosestPoint gjk;
+							Vec4 v = initial_axis;
+							CHECK(gjk.Intersects(inA, inB, 1.0e-4f * scale, v) == intersect);
+							v = initial_axis;
+							CHECK(gjk.Intersects(inB, inA, 1.0e-4f * scale, v) == intersect);
+						};
+						check_pair(sphere, box, "sphere-box");
+						check_pair(sphere_a, sphere_b, "sphere-sphere");
+					}
+				}
+			}
 		}
 	}
 

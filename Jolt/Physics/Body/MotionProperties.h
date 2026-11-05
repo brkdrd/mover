@@ -114,6 +114,13 @@ public:
 	inline void				ClampLinearVelocity();
 	inline void				ClampAngularVelocity();
 
+	/// Sticky, non-authoritative diagnostics. The exclusive step owner resets these
+	/// before Update; they are deliberately not part of saved/serialized state.
+	bool WasLinearVelocityClamped() const { return mLinearVelocityClamped; }
+	bool WasAngularVelocityClamped() const { return mAngularVelocityClamped; }
+	bool HadNonFiniteVelocity() const { return mNonFiniteVelocity; }
+	void ResetVelocityDiagnostics() { mLinearVelocityClamped = mAngularVelocityClamped = mNonFiniteVelocity = false; }
+
 	/// Get linear damping: dv/dt = -c * v. c. Value should be zero or positive and is usually close to 0.
 	inline float			GetLinearDamping() const										{ return mLinearDamping; }
 	void					SetLinearDamping(float inLinearDamping)							{ JPH_ASSERT(inLinearDamping >= 0.0f); mLinearDamping = inLinearDamping; }
@@ -271,8 +278,10 @@ public:
 	inline void				SubAngularVelocityStep(BivecArg inAngularVelocityChange)		{ JPH_DET_LOG("SubAngularVelocityStep: " << inAngularVelocityChange); JPH_ASSERT(BodyAccess::sCheckRights(BodyAccess::sVelocityAccess(), BodyAccess::EAccess::ReadWrite)); mAngularVelocity -= inAngularVelocityChange; JPH_ASSERT(!mAngularVelocity.IsNaN()); }
 	///@}
 
-	/// Apply the gyroscopic force (aka Dzhanibekov effect, see https://en.wikipedia.org/wiki/Tennis_racket_theorem)
-	inline void				ApplyGyroscopicForceInternal(RotorArg inBodyRotation, float inDeltaTime);
+	/// Advance torque-free orientation AND transport angular velocity with fixed world momentum.
+	/// Called once after force/contact velocity kicks, not separately as an extra torque.
+	/// Second-order principal-plane Hamiltonian splitting; unlocked, positive inertia only.
+	inline Rotor			IntegrateGyroscopicRotationInternal(RotorArg inBodyRotation, float inDeltaTime);
 
 	/// Apply all accumulated forces, torques and drag (should only be called by the PhysicsSystem)
 	inline void				ApplyForceTorqueAndDragInternal(RotorArg inBodyRotation, Vec4Arg inGravity, float inDeltaTime);
@@ -285,7 +294,7 @@ public:
 	uint32					GetIndexInActiveBodiesInternal() const							{ return mIndexInActiveBodies; }
 
 #ifdef JPH_DOUBLE_PRECISION
-	inline DVec4			GetSleepTestOffset() const										{ return DVec4::sLoadDouble3Unsafe(mSleepTestOffset); }
+	inline DVec4			GetSleepTestOffset() const										{ return DVec4(mSleepTestOffset); }
 #endif // JPH_DOUBLE_PRECISION
 
 	/// Reset spheres to center around inPoints with radius 0
@@ -329,6 +338,9 @@ private:
 	uint32					mIslandIndex = cInactiveIndex;									///< Index of the island that this body is part of
 
 	// 1 byte aligned
+	bool                    mLinearVelocityClamped = false;
+	bool                    mAngularVelocityClamped = false;
+	bool                    mNonFiniteVelocity = false;
 	EMotionQuality			mMotionQuality;													///< Motion quality, or how well it detects collisions when it has a high velocity
 	bool					mAllowSleeping;													///< If this body can go to sleep
 	EAllowedDOFs			mAllowedDOFs = EAllowedDOFs::All;								///< Allowed degrees of freedom for this body (uint16)
@@ -337,7 +349,7 @@ private:
 
 	// Sleep test data
 #ifdef JPH_DOUBLE_PRECISION
-	Double3					mSleepTestOffset;												///< mSleepTestSpheres are relative to this offset to prevent floating point inaccuracies
+	Double4					mSleepTestOffset;												///< mSleepTestSpheres are relative to this offset to prevent floating point inaccuracies
 #endif // JPH_DOUBLE_PRECISION
 	Sphere					mSleepTestSpheres[3];											///< Measure motion for 3 points on the body to see if it is resting
 	float					mSleepTestTimer;												///< How long this body has been within the movement tolerance

@@ -130,7 +130,7 @@ void ObjectStreamBinaryOut::WritePrimitiveData(const Vec3 &inPrimitive)
 
 void ObjectStreamBinaryOut::WritePrimitiveData(const DVec4 &inPrimitive)
 {
-	mStream.write((const char *)&inPrimitive, 3 * sizeof(double));
+	mStream.write((const char *)&inPrimitive, 4 * sizeof(double));
 }
 
 void ObjectStreamBinaryOut::WritePrimitiveData(const Vec4 &inPrimitive)

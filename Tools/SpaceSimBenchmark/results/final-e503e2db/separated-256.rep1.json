@@ -1,0 +1,53 @@
+{
+  "manifest": {
+    "scenario": "separated", "bodies": 256, "steps": 1200, "timestep_s": 0.0083333337679505348, "rate_hz": 120,
+    "simulated_seconds": 10.000000521540642, "worker_threads": 0, "job_system": "JobSystemSingleThreaded",
+    "seed": "0x5eed4d0000000001", "gyroscopic_term": true, "sleeping": false, "gravity": [0,0,0,0],
+    "shape_half_extents": [0.4000, 0.7000, 1.0000, 1.3000], "linear_damping": 0.0, "angular_damping": 0.0,
+    "solver_velocity_steps": 10, "solver_position_steps": 2,
+    "sample_interval_steps": 60, "percentile_method": "nearest-rank",
+    "compiled_config": "float",
+    "compiler": "GNU 13.3.0", "build_type": "Release",
+    "library_lto": "on", "benchmark_lto": "off", "cross_platform_deterministic": "off", "fast_math": "false",
+    "harness_source_sha256": "75048e9658ea53895a3f04e4b557e52a8a96eb1e81e471d5dd7a048e9aceb635", "core_source_sha256": "ffdd3318db5698795ea1722e46eac16e028ea7cabed3eaecc48b6f338b8ca1ba", "build_sha256": "8bc2a9ffa04961848c16576e87abaa84fb892448119c3b2e761f7f024ea2f278",
+    "core_source_files": 409, "git_head_at_configure": "e503e2db3d653072e0e45e12e29f44f48ca73609", "git_dirty_entries_at_configure": 0,
+    "compile_definitions": "-DJPH_USE_CPU_COMPUTE -DJPH_OBJECT_STREAM -DJPH_USE_AVX2 -DJPH_USE_AVX -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_LZCNT -DJPH_USE_TZCNT -DJPH_USE_F16C -DJPH_USE_FMADD",
+    "benchmark_compile_flags": "-O3 -DNDEBUG -std=c++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -pthread -Wall -Wextra",
+    "library_compile_flags": "-O3 -DNDEBUG -Wall -Werror -g -fno-rtti -fno-exceptions -Wno-stringop-overflow -Wno-psabi -ffp-contract=off -std=c++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -pthread",
+    "cmake_cache": "INTERPROCEDURAL_OPTIMIZATION=ON;CROSS_PLATFORM_DETERMINISTIC=OFF;DOUBLE_PRECISION=OFF;USE_ASSERTS=OFF;USE_AVX2=ON;USE_FMADD=ON;USE_SSE4_2=ON;PROFILER_IN_DEBUG_AND_RELEASE=OFF;DEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF;ENABLE_ALL_WARNINGS=ON;JPH_BUILD_SHARED_LIBS=OFF;"
+  },
+  "timing": {
+    "setup_ns": 172340, "run_wall_ns": 341065228, "sum_step_ns": 340553674, "sampling_ns": 461637,
+    "instrument_overhead_ns": 15.94,
+    "step_ns": { "min": 262081, "p50": 267065, "p95": 374371, "p99": 554616, "max": 699171, "mean": 283795 },
+    "throughput_steps_per_second": 3523.674,
+    "deadline_ns_8333": 8333333.333, "deadline_misses": 0, "deadline_misses_150hz": 0
+  },
+  "checks": {
+    "finite": true, "rotations_normalized": true, "all_bodies_active": true, "velocity_not_clamped": true, "core_nonfinite_velocity": true,
+    "non_finite_observations": 0, "non_normalized_observations": 0,
+    "energy_rel_drift": 1.619084e-05, "total_energy_rel_drift": 3.025334e-06, "energy_gated": true,
+    "spin_angular_momentum_rel_drift": 2.368805e-06, "spin_angular_momentum_gated": true,
+    "total_angular_momentum_rel_drift": 2.381344e-05, "total_linear_momentum_rel_drift": 0.000000e+00,
+    "min_pair_gap_m": 4.344295, "pair_gap_checked": true,
+    "reference_energy_scale": 3.791069e+06, "reference_angular_momentum_scale": 1.124551e+07, "reference_linear_momentum_scale": 7.417353e+05,
+    "contacts_added": 0, "contacts_persisted": 0, "contacts_removed": 0,
+    "update_errors": 0, "samples": 20
+  },
+  "gates": [
+    { "name": "finite_state", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "1 = violation" },
+    { "name": "reference_rotation_orthogonal", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "harness reference: |Q^T Q - I| < 1e-5" },
+    { "name": "rotation_normalized", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "non-normalized observations" },
+    { "name": "all_bodies_active", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "sleeping disabled" },
+    { "name": "velocity_not_clamped", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "1 = clamp seen" },
+    { "name": "core_nonfinite_velocity", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "MotionProperties sticky diagnostic" },
+    { "name": "energy_rel_drift_per_body", "value": 1.619084e-05, "limit": 1.000000e-04, "gated": true, "pass": true, "note": "gyro free rotation" },
+    { "name": "total_energy_rel_drift", "value": 3.025334e-06, "limit": 1.000000e-04, "gated": true, "pass": true, "note": "sum |E0| scale" },
+    { "name": "spin_angular_momentum_rel_drift", "value": 2.368805e-06, "limit": 1.000000e-04, "gated": true, "pass": true, "note": "per body, separated" },
+    { "name": "total_angular_momentum_rel_drift", "value": 2.381344e-05, "limit": 1.000000e-03, "gated": true, "pass": true, "note": "L about origin" },
+    { "name": "total_linear_momentum_rel_drift", "value": 0.000000e+00, "limit": 1.000000e-05, "gated": true, "pass": true, "note": "no external force" },
+    { "name": "pair_separation", "value": 4.344295e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "min gap (m), must stay positive" }
+  ],
+  "state_hash": "4eae817888d2cf89",
+  "result": "PASS"
+}

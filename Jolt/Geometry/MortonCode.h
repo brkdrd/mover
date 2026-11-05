@@ -19,23 +19,27 @@ public:
 		uint32 v = uint32(inV * 255.0f + 0.5f);
 		JPH_ASSERT(v < 256);
 		// Spread 8 bits across 32 bits with 3-bit gaps
-		v = (v | (v << 16)) & 0x030000FFu;
-		v = (v | (v <<  8)) & 0x0300F00Fu;
-		v = (v | (v <<  4)) & 0x030C30C3u;
-		v = (v | (v <<  2)) & 0x09249249u;
+		v = (v | (v << 12)) & 0x000F000Fu;
+		v = (v | (v <<  6)) & 0x03030303u;
+		v = (v | (v <<  3)) & 0x11111111u;
 		return v;
 	}
 
-	/// Calculate the 4D morton code for inVector, given that all vectors lie in inVectorBounds
+	/// Calculate a 32-bit 4D Morton key: 8 bits/axis, nearest quantization to [0, 255].
+	/// Bit 4*b+3/2/1/0 stores X/Y/Z/W bit b respectively. Distinct quantized
+	/// coordinates are injective; points in the same quantization cell intentionally share a key.
+	/// Bounds must contain the point; zero-extent axes quantize to zero.
 	static uint32 sGetMortonCode(Vec4Arg inVector, const AABox &inVectorBounds)
 	{
 		// Convert to 8 bit fixed point
-		Vec4 scaled = (inVector - inVectorBounds.mMin) / inVectorBounds.GetSize();
+		Vec4 size = inVectorBounds.GetSize();
+		Vec4 safe_size = Vec4::sSelect(size, Vec4::sOne(), Vec4::sEquals(size, Vec4::sZero()));
+		Vec4 scaled = Vec4::sClamp((inVector - inVectorBounds.mMin) / safe_size, Vec4::sZero(), Vec4::sOne());
 		uint x = sExpandBits(scaled.GetX());
 		uint y = sExpandBits(scaled.GetY());
 		uint z = sExpandBits(scaled.GetZ());
 		uint w = sExpandBits(scaled.GetW());
-		return (x << 3) + (y << 2) + (z << 1) + w;
+		return (x << 3) | (y << 2) | (z << 1) | w;
 	}
 };
 

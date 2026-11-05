@@ -1,6 +1,6 @@
 # 4D space-sim engine specification
 
-Status: **proposed design**, 2026-11-04. This document sets requirements for a PvP space combat simulator built on 4D Jolt. It does not claim the systems below already exist. See the [README](../README.md) for implementation status and [system architecture](SpaceSimArchitecture.md) for integration contracts.
+Status: **design and acceptance requirements**, 2026-11-04. Mover implements prototype portions of this design; these requirements are not themselves proof of completion. See the [README](../README.md), [implementation plan](MoverImplementationPlan.md) and [validation record](MoverValidation.md) for current capabilities and open gates. The [system architecture](SpaceSimArchitecture.md) defines integration contracts.
 
 ## Product and workload
 

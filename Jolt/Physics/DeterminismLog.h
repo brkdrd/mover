@@ -23,18 +23,18 @@ class DeterminismLog
 private:
 	JPH_INLINE uint32		Convert(float inValue) const
 	{
-		return *(uint32 *)&inValue;
+		return BitCast<uint32>(inValue);
 	}
 
 	JPH_INLINE uint64		Convert(double inValue) const
 	{
-		return *(uint64 *)&inValue;
+		return BitCast<uint64>(inValue);
 	}
 
 public:
-							DeterminismLog()
+	explicit				DeterminismLog(const char *inPath = "detlog.txt")
 	{
-		mLog.open("detlog.txt", std::ios::out | std::ios::trunc | std::ios::binary); // Binary because we don't want a difference between Unix and Windows line endings.
+		mLog.open(inPath, std::ios::out | std::ios::trunc | std::ios::binary); // Binary because we don't want a difference between Unix and Windows line endings.
 		mLog.fill('0');
 	}
 
@@ -100,7 +100,7 @@ public:
 
 	DeterminismLog &		operator << (DVec4Arg inValue)
 	{
-		mLog << std::hex << std::setw(16) << Convert(inValue.GetX()) << " " << std::setw(16) << Convert(inValue.GetY()) << " " << std::setw(16) << Convert(inValue.GetZ());
+		mLog << std::hex << std::setw(16) << Convert(inValue.GetX()) << " " << std::setw(16) << Convert(inValue.GetY()) << " " << std::setw(16) << Convert(inValue.GetZ()) << " " << std::setw(16) << Convert(inValue.GetW());
 		return *this;
 	}
 

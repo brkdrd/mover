@@ -5,6 +5,9 @@
 #pragma once
 
 #include <Jolt/Core/NonCopyable.h>
+#include <Jolt/Math/Bivec.h>
+#include <Jolt/Math/Real.h>
+#include <Jolt/Math/Rotor.h>
 
 JPH_NAMESPACE_BEGIN
 
@@ -17,13 +20,18 @@ class JPH_EXPORT TempAllocator : public NonCopyable
 public:
 	JPH_OVERRIDE_NEW_DELETE
 
-	/// If this allocator needs to fall back to aligned allocations because JPH_RVECTOR_ALIGNMENT is bigger than the platform default
-	static constexpr bool			needs_aligned_allocate = JPH_RVECTOR_ALIGNMENT > JPH_DEFAULT_ALLOCATE_ALIGNMENT;
+	/// Required alignment for all temporary allocations, including custom TempAllocator implementations.
+	/// 4D angular quantities can require wider SIMD alignment than single-precision spatial vectors.
+	static constexpr size_t			cAlignment = std::max({ size_t(JPH_RVECTOR_ALIGNMENT), alignof(RVec4), alignof(Vec8), alignof(Bivec), alignof(Rotor) });
+
+	/// If the platform default allocator cannot satisfy the temporary allocation contract
+	static constexpr bool			needs_aligned_allocate = cAlignment > JPH_DEFAULT_ALLOCATE_ALIGNMENT;
 
 	/// Destructor
 	virtual							~TempAllocator() = default;
 
-	/// Allocates inSize bytes of memory, returned memory address must be JPH_RVECTOR_ALIGNMENT byte aligned
+	/// Allocates inSize bytes of memory, returned memory address must be cAlignment byte aligned (also for custom allocators).
+	/// A zero-size allocation returns nullptr.
 	virtual void *					Allocate(uint inSize) = 0;
 
 	/// Frees inSize bytes of memory located at inAddress
@@ -40,7 +48,7 @@ public:
 	explicit						TempAllocatorImpl(size_t inSize) : mSize(inSize)
 	{
 		if constexpr (needs_aligned_allocate)
-			mBase = static_cast<uint8 *>(AlignedAllocate(inSize, JPH_RVECTOR_ALIGNMENT));
+			mBase = static_cast<uint8 *>(AlignedAllocate(inSize, cAlignment));
 		else
 			mBase = static_cast<uint8 *>(JPH::Allocate(inSize));
 	}
@@ -64,14 +72,13 @@ public:
 		}
 		else
 		{
-			size_t new_top = mTop + AlignUp(inSize, JPH_RVECTOR_ALIGNMENT);
-			if (new_top > mSize)
+			if (!CanAllocate(inSize))
 			{
 				Trace("TempAllocator: Out of memory trying to allocate %u bytes", inSize);
 				std::abort();
 			}
 			void *address = mBase + mTop;
-			mTop = new_top;
+			mTop += AlignUp(size_t(inSize), cAlignment);
 			return address;
 		}
 	}
@@ -85,12 +92,13 @@ public:
 		}
 		else
 		{
-			mTop -= AlignUp(inSize, JPH_RVECTOR_ALIGNMENT);
-			if (mBase + mTop != inAddress)
+			const size_t aligned_size = AlignUp(size_t(inSize), cAlignment);
+			if (aligned_size < inSize || aligned_size > mTop || mBase + (mTop - aligned_size) != inAddress)
 			{
 				Trace("TempAllocator: Freeing in the wrong order");
 				std::abort();
 			}
+			mTop -= aligned_size;
 		}
 	}
 
@@ -115,7 +123,10 @@ public:
 	/// Check if an allocation of inSize can be made in this fixed buffer allocator
 	bool							CanAllocate(uint inSize) const
 	{
-		return mTop + AlignUp(inSize, JPH_RVECTOR_ALIGNMENT) <= mSize;
+		// Widen before rounding (uint can wrap near UINT_MAX). The first check also
+		// rejects rounding overflow on platforms where size_t is no wider than uint.
+		const size_t aligned_size = AlignUp(size_t(inSize), cAlignment);
+		return aligned_size >= inSize && aligned_size <= mSize - mTop;
 	}
 
 	/// Check if memory block at inAddress is owned by this allocator
@@ -143,7 +154,7 @@ public:
 		if (inSize > 0)
 		{
 			if constexpr (needs_aligned_allocate)
-				return AlignedAllocate(inSize, JPH_RVECTOR_ALIGNMENT);
+				return AlignedAllocate(inSize, cAlignment);
 			else
 				return JPH::Allocate(inSize);
 		}

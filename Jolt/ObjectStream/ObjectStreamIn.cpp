@@ -323,10 +323,10 @@ bool ObjectStreamIn::ReadRTTI()
 				else if (attribute.mArrayDepth == 0 && attribute.mClassName.empty())
 				{
 					// Try to apply type conversions
-					if (attribute.mSourceType == EOSDataType::T_Vec3 && attr.IsType(0, EOSDataType::T_DVec4, ""))
+					if (attribute.mSourceType == EOSDataType::T_Vec4 && attr.IsType(0, EOSDataType::T_DVec4, ""))
 						attribute.mDestinationType = EOSDataType::T_DVec4;
-					else if (attribute.mSourceType == EOSDataType::T_DVec4 && attr.IsType(0, EOSDataType::T_Vec3, ""))
-						attribute.mDestinationType = EOSDataType::T_Vec3;
+					else if (attribute.mSourceType == EOSDataType::T_DVec4 && attr.IsType(0, EOSDataType::T_Vec4, ""))
+						attribute.mDestinationType = EOSDataType::T_Vec4;
 					else
 						attribute.mIndex = -1;
 				}
@@ -370,21 +370,21 @@ bool ObjectStreamIn::ReadClassData(const ClassDescription &inClassDesc, void *in
 			{
 				continue_reading = attr.ReadData(*this, inInstance);
 			}
-			else if (attr_desc.mSourceType == EOSDataType::T_Vec3 && attr_desc.mDestinationType == EOSDataType::T_DVec4)
+			else if (attr_desc.mSourceType == EOSDataType::T_Vec4 && attr_desc.mDestinationType == EOSDataType::T_DVec4)
 			{
-				// Vec3 to DVec4
-				Vec3 tmp;
+				// Vec4 to DVec4: preserve all four coordinates.
+				Vec4 tmp;
 				continue_reading = ReadPrimitiveData(tmp);
 				if (continue_reading)
 					*attr.GetMemberPointer<DVec4>(inInstance) = DVec4(tmp);
 			}
-			else if (attr_desc.mSourceType == EOSDataType::T_DVec4 && attr_desc.mDestinationType == EOSDataType::T_Vec3)
+			else if (attr_desc.mSourceType == EOSDataType::T_DVec4 && attr_desc.mDestinationType == EOSDataType::T_Vec4)
 			{
-				// DVec4 to Vec3
+				// DVec4 to Vec4: narrow precision, not dimension.
 				DVec4 tmp;
 				continue_reading = ReadPrimitiveData(tmp);
 				if (continue_reading)
-					*attr.GetMemberPointer<Vec3>(inInstance) = Vec3(tmp);
+					*attr.GetMemberPointer<Vec4>(inInstance) = Vec4(tmp);
 			}
 			else
 			{

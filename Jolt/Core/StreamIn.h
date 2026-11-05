@@ -41,7 +41,7 @@ public:
 		if (!IsEOF() && !IsFailed())
 		{
 			outT.resize(len);
-			if constexpr (std::is_same_v<T, Vec3> || std::is_same_v<T, DVec4>)
+			if constexpr (std::is_same_v<T, Vec3>)
 			{
 				// These types have unused components that we don't want to read
 				for (typename Array<T, A>::size_type i = 0; i < len; ++i)
@@ -95,11 +95,10 @@ public:
 		outVec = Vec3::sFixW(outVec.mValue);
 	}
 
-	/// Read a DVec4 (don't read W)
+	/// Read all four spatial doubles
 	void				Read(DVec4 &outVec)
 	{
-		ReadBytes(&outVec, 3 * sizeof(double));
-		outVec = DVec4::sFixW(outVec.mValue);
+		ReadBytes(&outVec, 4 * sizeof(double));
 	}
 };
 

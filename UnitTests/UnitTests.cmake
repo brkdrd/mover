@@ -3,9 +3,15 @@ set(UNIT_TESTS_ROOT ${PHYSICS_REPO_ROOT}/UnitTests)
 
 # Source files
 set(UNIT_TESTS_SRC_FILES
+	${UNIT_TESTS_ROOT}/SpaceSim/CombatTests.cpp
+	${UNIT_TESTS_ROOT}/SpaceSim/IntegratedScenarioTests.cpp
+	${UNIT_TESTS_ROOT}/SpaceSim/PhysicsBridgeTests.cpp
 #	${UNIT_TESTS_ROOT}/Compute/ComputeTests.cpp	# TODO(4D): still 3D (Mat44 SetColumn3/Multiply3x3), rewrite for 4D
+	${UNIT_TESTS_ROOT}/SpaceSim/PropulsionTests.cpp
 	${UNIT_TESTS_ROOT}/Core/ArrayTest.cpp
 	${UNIT_TESTS_ROOT}/Core/BinaryHeapTest.cpp
+	${UNIT_TESTS_ROOT}/Core/DoublePositionDeterminismLogTests.cpp
+	${UNIT_TESTS_ROOT}/Core/DoublePositionStreamTests.cpp
 	${UNIT_TESTS_ROOT}/Core/FPFlushDenormalsTest.cpp
 	${UNIT_TESTS_ROOT}/Core/HashCombineTest.cpp
 	${UNIT_TESTS_ROOT}/Core/InsertionSortTest.cpp
@@ -15,9 +21,11 @@ set(UNIT_TESTS_SRC_FILES
 	${UNIT_TESTS_ROOT}/Core/ScopeExitTest.cpp
 	${UNIT_TESTS_ROOT}/Core/STLLocalAllocatorTest.cpp
 	${UNIT_TESTS_ROOT}/Core/StringToolsTest.cpp
+	${UNIT_TESTS_ROOT}/Core/TempAllocatorTests.cpp
 	${UNIT_TESTS_ROOT}/Core/QuickSortTest.cpp
 	${UNIT_TESTS_ROOT}/Core/UnorderedSetTest.cpp
 	${UNIT_TESTS_ROOT}/Core/UnorderedMapTest.cpp
+	${UNIT_TESTS_ROOT}/SpaceSim/AuthorityTests.cpp
 	${UNIT_TESTS_ROOT}/doctest.h
 	${UNIT_TESTS_ROOT}/Geometry/AABoxTests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/ClipPolytopeTests.cpp
@@ -26,6 +34,7 @@ set(UNIT_TESTS_SRC_FILES
 	${UNIT_TESTS_ROOT}/Geometry/EllipseTest.cpp
 	${UNIT_TESTS_ROOT}/Geometry/EPATests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/GJKTests.cpp
+	${UNIT_TESTS_ROOT}/Geometry/MortonCodeTests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/PlaneTests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/RayAABoxTests.cpp
 	${UNIT_TESTS_ROOT}/Geometry/RaySphereTests.cpp
@@ -60,6 +69,7 @@ set(UNIT_TESTS_SRC_FILES
 #	${UNIT_TESTS_ROOT}/Physics/ActiveEdgesTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/BroadPhaseTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/CastShapeTests.cpp
+	${UNIT_TESTS_ROOT}/Physics/CCDTempAllocatorTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/CharacterVirtualTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/CollideShapeTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/CollidePointTests.cpp
@@ -68,7 +78,9 @@ set(UNIT_TESTS_SRC_FILES
 	${UNIT_TESTS_ROOT}/Physics/ConstraintPartTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/ConvexVsTrianglesTest.cpp
 #	${UNIT_TESTS_ROOT}/Physics/DistanceConstraintTests.cpp
+	${UNIT_TESTS_ROOT}/Physics/DoublePositionSleepTests.cpp
 	${UNIT_TESTS_ROOT}/Physics/DynamicsConventionsTest.cpp
+	${UNIT_TESTS_ROOT}/Physics/MassRoundTripTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/EstimateCollisionResponseTest.cpp
 #	${UNIT_TESTS_ROOT}/Physics/HeightFieldShapeTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/HingeConstraintTests.cpp
@@ -88,6 +100,7 @@ set(UNIT_TESTS_SRC_FILES
 #	${UNIT_TESTS_ROOT}/Physics/SixDOFConstraintTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/SliderConstraintTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/SoftBodyTests.cpp
+	${UNIT_TESTS_ROOT}/Physics/SpaceDynamicsTests.cpp
 	${UNIT_TESTS_ROOT}/Physics/SubShapeIDTest.cpp
 	${UNIT_TESTS_ROOT}/Physics/WholeBodySimulationTests.cpp
 #	${UNIT_TESTS_ROOT}/Physics/TaperedCylinderShapeTests.cpp
@@ -95,6 +108,8 @@ set(UNIT_TESTS_SRC_FILES
 #	${UNIT_TESTS_ROOT}/Physics/WheeledVehicleTests.cpp
 	${UNIT_TESTS_ROOT}/PhysicsTestContext.cpp
 	${UNIT_TESTS_ROOT}/PhysicsTestContext.h
+	${UNIT_TESTS_ROOT}/SpaceSim/MassModelTests.cpp
+	${UNIT_TESTS_ROOT}/SpaceSim/WorldTests.cpp
 	${UNIT_TESTS_ROOT}/UnitTestFramework.cpp
 	${UNIT_TESTS_ROOT}/UnitTestFramework.h
 	${UNIT_TESTS_ROOT}/UnitTests.cmake

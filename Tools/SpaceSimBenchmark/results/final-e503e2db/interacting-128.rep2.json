@@ -1,0 +1,53 @@
+{
+  "manifest": {
+    "scenario": "interacting", "bodies": 128, "steps": 1200, "timestep_s": 0.0083333337679505348, "rate_hz": 120,
+    "simulated_seconds": 10.000000521540642, "worker_threads": 0, "job_system": "JobSystemSingleThreaded",
+    "seed": "0x5eed4d0000000001", "gyroscopic_term": true, "sleeping": false, "gravity": [0,0,0,0],
+    "shape_half_extents": [0.4000, 0.7000, 1.0000, 1.3000], "linear_damping": 0.0, "angular_damping": 0.0,
+    "solver_velocity_steps": 10, "solver_position_steps": 2,
+    "sample_interval_steps": 60, "percentile_method": "nearest-rank",
+    "compiled_config": "float",
+    "compiler": "GNU 13.3.0", "build_type": "Release",
+    "library_lto": "on", "benchmark_lto": "off", "cross_platform_deterministic": "off", "fast_math": "false",
+    "harness_source_sha256": "75048e9658ea53895a3f04e4b557e52a8a96eb1e81e471d5dd7a048e9aceb635", "core_source_sha256": "ffdd3318db5698795ea1722e46eac16e028ea7cabed3eaecc48b6f338b8ca1ba", "build_sha256": "8bc2a9ffa04961848c16576e87abaa84fb892448119c3b2e761f7f024ea2f278",
+    "core_source_files": 409, "git_head_at_configure": "e503e2db3d653072e0e45e12e29f44f48ca73609", "git_dirty_entries_at_configure": 0,
+    "compile_definitions": "-DJPH_USE_CPU_COMPUTE -DJPH_OBJECT_STREAM -DJPH_USE_AVX2 -DJPH_USE_AVX -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_LZCNT -DJPH_USE_TZCNT -DJPH_USE_F16C -DJPH_USE_FMADD",
+    "benchmark_compile_flags": "-O3 -DNDEBUG -std=c++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -pthread -Wall -Wextra",
+    "library_compile_flags": "-O3 -DNDEBUG -Wall -Werror -g -fno-rtti -fno-exceptions -Wno-stringop-overflow -Wno-psabi -ffp-contract=off -std=c++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -pthread",
+    "cmake_cache": "INTERPROCEDURAL_OPTIMIZATION=ON;CROSS_PLATFORM_DETERMINISTIC=OFF;DOUBLE_PRECISION=OFF;USE_ASSERTS=OFF;USE_AVX2=ON;USE_FMADD=ON;USE_SSE4_2=ON;PROFILER_IN_DEBUG_AND_RELEASE=OFF;DEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF;ENABLE_ALL_WARNINGS=ON;JPH_BUILD_SHARED_LIBS=OFF;"
+  },
+  "timing": {
+    "setup_ns": 127562, "run_wall_ns": 184535355, "sum_step_ns": 184281052, "sampling_ns": 216949,
+    "instrument_overhead_ns": 15.91,
+    "step_ns": { "min": 133598, "p50": 146068, "p95": 189166, "p99": 219804, "max": 411268, "mean": 153568 },
+    "throughput_steps_per_second": 6511.793,
+    "deadline_ns_8333": 8333333.333, "deadline_misses": 0, "deadline_misses_150hz": 0
+  },
+  "checks": {
+    "finite": true, "rotations_normalized": true, "all_bodies_active": true, "velocity_not_clamped": true, "core_nonfinite_velocity": true,
+    "non_finite_observations": 0, "non_normalized_observations": 0,
+    "energy_rel_drift": 0.000000e+00, "total_energy_rel_drift": 3.217738e-03, "energy_gated": false,
+    "spin_angular_momentum_rel_drift": 0.000000e+00, "spin_angular_momentum_gated": false,
+    "total_angular_momentum_rel_drift": 6.007485e-07, "total_linear_momentum_rel_drift": 1.357456e-08,
+    "min_pair_gap_m": 0.000000, "pair_gap_checked": false,
+    "reference_energy_scale": 7.796208e+06, "reference_angular_momentum_scale": 2.071807e+07, "reference_linear_momentum_scale": 2.981888e+06,
+    "contacts_added": 342, "contacts_persisted": 201, "contacts_removed": 341,
+    "update_errors": 0, "samples": 20
+  },
+  "gates": [
+    { "name": "finite_state", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "1 = violation" },
+    { "name": "reference_rotation_orthogonal", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "harness reference: |Q^T Q - I| < 1e-5" },
+    { "name": "rotation_normalized", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "non-normalized observations" },
+    { "name": "all_bodies_active", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "sleeping disabled" },
+    { "name": "velocity_not_clamped", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "1 = clamp seen" },
+    { "name": "core_nonfinite_velocity", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "MotionProperties sticky diagnostic" },
+    { "name": "energy_rel_drift_per_body", "value": 0.000000e+00, "limit": 1.000000e-04, "gated": false, "pass": true, "note": "gyro free rotation" },
+    { "name": "total_energy_rel_drift", "value": 3.217738e-03, "limit": 1.000000e-04, "gated": false, "pass": true, "note": "sum |E0| scale" },
+    { "name": "spin_angular_momentum_rel_drift", "value": 0.000000e+00, "limit": 1.000000e-04, "gated": false, "pass": true, "note": "per body, separated" },
+    { "name": "total_angular_momentum_rel_drift", "value": 6.007485e-07, "limit": 1.000000e-03, "gated": true, "pass": true, "note": "L about origin" },
+    { "name": "total_linear_momentum_rel_drift", "value": 1.357456e-08, "limit": 1.000000e-05, "gated": true, "pass": true, "note": "no external force" },
+    { "name": "contacts_observed", "value": 3.420000e+02, "limit": 1.000000e+00, "gated": true, "pass": true, "note": "interacting workload must actually interact" }
+  ],
+  "state_hash": "f86af8530ee92cba",
+  "result": "PASS"
+}

@@ -29,6 +29,17 @@ public:
 	JPH_INLINE					RMat44(Mat44Arg inRotation, RVec4Arg inTranslation)				: mRotation(inRotation), mTranslation(inTranslation) { }
 	JPH_INLINE explicit			RMat44(Mat44Arg inRotation)											: mRotation(inRotation), mTranslation(RVec4::sZero()) { }
 
+#ifdef JPH_DOUBLE_PRECISION
+	/// Accept float local translations without making DVec4's widening constructors implicit.
+	JPH_INLINE RMat44(Mat44Arg inRotation, Lane4Arg inTranslation) : RMat44(inRotation, DVec4(inTranslation)) { }
+	JPH_INLINE RMat44 PostTranslated(Lane4Arg inTranslation) const { return PostTranslated(DVec4(inTranslation)); }
+	static JPH_INLINE RMat44 sTranslation(Lane4Arg inTranslation) { return sTranslation(DVec4(inTranslation)); }
+	static JPH_INLINE RMat44 sRotationTranslation(RotorArg inRotor, Lane4Arg inTranslation) { return sRotationTranslation(inRotor, DVec4(inTranslation)); }
+	static JPH_INLINE RMat44 sRotationTranslation(QuatArg inQuat, Lane4Arg inTranslation) { return sRotationTranslation(inQuat, DVec4(inTranslation)); }
+	static JPH_INLINE RMat44 sInverseRotationTranslation(RotorArg inRotor, Lane4Arg inTranslation) { return sInverseRotationTranslation(inRotor, DVec4(inTranslation)); }
+	static JPH_INLINE RMat44 sInverseRotationTranslation(QuatArg inQuat, Lane4Arg inTranslation) { return sInverseRotationTranslation(inQuat, DVec4(inTranslation)); }
+#endif
+
 	/// Zero transform
 	static JPH_INLINE RMat44	sZero()
 	{
@@ -76,14 +87,14 @@ public:
 	static JPH_INLINE RMat44	sInverseRotationTranslation(RotorArg inRotor, RVec4Arg inTranslation)
 	{
 		Mat44 rot_t = Mat44::sRotation(inRotor).Transposed();
-		return RMat44(rot_t, RVec4(-(rot_t * sNarrow(inTranslation))));
+		return RMat44(rot_t, -sMultiply(rot_t, inTranslation));
 	}
 
 	/// Create inverse of a rotation-translation transform from quaternion — backward compat
 	static JPH_INLINE RMat44	sInverseRotationTranslation(QuatArg inQuat, RVec4Arg inTranslation)
 	{
 		Mat44 rot_t = Mat44::sRotation(inQuat).Transposed();
-		return RMat44(rot_t, RVec4(-(rot_t * sNarrow(inTranslation))));
+		return RMat44(rot_t, -sMultiply(rot_t, inTranslation));
 	}
 
 	/// Diagonal scale transform (no translation)
@@ -123,7 +134,7 @@ public:
 	/// Transform a double-precision point: R * inV + T
 	JPH_INLINE DVec4			operator * (DVec4Arg inV) const
 	{
-		return DVec4(mRotation * sNarrow(inV)) + mTranslation;
+		return sMultiply(mRotation, inV) + mTranslation;
 	}
 #endif
 
@@ -132,7 +143,7 @@ public:
 	{
 		return RMat44(
 			mRotation * inRHS.mRotation,
-			RVec4(mRotation * sNarrow(inRHS.mTranslation)) + mTranslation);
+			sMultiply(mRotation, inRHS.mTranslation) + mTranslation);
 	}
 
 	/// Compose with Mat44 (rotation/scale only, no translation): (R1, T1) * R2 = (R1*R2, T1)
@@ -187,22 +198,21 @@ public:
 			Lane4(Vec4(mRotation.GetColumn4(1)) * inScale),
 			Lane4(Vec4(mRotation.GetColumn4(2)) * inScale),
 			Lane4(Vec4(mRotation.GetColumn4(3)) * inScale));
-		Vec4 narrowed_t = sNarrowVec4(mTranslation);
-		return RMat44(scaled, RVec4(Lane4(narrowed_t * inScale)));
+		return RMat44(scaled, mTranslation * RVec4(Lane4(inScale)));
 	}
 
 	/// Inverse of a rotation-translation transform (orthogonal R): (R^T, -R^T * T)
 	JPH_INLINE RMat44			InversedRotationTranslation() const
 	{
 		Mat44 rot_t = mRotation.Transposed();
-		return RMat44(rot_t, RVec4(-(rot_t * sNarrow(mTranslation))));
+		return RMat44(rot_t, -sMultiply(rot_t, mTranslation));
 	}
 
 	/// General inverse (handles rotation with scale). Uses Mat44::Inversed for the linear part.
 	JPH_INLINE RMat44			Inversed() const
 	{
 		Mat44 inv = mRotation.Inversed();
-		return RMat44(inv, RVec4(-(inv * sNarrow(mTranslation))));
+		return RMat44(inv, -sMultiply(inv, mTranslation));
 	}
 
 	/// Get the transposed rotation part as Mat44
@@ -257,23 +267,17 @@ public:
 	}
 
 private:
-	/// Narrow RVec4 to Lane4 for single-precision matrix operations
-	static JPH_INLINE Lane4		sNarrow(RVec4Arg inV)
+	/// Apply the float linear map without narrowing double world coordinates.
+	/// Matrix coefficients are floats; products and accumulation use position precision.
+	static JPH_INLINE RVec4 sMultiply(Mat44Arg inMatrix, RVec4Arg inV)
 	{
 #ifdef JPH_DOUBLE_PRECISION
-		return Lane4(float(inV.GetX()), float(inV.GetY()), float(inV.GetZ()), float(inV.GetW()));
+		return DVec4(inMatrix.GetColumn4(0)) * inV.GetX()
+			+ DVec4(inMatrix.GetColumn4(1)) * inV.GetY()
+			+ DVec4(inMatrix.GetColumn4(2)) * inV.GetZ()
+			+ DVec4(inMatrix.GetColumn4(3)) * inV.GetW();
 #else
-		return Lane4(inV);
-#endif
-	}
-
-	/// Narrow RVec4 to Vec4 for single-precision operations
-	static JPH_INLINE Vec4		sNarrowVec4(RVec4Arg inV)
-	{
-#ifdef JPH_DOUBLE_PRECISION
-		return Vec4(float(inV.GetX()), float(inV.GetY()), float(inV.GetZ()), float(inV.GetW()));
-#else
-		return inV;
+		return Vec4(inMatrix * Lane4(inV));
 #endif
 	}
 

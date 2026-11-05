@@ -41,7 +41,7 @@ void ObjectStreamTextOut::WriteDataType(EOSDataType inType)
 	case EOSDataType::T_Float4:		WriteWord("float4");		break;
 	case EOSDataType::T_Double3:	WriteWord("double3");		break;
 	case EOSDataType::T_Vec3:		WriteWord("vec3");			break;
-	case EOSDataType::T_DVec4:		WriteWord("dvec3");			break;
+	case EOSDataType::T_DVec4:		WriteWord("dvec4");			break;
 	case EOSDataType::T_Vec4:		WriteWord("vec4");			break;
 	case EOSDataType::T_UVec4:		WriteWord("uvec4");			break;
 	case EOSDataType::T_Quat:		WriteWord("quat");			break;
@@ -159,6 +159,8 @@ void ObjectStreamTextOut::WritePrimitiveData(const DVec4 &inPrimitive)
 	WritePrimitiveData(inPrimitive.GetY());
 	WriteChar(' ');
 	WritePrimitiveData(inPrimitive.GetZ());
+	WriteChar(' ');
+	WritePrimitiveData(inPrimitive.GetW());
 }
 
 void ObjectStreamTextOut::WritePrimitiveData(const Vec4 &inPrimitive)

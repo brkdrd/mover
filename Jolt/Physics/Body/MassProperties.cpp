@@ -12,6 +12,7 @@
 #include <Jolt/Core/StreamIn.h>
 #include <Jolt/Core/StreamOut.h>
 #include <Jolt/Core/InsertionSort.h>
+#include <cmath>
 
 JPH_NAMESPACE_BEGIN
 
@@ -23,37 +24,87 @@ JPH_IMPLEMENT_SERIALIZABLE_NON_VIRTUAL(MassProperties)
 
 bool MassProperties::DecomposePrincipalMomentsOfInertia(Mat44 &outRotation, Vec4 &outDiagonal) const
 {
-	// Using eigendecomposition on the 4x4 symmetric second moment tensor.
-	// See: https://en.wikipedia.org/wiki/Eigendecomposition_of_a_matrix
-	Matrix<4, 4> inertia;
-	inertia.CopyPart(mInertia, 0, 0, 4, 4, 0, 0);
-	Matrix<4, 4> eigen_vec = Matrix<4, 4>::sIdentity();
-	Vector<4> eigen_val;
-	if (!EigenValueSymmetric(inertia, eigen_vec, eigen_val))
-		return false;
-
-	// Sort so that the largest eigenvalue goes first
-	int indices[] = { 0, 1, 2, 3 };
-	InsertionSort(indices, indices + 4, [&eigen_val](int inLeft, int inRight) { return eigen_val[inLeft] > eigen_val[inRight]; });
-
-	// Build Mat44 from sorted eigenvectors / eigenvalues
 	Mat44 rotation = Mat44::sZero();
 	Vec4 diagonal = Vec4::sZero();
-	for (int i = 0; i < 4; ++i)
+
+	// Certify exact rank one BEFORE the float eigensolver. Its relative
+	// eigenpair residual test is undefined on the null space, and roundoff
+	// there must not become a positive moment with an enormous reciprocal.
+	// Products of two binary32 values are exact in binary64 (48 <= 53 bits):
+	// these minor tests have NO tolerance and cannot erase a skinny positive
+	// eigenvalue. This recognizes rank of the submitted matrix, not of an
+	// unknown unrounded particle distribution.
+	Lane4 pivot_column = mInertia.GetColumn4(0);
+	double p = pivot_column[0];
+	auto select_pivot = [&](int inAxis, Lane4Arg inColumn)
 	{
-		const auto &col = eigen_vec.GetColumn(indices[i]);
-		rotation.SetColumn4(i, Lane4(col[0], col[1], col[2], col[3]));
-		diagonal[i] = eigen_val[indices[i]];
+		if (inColumn[inAxis] > p)
+		{
+			p = inColumn[inAxis];
+			pivot_column = inColumn;
+		}
+	};
+	select_pivot(1, mInertia.GetColumn4(1));
+	select_pivot(2, mInertia.GetColumn4(2));
+	select_pivot(3, mInertia.GetColumn4(3));
+	bool rank_one = p > 0.0 && std::isfinite(p);
+	for (int i = 0; i < 4; ++i)
+		for (int j = 0; j < 4; ++j)
+			rank_one = rank_one && std::isfinite(mInertia(i, j))
+				&& mInertia(i, j) == mInertia(j, i)
+				&& double(mInertia(i, j)) * p == double(pivot_column[i]) * pivot_column[j];
+	if (rank_one)
+	{
+		double trace = double(mInertia(0, 0)) + mInertia(1, 1) + mInertia(2, 2) + mInertia(3, 3);
+		// Stable Householder completion of the occupied direction. Set the
+		// occupied column directly from the normalized pivot: evaluating it
+		// as 1 - 2*w[0]^2/|w|^2 can turn an exact zero into double roundoff,
+		// which becomes a material spurious column when trace(M) is large.
+		// The remaining columns span its orthogonal complement. Choose the
+		// sign to avoid cancellation in the Householder vector.
+		double w[4], norm_sq = 0.0;
+		double scale = 1.0 / std::sqrt(p * trace);
+		double sign = pivot_column[0] < 0.0f? -1.0 : 1.0;
+		for (int i = 0; i < 4; ++i)
+		{
+			w[i] = sign * pivot_column[i] * scale + (i == 0? 1.0 : 0.0);
+			norm_sq += w[i] * w[i];
+		}
+		for (int i = 0; i < 4; ++i)
+		{
+			rotation(i, 0) = float(-sign * pivot_column[i] * scale);
+			for (int j = 1; j < 4; ++j)
+				rotation(i, j) = float((i == j? 1.0 : 0.0) - 2.0 * w[i] * w[j] / norm_sq);
+		}
+		diagonal[0] = float(trace);
+	}
+	else
+	{
+		// Using eigendecomposition on the 4x4 symmetric second moment tensor.
+		Matrix<4, 4> inertia;
+		inertia.CopyPart(mInertia, 0, 0, 4, 4, 0, 0);
+		Matrix<4, 4> eigen_vec = Matrix<4, 4>::sIdentity();
+		Vector<4> eigen_val;
+		if (!EigenValueSymmetric(inertia, eigen_vec, eigen_val))
+			return false;
+
+		// Sort so that the largest eigenvalue goes first
+		int indices[] = { 0, 1, 2, 3 };
+		InsertionSort(indices, indices + 4, [&eigen_val](int inLeft, int inRight) { return eigen_val[inLeft] > eigen_val[inRight]; });
+		for (int i = 0; i < 4; ++i)
+		{
+			const auto &col = eigen_vec.GetColumn(indices[i]);
+			rotation.SetColumn4(i, Lane4(col[0], col[1], col[2], col[3]));
+			diagonal[i] = eigen_val[indices[i]];
+		}
 	}
 
 	// Ensure the rotation matrix is a proper rotation (determinant +1) rather than a reflection.
 	// In 4D, flipping a single axis changes determinant sign. We flip the last column if det < 0.
-	// Compute determinant via 4D cross product of first three columns dotted with the fourth.
-	Vec4 c0 = Vec4(rotation.GetColumn4(0));
-	Vec4 c1 = Vec4(rotation.GetColumn4(1));
-	Vec4 c2 = Vec4(rotation.GetColumn4(2));
-	Vec4 c3 = Vec4(rotation.GetColumn4(3));
-	if (Vec4::sCross(c0, c1, c2).Dot(c3) < 0.0f)
+	// sCross(c0, c1, c2).Dot(c3) has the OPPOSITE sign of the determinant in our
+	// 4D cross convention (already -1 for the identity basis). A reflection cannot
+	// be represented by GetRotor and silently corrupts a rotated inertia tensor.
+	if (rotation.GetDeterminant() < 0.0f)
 		rotation.SetColumn4(3, -rotation.GetColumn4(3));
 
 	outRotation = rotation;

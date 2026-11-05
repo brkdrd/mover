@@ -781,9 +781,8 @@ void PhysicsSystem::JobApplyGravity(const PhysicsUpdateContext *ioContext, Physi
 				MotionProperties *mp = body.GetMotionProperties();
 				Rotor rotation = body.GetRotation();
 
-				if (body.GetApplyGyroscopicForce())
-					mp->ApplyGyroscopicForceInternal(rotation, delta_time);
-
+				// Gyroscopic drift is coupled to orientation in JobIntegrateVelocity,
+				// after the force kick and contact impulses have been applied once.
 				mp->ApplyForceTorqueAndDragInternal(rotation, mGravity, delta_time);
 			}
 			active_body_idx++;
@@ -1655,7 +1654,7 @@ void PhysicsSystem::JobIntegrateVelocity(const PhysicsUpdateContext *ioContext, 
 			// time step) resulting in a lot of stolen time and the body appearing to be frozen in an unnatural pose (like it is glued at an angle to the surface). (2) obviously has some negative side effects
 			// too as simulating the rotation first may cause it to tunnel through a small object that the linear cast might have otherwise detected. In any case a linear cast is not good for detecting
 			// tunneling due to angular rotation, so we don't care about that too much (you'd need a full cast to take angular effects into account).
-			body.AddRotationStep(body.GetAngularVelocity() * delta_time);
+			body.IntegrateRotationInternal(delta_time);
 
 			// Get delta position
 			Vec4 delta_pos = body.GetLinearVelocity() * delta_time;

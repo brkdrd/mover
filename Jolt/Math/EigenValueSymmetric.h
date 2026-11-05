@@ -5,6 +5,7 @@
 #pragma once
 
 #include <Jolt/Core/FPException.h>
+#include <cmath>
 
 JPH_NAMESPACE_BEGIN
 
@@ -25,8 +26,13 @@ JPH_NAMESPACE_BEGIN
 /// @param inMatrix is the matrix of which to return the eigenvalues and vectors
 /// @param outEigVec will contain a matrix whose columns contain the normalized eigenvectors (must be identity before call)
 /// @param outEigVal will contain the eigenvalues
+/// @param inCheckAccuracy Convert numerical sanity-check / convergence failures
+/// to false instead of assertions, in all builds. Unsupported intermediate float
+/// ranges are rejected before arithmetic that could overflow; output is
+/// unspecified on failure. No additional exception masking or relaxed tolerances.
+/// The default preserves the historical assertion-based diagnostic behavior.
 template <class Vector, class Matrix>
-bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outEigVal)
+bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outEigVal, bool inCheckAccuracy = false)
 {
 	// This algorithm can generate infinite values, see comment below
 	FPExceptionDisableInvalid disable_invalid;
@@ -45,6 +51,20 @@ bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outE
 	JPH_ASSERT(outEigVec.GetCols() == n);
 	JPH_ASSERT(outEigVal.GetRows() == n);
 	JPH_ASSERT(outEigVec.IsIdentity());
+
+	// Checked callers must survive overflow traps, including in the historical
+	// float squared-norm diagnostics. Reject unsupported ranges BEFORE float
+	// arithmetic; masking overflow would let an infinity tolerance pass.
+	// The n^2 margin also bounds the Jacobi sums/products and diagnostic
+	// residuals. This is a range restriction, NOT an accuracy/rank tolerance.
+	if (inCheckAccuracy)
+	{
+		double max_entry = std::sqrt(double(FLT_MAX)) / (16.0 * n * n);
+		for (uint r = 0; r < n; ++r)
+			for (uint c = 0; c < n; ++c)
+				if (!std::isfinite(inMatrix(r, c)) || std::abs(double(inMatrix(r, c))) > max_entry)
+					return false;
+	}
 
 	// Get the matrix in a so we can mess with it
 	Matrix a = inMatrix;
@@ -75,19 +95,28 @@ bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outE
 		// Normal return, convergence to machine underflow
 		if (avg_sm < FLT_MIN) // Original code: sm == 0.0f, when the average is denormal, we also consider it machine underflow
 		{
-			// Sanity checks
-			#ifdef JPH_ENABLE_ASSERTS
+			// Checked callers use exactly the historical diagnostics and
+			// tolerances, including in release builds, but get recoverable failure.
+			bool check_accuracy = inCheckAccuracy;
+			JPH_IF_ENABLE_ASSERTS(check_accuracy = true;)
+			if (check_accuracy)
 				for (uint c = 0; c < n; ++c)
 				{
-					// Check if the eigenvector is normalized
-					JPH_ASSERT(outEigVec.GetColumn(c).IsNormalized());
+					bool normalized = outEigVec.GetColumn(c).IsNormalized();
+					if (inCheckAccuracy && !normalized)
+						return false;
+					JPH_ASSERT(normalized);
 
-					// Check if inMatrix * eigen_vector = eigen_value * eigen_vector
 					Vector mat_eigvec = inMatrix * outEigVec.GetColumn(c);
 					Vector eigval_eigvec = outEigVal[c] * outEigVec.GetColumn(c);
-					JPH_ASSERT(mat_eigvec.IsClose(eigval_eigvec, max(mat_eigvec.LengthSq(), eigval_eigvec.LengthSq()) * 1.0e-6f));
+					float mat_length_sq = mat_eigvec.LengthSq(), eigval_length_sq = eigval_eigvec.LengthSq();
+					if (inCheckAccuracy && (!std::isfinite(mat_length_sq) || !std::isfinite(eigval_length_sq)))
+						return false;
+					bool accurate = mat_eigvec.IsClose(eigval_eigvec, max(mat_length_sq, eigval_length_sq) * 1.0e-6f);
+					if (inCheckAccuracy && !accurate)
+						return false;
+					JPH_ASSERT(accurate);
 				}
-			#endif
 
 			// Success
 			return true;
@@ -126,6 +155,11 @@ bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outE
 					}
 					else
 					{
+						// A finite input can still produce a huge theta. Checked
+						// success must imply that the following ordinary float
+						// division AND theta square are safe on the decoder's rerun.
+						if (inCheckAccuracy && std::abs(0.5 * double(h) / a_pq) > 0.5 * std::sqrt(double(FLT_MAX)))
+							return false;
 						float theta = 0.5f * h / a_pq; // Warning: Can become infinite if a(ip, iq) is very small which may trigger an invalid float exception
 						t = 1.0f / (abs(theta) + sqrt(1.0f + theta * theta)); // If theta becomes inf, t will be 0 so the infinite is not a problem for the algorithm
 						if (theta < 0.0f) t = -t;
@@ -169,8 +203,9 @@ bool EigenValueSymmetric(const Matrix &inMatrix, Matrix &outEigVec, Vector &outE
 		}
 	}
 
-	// Failure
-	JPH_ASSERT(false, "Too many iterations");
+	// Failure. Checked callers must not enter the assertion handler.
+	if (!inCheckAccuracy)
+		JPH_ASSERT(false, "Too many iterations");
 	return false;
 }
 

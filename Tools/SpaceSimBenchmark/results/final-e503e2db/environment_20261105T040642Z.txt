@@ -1,0 +1,27 @@
+utc=20261105T040642Z
+uname=Linux DESKTOP-SVJBEF4 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+compiler=g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+CPU(s):                               12
+Model name:                           AMD Ryzen 5 9600X 6-Core Processor
+Thread(s) per core:                   2
+Core(s) per socket:                   6
+Socket(s):                            1
+Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl tsc_reliable nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx_vnni avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm avx512_vp2intersect
+L3 cache:                             32 MiB (1 instance)
+git_head=e503e2db3d653072e0e45e12e29f44f48ca73609
+git_dirty_entries=0
+git_dirty_scope_begin
+git_dirty_scope_end
+binary=/home/brkdrd/mover-perf-build-verified/SpaceSimBenchmark
+binary_sha256=71069ca796123d9b5fb1965b8011eb547d16118c2904c83d55ef83465e6660ed
+harness_source_sha256=75048e9658ea53895a3f04e4b557e52a8a96eb1e81e471d5dd7a048e9aceb635
+compile_commands=/home/brkdrd/mover-perf-build-verified/compile_commands.json
+compile_commands_sha256=42d7f7b642e0977dae1bfa4b8649fa298771ec362d0ccf91067cd34d51ebb030
+benchmark_compile_command=/usr/bin/c++ -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_CPU_COMPUTE -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DNDEBUG -I/home/brkdrd/mover-perf-build-verified -I/mnt/c/Users/goliy/mover/Build/.. -O3 -DNDEBUG -std=c++17 -Wall -Wextra -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -pthread -o CMakeFiles/SpaceSimBenchmark.dir/src/main.cpp.o -c /mnt/c/Users/goliy/mover/Tools/SpaceSimBenchmark/src/main.cpp
+benchmark_has_flto=no
+benchmark_has_ffp_contract_off=no
+benchmark_has_fast_math=no
+library_compile_command=/usr/bin/c++ -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_CPU_COMPUTE -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DNDEBUG -I/mnt/c/Users/goliy/mover/Build/..  -Wall -Werror -g -fno-rtti -fno-exceptions -Wno-stringop-overflow -Wno-psabi -ffp-contract=off -O3 -std=c++17 -flto=auto -fno-fat-lto-objects -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -pthread -Winvalid-pch -include /home/brkdrd/mover-perf-build-verified/jolt/CMakeFiles/Jolt.dir/cmake_pch.hxx -o CMakeFiles/Jolt.dir/mnt/c/Users/goliy/mover/Jolt/Physics/PhysicsSystem.cpp.o -c /mnt/c/Users/goliy/mover/Jolt/Physics/PhysicsSystem.cpp
+library_has_flto=yes
+library_has_ffp_contract_off=yes
+library_has_fast_math=no

@@ -9,8 +9,8 @@
 
 JPH_NAMESPACE_BEGIN
 
-/// 3 component vector of doubles (stored as 4 vectors).
-/// Note that we keep the 4th component the same as the 3rd component to avoid divisions by zero when JPH_FLOATING_POINT_EXCEPTIONS_ENABLED defined
+/// Four independent spatial components, stored in double precision.
+/// Legacy XYZ constructors embed in R4 with W = 0; no lane is padding.
 class [[nodiscard]] alignas(JPH_DVECTOR_ALIGNMENT) DVec4
 {
 public:
@@ -40,9 +40,9 @@ public:
 	DVec4 &						operator = (const DVec4 &inRHS) = default;
 	JPH_INLINE explicit			DVec4(Vec3Arg inRHS);
 	JPH_INLINE explicit			DVec4(Lane4Arg inRHS);
-	JPH_INLINE					DVec4(TypeArg inRHS) : mValue(inRHS)			{ CheckW(); }
+	JPH_INLINE					DVec4(TypeArg inRHS) : mValue(inRHS)			{ }
 
-	/// Create a vector from 3 components
+	/// Embed 3 components with W = 0 (legacy compatibility)
 	JPH_INLINE					DVec4(double inX, double inY, double inZ);
 
 	/// Create a vector from 4 components (4D spatial)
@@ -81,23 +81,27 @@ public:
 	/// Store 4 doubles to memory
 	JPH_INLINE void				StoreDouble4(Double4 *outV) const;
 
-	/// Convert to float vector 3 rounding to nearest
+	/// Explicit legacy XYZ projection (discards W), rounding to nearest
 	JPH_INLINE explicit			operator Vec3() const;
 
 	/// Convert to float vector 4 rounding to nearest (all 4 components are preserved, just narrowed to float)
 	JPH_INLINE explicit			operator Vec4() const;
 
-	/// Prepare to convert to float vector 3 rounding towards zero (returns DVec4 that can be converted to a Vec3 to get the rounding)
+	/// Prepare all four coordinates for float conversion rounding towards zero
 	JPH_INLINE DVec4			PrepareRoundToZero() const;
 
-	/// Prepare to convert to float vector 3 rounding towards positive/negative inf (returns DVec4 that can be converted to a Vec3 to get the rounding)
+	/// Prepare all four coordinates for float conversion rounding away from zero
 	JPH_INLINE DVec4			PrepareRoundToInf() const;
 
-	/// Convert to float vector 3 rounding down
-	JPH_INLINE Vec3				ToVec3RoundDown() const;
+	/// Compatibility alias: round all four coordinates down to Vec4
+	JPH_INLINE Vec4				ToVec3RoundDown() const;
 
-	/// Convert to float vector 3 rounding up
-	JPH_INLINE Vec3				ToVec3RoundUp() const;
+	/// Compatibility alias: round all four coordinates up to Vec4
+	JPH_INLINE Vec4				ToVec3RoundUp() const;
+
+	/// Directed rounding of all four spatial components.
+	JPH_INLINE Vec4 ToVec4RoundDown() const;
+	JPH_INLINE Vec4 ToVec4RoundUp() const;
 
 	/// Return the minimum value of each of the components
 	static JPH_INLINE DVec4		sMin(DVec4Arg inV1, DVec4Arg inV2);
@@ -173,17 +177,19 @@ public:
 	/// Set individual components
 	JPH_INLINE void				SetX(double inX)								{ mF64[0] = inX; }
 	JPH_INLINE void				SetY(double inY)								{ mF64[1] = inY; }
-	JPH_INLINE void				SetZ(double inZ)								{ mF64[2] = mF64[3] = inZ; } // Assure Z and W are the same
+	JPH_INLINE void				SetZ(double inZ)								{ mF64[2] = inZ; }
 	JPH_INLINE void				SetW(double inW)								{ mF64[3] = inW; }
 
-	/// Set all components
+	JPH_INLINE void Set(double inX, double inY, double inZ, double inW) { *this = DVec4(inX, inY, inZ, inW); }
+
+	/// Set XYZ components, embedding with W = 0
 	JPH_INLINE void				Set(double inX, double inY, double inZ)			{ *this = DVec4(inX, inY, inZ); }
 
 	/// Get double component by index
-	JPH_INLINE double			operator [] (uint inCoordinate) const			{ JPH_ASSERT(inCoordinate < 3); return mF64[inCoordinate]; }
+	JPH_INLINE double			operator [] (uint inCoordinate) const			{ JPH_ASSERT(inCoordinate < 4); return mF64[inCoordinate]; }
 
 	/// Set double component by index
-	JPH_INLINE void				SetComponent(uint inCoordinate, double inValue)	{ JPH_ASSERT(inCoordinate < 3); mF64[inCoordinate] = inValue; mValue = sFixW(mValue); } // Assure Z and W are the same
+	JPH_INLINE void				SetComponent(uint inCoordinate, double inValue)	{ JPH_ASSERT(inCoordinate < 4); mF64[inCoordinate] = inValue; }
 
 	/// Comparison
 	JPH_INLINE bool				operator == (DVec4Arg inV2) const;
@@ -223,13 +229,13 @@ public:
 	JPH_INLINE DVec4 &			operator /= (double inV2);
 
 	/// Add two vectors (component wise)
-	JPH_INLINE DVec4			operator + (Vec3Arg inV2) const;
+	JPH_INLINE DVec4			operator + (Lane4Arg inV2) const;
 
 	/// Add two double vectors (component wise)
 	JPH_INLINE DVec4			operator + (DVec4Arg inV2) const;
 
 	/// Add two vectors (component wise)
-	JPH_INLINE DVec4 &			operator += (Vec3Arg inV2);
+	JPH_INLINE DVec4 &			operator += (Lane4Arg inV2);
 
 	/// Add two double vectors (component wise)
 	JPH_INLINE DVec4 &			operator += (DVec4Arg inV2);
@@ -238,16 +244,28 @@ public:
 	JPH_INLINE DVec4			operator - () const;
 
 	/// Subtract two vectors (component wise)
-	JPH_INLINE DVec4			operator - (Vec3Arg inV2) const;
+	JPH_INLINE DVec4			operator - (Lane4Arg inV2) const;
 
 	/// Subtract two double vectors (component wise)
 	JPH_INLINE DVec4			operator - (DVec4Arg inV2) const;
 
 	/// Subtract two vectors (component wise)
-	JPH_INLINE DVec4 &			operator -= (Vec3Arg inV2);
+	JPH_INLINE DVec4 &			operator -= (Lane4Arg inV2);
 
 	/// Subtract two vectors (component wise)
 	JPH_INLINE DVec4 &			operator -= (DVec4Arg inV2);
+
+	/// Explicit legacy XYZ operand embedding (W = 0).
+	JPH_INLINE DVec4 operator + (Vec3Arg inV2) const { return *this + DVec4(inV2); }
+
+	/// Explicit legacy XYZ operand embedding (W = 0).
+	JPH_INLINE DVec4 operator - (Vec3Arg inV2) const { return *this - DVec4(inV2); }
+
+	/// Explicit legacy XYZ operand embedding (W = 0).
+	JPH_INLINE DVec4 & operator += (Vec3Arg inV2) { return *this += DVec4(inV2); }
+
+	/// Explicit legacy XYZ operand embedding (W = 0).
+	JPH_INLINE DVec4 & operator -= (Vec3Arg inV2) { return *this -= DVec4(inV2); }
 
 	/// Divide (component wise)
 	JPH_INLINE DVec4			operator / (DVec4Arg inV2) const;
@@ -285,14 +303,14 @@ public:
 	/// To String
 	friend ostream &			operator << (ostream &inStream, DVec4Arg inV)
 	{
-		inStream << inV.mF64[0] << ", " << inV.mF64[1] << ", " << inV.mF64[2];
+		inStream << inV.mF64[0] << ", " << inV.mF64[1] << ", " << inV.mF64[2] << ", " << inV.mF64[3];
 		return inStream;
 	}
 
-	/// Internal helper function that checks that W is equal to Z, so e.g. dividing by it should not generate div by 0
+	/// Legacy compatibility check: all four lanes are independent (no invariant).
 	JPH_INLINE void				CheckW() const;
 
-	/// Internal helper function that ensures that the Z component is replicated to the W component to prevent divisions by zero
+	/// Legacy compatibility helper: returns all four lanes unchanged.
 	static JPH_INLINE Type		sFixW(TypeArg inValue);
 
 	/// Representations of true and false for boolean operations

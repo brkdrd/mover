@@ -196,10 +196,10 @@ bool ObjectStreamBinaryIn::ReadPrimitiveData(Vec3 &outPrimitive)
 
 bool ObjectStreamBinaryIn::ReadPrimitiveData(DVec4 &outPrimitive)
 {
-	Double3 primitive;
-	mStream.read((char *)&primitive, sizeof(Double3));
+	Double4 primitive;
+	mStream.read((char *)&primitive, sizeof(primitive));
 	if (mStream.fail()) return false;
-	outPrimitive = DVec4(primitive); // Use Float3 constructor so that we initialize W too
+	outPrimitive = DVec4(primitive);
 	return true;
 }
 

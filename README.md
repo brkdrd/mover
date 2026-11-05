@@ -1,10 +1,12 @@
-# 4D Jolt
+# Mover — 4D space-simulation physics
 
 **Rigid-body physics in four spatial dimensions, built from Jolt Physics.**
 
 4D Jolt extends [Jolt Physics](https://github.com/jrouwe/JoltPhysics) to a world with four spatial coordinates: **X, Y, Z and W**. The fourth coordinate is another direction in space, not time. The project explores collision detection, contact response and rotational dynamics beyond three dimensions.
 
-The intended application is a **4D multiplayer space combat simulator**: physically simulated ships, distributed thrusters, damage, projectiles, debris and asteroid environments. The repository currently provides an experimental headless physics foundation. Ship systems, large-world management and multiplayer are proposed work, not implemented game features.
+Mover preserves the history of `brkdrd/4dJolt` and adds an experimental **4D space-simulation foundation**: conservative rotational dynamics, component mass/topology transactions, constrained propulsion, large-world frames, swept projectile queries, authoritative command/replay support and real-physics integration adapters. It is not a complete game server or a production-capacity guarantee.
+
+Start with the [42-requirement implementation matrix](Docs/MoverCompletion.md), [implementation plan](Docs/MoverImplementationPlan.md) and [validation record](Docs/MoverValidation.md). They distinguish implemented APIs, observed test results, remaining defects and unpassed product gates. The original specification's workload, numerical and network acceptance budgets remain open.
 
 [Build and run](#build-and-run) · [Space-sim specification](Docs/SpaceSimSpecification.md) · [System architecture](Docs/SpaceSimArchitecture.md) · [Performance investigation](Docs/PerformanceOptimization.md)
 
@@ -19,17 +21,17 @@ The headless v1 milestone builds and runs a 4D simulation. This is an independen
 | Shapes | Hyperspheres, tesseract boxes, capsules, convex hulls, hyperplanes, compound and decorated shapes; some operations remain incomplete |
 | Simulation | Rigid bodies, broad phase, contact manifolds, normal response and three tangent friction directions |
 | Examples and checks | Headless `HelloWorld`, unit tests and `Pyramid` / `MaxBodies` performance scenes |
-| Space-sim layer | Design specification only; no production ship controller, weapon system or networking stack yet |
+| Space-sim layer | `Jolt/SpaceSim`: mass/topology, propulsion, world frames/tiers, combat queries, authority/reconciliation, fixed-step bridge and integration adapters; prototype contracts, not a production networking/gameplay stack |
 
 ### Known limits
 
-- **Collision robustness is unfinished.** A reproducible sphere-box GJK false negative exceeds the existing accuracy bound. It occurs in both the v1 baseline and the optimized code. See the [investigation and exact-input record](Docs/PerformanceOptimization.md#validation-and-an-existing-accuracy-gap).
+- **Collision robustness is unfinished.** The recorded pentachoron-related sphere-box failure is repaired without relaxing tolerances. The unchanged 18,432-query small-scale envelope now passes after reviewed scale-aware projection repairs; this is bounded evidence, not universal collision acceptance. See the [repair boundary](Docs/CollisionPredicateRepair.md) and [current validation](Docs/MoverValidation.md). General rotating-compound CCD is not supplied by the projectile-query helper.
 - **Rendering is deferred.** Build with the debug renderer disabled. The inherited 3D Samples and JoltViewer are not a supported 4D viewer.
 - General joint constraints, character controllers, upstream vehicle systems, soft bodies, ragdolls, hair, and mesh/height-field collision are excluded from the current v1 build. Source files remaining in the tree do not imply 4D support.
 - Large-world precision, all upstream platforms and configurations, and cross-platform determinism have not been comprehensively validated for this port.
 - A reliable full-workload 120 Hz deadline has **not** been established. Higher average throughput in some measurements does not remove collision-burst latency.
 
-Recorded validation on 2026-11-04: WSL/GCC Release and assertions-enabled ASAN/UBSAN passed **389 cases / 2,397,320 assertions**. Native MSVC passed **389 of 390 cases**, with the known GJK failure above. These counts describe the enabled 4D suite, not all upstream Jolt features. Full evidence and conditions are in the [performance report](Docs/PerformanceOptimization.md) and [machine-readable results](Docs/PerformanceOptimizationResults.json).
+Historical upstream validation on 2026-11-04 (not the Mover final-tree result): WSL/GCC Release and assertions-enabled ASAN/UBSAN passed **389 cases / 2,397,320 assertions**. Native MSVC passed **389 of 390 cases**, with the known GJK failure above. These counts describe the enabled 4D suite, not all upstream Jolt features. Full evidence and conditions are in the [performance report](Docs/PerformanceOptimization.md) and [machine-readable results](Docs/PerformanceOptimizationResults.json).
 
 ## What changes in four dimensions?
 
@@ -43,7 +45,25 @@ The repository's torque convention is **`Bivec::sWedge(force, offset)`**, consis
 
 Use CMake 3.20 or newer and a C++17 compiler. The currently documented validation environments are x86-64 Linux/WSL with GCC 13.3 and native Windows with MSVC 19.50. The default x86 options enable AVX2; other CPU configurations require their own validation.
 
+### Mover presets (CMake 3.25+)
+
+Run presets from `Build/`. They select precise math and keep headless features explicit:
+
+```sh
+cd Build
+cmake --preset mover-linux-release
+cmake --build --preset mover-linux-release
+ctest --preset mover-linux-release
+../out/mover-release/HelloWorld
+```
+
+Use `mover-linux-double` or `mover-linux-sanitized` for the corresponding build/test matrix entry. Windows uses `mover-windows-release`; its HelloWorld executable is `../out/mover-windows/Release/HelloWorld.exe`. CTest runs the registered unit suite; run HelloWorld separately. Precise-math flags do not establish cross-platform deterministic lockstep.
+
+**Compatibility:** ObjectStream 2.00 rejects older records. Raw binary/state streams also changed with four-double positions; version enclosing application formats before loading old saves or replay data. See [DoublePrecision4D.md](Docs/DoublePrecision4D.md).
+
 ### Linux / WSL
+
+The following is the inherited manual build path. Prefer the Mover presets for the declared validation configuration.
 
 From the repository root:
 

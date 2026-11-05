@@ -1,0 +1,12 @@
+  ok   skew/components round-trip
+  ok   identity-orientation angular momentum equals I * omega
+  ok   identity-orientation energy equals 0.5 * sum(I * omega^2)
+  ok   translational kinetic energy equals 0.5 * m * |v|^2
+  ok   rotor -> matrix is orthogonal
+  ok   rotor -> matrix determinant is +1
+  ok   rotated inertia operator is symmetric
+  ok   rotated inertia operator is positive definite
+       energy invariance: rotated=1.7849987563217278 identity=1.7850000000000001 rel=6.967e-07
+  ok   energy invariant under a rigid reorientation
+  ok   nearest-rank percentiles on 1..100
+SELFTEST: PASS

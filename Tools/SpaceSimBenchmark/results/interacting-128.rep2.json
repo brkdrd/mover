@@ -1,0 +1,44 @@
+{
+  "manifest": {
+    "scenario": "interacting", "bodies": 128, "steps": 1200, "timestep_s": 0.008333334, "rate_hz": 120.0,
+    "simulated_seconds": 10.000001, "worker_threads": 0, "job_system": "JobSystemSingleThreaded",
+    "seed": "0x5eed4d0000000001", "gyroscopic_term": true, "sleeping": false, "gravity": [0,0,0,0],
+    "shape_half_extents": [0.4000, 0.7000, 1.0000, 1.3000], "linear_damping": 0.0, "angular_damping": 0.0,
+    "solver_velocity_steps": 10, "solver_position_steps": 2,
+    "sample_interval_steps": 60, "percentile_method": "nearest-rank",
+    "compiled_config": "float"
+  },
+  "timing": {
+    "setup_ns": 138079, "run_wall_ns": 201853717, "sum_step_ns": 201529416, "sampling_ns": 264067,
+    "instrument_overhead_ns": 16.79,
+    "step_ns": { "min": 137762, "p50": 158062, "p95": 210246, "p99": 394515, "max": 583372, "mean": 167941 },
+    "throughput_steps_per_second": 5954.466,
+    "deadline_ns_8333": 8333333.333, "deadline_misses": 0, "deadline_misses_150hz": 0
+  },
+  "checks": {
+    "finite": true, "rotations_normalized": true, "all_bodies_active": true, "velocity_not_clamped": true,
+    "non_finite_observations": 0, "non_normalized_observations": 0,
+    "energy_rel_drift": 0.000000e+00, "total_energy_rel_drift": 4.814067e-03, "energy_gated": false,
+    "spin_angular_momentum_rel_drift": 0.000000e+00, "spin_angular_momentum_gated": false,
+    "total_angular_momentum_rel_drift": 1.879795e-05, "total_linear_momentum_rel_drift": 1.083622e-08,
+    "min_pair_gap_m": 0.000000, "pair_gap_checked": false,
+    "reference_energy_scale": 7.796208e+06, "reference_angular_momentum_scale": 2.071807e+07, "reference_linear_momentum_scale": 2.981888e+06,
+    "contacts_added": 376, "contacts_persisted": 217, "contacts_removed": 376,
+    "update_errors": 0, "samples": 20
+  },
+  "gates": [
+    { "name": "finite_state", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "1 = violation" },
+    { "name": "reference_rotation_orthogonal", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "harness reference: |Q^T Q - I| < 1e-5" },
+    { "name": "rotation_normalized", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "non-normalized observations" },
+    { "name": "all_bodies_active", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "sleeping disabled" },
+    { "name": "velocity_not_clamped", "value": 0.000000e+00, "limit": 0.000000e+00, "gated": true, "pass": true, "note": "1 = clamp seen" },
+    { "name": "energy_rel_drift_per_body", "value": 0.000000e+00, "limit": 1.000000e-04, "gated": false, "pass": true, "note": "gyro free rotation" },
+    { "name": "total_energy_rel_drift", "value": 4.814067e-03, "limit": 1.000000e-04, "gated": false, "pass": true, "note": "sum |E0| scale" },
+    { "name": "spin_angular_momentum_rel_drift", "value": 0.000000e+00, "limit": 1.000000e-04, "gated": false, "pass": true, "note": "per body, separated" },
+    { "name": "total_angular_momentum_rel_drift", "value": 1.879795e-05, "limit": 1.000000e-03, "gated": true, "pass": true, "note": "L about origin" },
+    { "name": "total_linear_momentum_rel_drift", "value": 1.083622e-08, "limit": 1.000000e-05, "gated": true, "pass": true, "note": "no external force" },
+    { "name": "contacts_observed", "value": 3.760000e+02, "limit": 1.000000e+00, "gated": true, "pass": true, "note": "interacting workload must actually interact" }
+  ],
+  "state_hash": "01b2945a285796cd",
+  "result": "PASS"
+}

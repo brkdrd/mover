@@ -1,0 +1,67 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "mover-base",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DEBUG_RENDERER_IN_DEBUG_AND_RELEASE": false,
+        "PROFILER_IN_DEBUG_AND_RELEASE": false,
+        "TARGET_SAMPLES": false,
+        "TARGET_VIEWER": false,
+        "TARGET_UNIT_TESTS": true,
+        "TARGET_HELLO_WORLD": true,
+        "TARGET_PERFORMANCE_TEST": true,
+        "INTERPROCEDURAL_OPTIMIZATION": false,
+        "CROSS_PLATFORM_DETERMINISTIC": true
+      }
+    },
+    {
+      "name": "mover-linux-release",
+      "inherits": "mover-base",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/../out/mover-release",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "mover-linux-double",
+      "inherits": "mover-linux-release",
+      "binaryDir": "${sourceDir}/../out/mover-double",
+      "cacheVariables": { "DOUBLE_PRECISION": true }
+    },
+    {
+      "name": "mover-linux-sanitized",
+      "inherits": "mover-linux-release",
+      "binaryDir": "${sourceDir}/../out/mover-sanitized",
+      "cacheVariables": {
+        "USE_ASSERTS": true,
+        "OVERRIDE_CXX_FLAGS": false,
+        "CMAKE_CXX_FLAGS_RELEASE": "-O1 -g",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "mover-windows-release",
+      "inherits": "mover-base",
+      "binaryDir": "${sourceDir}/../out/mover-windows",
+      "architecture": "x64",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "CMAKE_CXX_FLAGS": "/wd4866 /wd4868 /wd5246" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "mover-linux-release", "configurePreset": "mover-linux-release", "targets": ["UnitTests", "HelloWorld", "PerformanceTest"], "jobs": 2 },
+    { "name": "mover-linux-double", "configurePreset": "mover-linux-double", "targets": ["UnitTests", "HelloWorld"], "jobs": 2 },
+    { "name": "mover-linux-sanitized", "configurePreset": "mover-linux-sanitized", "targets": ["UnitTests", "HelloWorld"], "jobs": 2 },
+    { "name": "mover-windows-release", "configurePreset": "mover-windows-release", "configuration": "Release", "targets": ["UnitTests", "HelloWorld", "PerformanceTest"], "jobs": 2 }
+  ],
+  "testPresets": [
+    { "name": "mover-linux-release", "configurePreset": "mover-linux-release", "output": { "outputOnFailure": true } },
+    { "name": "mover-linux-double", "configurePreset": "mover-linux-double", "output": { "outputOnFailure": true } },
+    { "name": "mover-linux-sanitized", "configurePreset": "mover-linux-sanitized", "output": { "outputOnFailure": true }, "environment": { "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1", "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1" } },
+    { "name": "mover-windows-release", "configurePreset": "mover-windows-release", "configuration": "Release", "output": { "outputOnFailure": true } }
+  ]
+}

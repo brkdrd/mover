@@ -4,6 +4,7 @@
 
 #include "UnitTestFramework.h"
 #include <Jolt/Core/StringTools.h>
+#include <Jolt/Core/FPException.h>
 #include <Jolt/Math/RMat44.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 
@@ -220,7 +221,13 @@ TEST_SUITE("DVec4Tests")
 		// Division is four-lane like every other operator: embedding both
 		// operands with W = 0 makes the quotient's W a 0/0 NaN, which is the
 		// documented four-lane result rather than a silently projected zero.
-		DVec4 divided = DVec4(1, 2, 3) / DVec4(2, 8, 24);
+		DVec4 divided;
+		{
+			// This fixture deliberately evaluates 0/0; restore native traps
+			// immediately after producing the exceptional test value.
+			[[maybe_unused]] FPExceptionDisableInvalid disable_invalid;
+			divided = DVec4(1, 2, 3) / DVec4(2, 8, 24);
+		}
 		CHECK(divided.GetX() == 0.5);
 		CHECK(divided.GetY() == 0.25);
 		CHECK(divided.GetZ() == 0.125);

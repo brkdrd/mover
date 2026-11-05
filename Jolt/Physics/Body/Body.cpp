@@ -526,7 +526,10 @@ bool Body::TryGetBodyCreationSettings(BodyCreationSettings &outSettings) const
 				for (int i = 0; i < 4; ++i)
 				{
 					Vec4 original_column(encoded.GetColumn4(i));
-					if (!Vec4(reconstructed.GetColumn4(i)).IsClose(original_column, max(original_column.LengthSq(), 1.0f) * 1.0e-6f))
+					float original_length_sq = original_column.LengthSq();
+					float error_sq = (Vec4(reconstructed.GetColumn4(i)) - original_column).LengthSq();
+					if (!std::isfinite(original_length_sq) || !std::isfinite(error_sq)
+						|| !(error_sq <= max(original_length_sq, 1.0f) * 1.0e-6f))
 						return false;
 				}
 			}

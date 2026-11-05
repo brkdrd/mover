@@ -36,13 +36,25 @@ following **additional export checks**:
    Arbitrary *world body orientation* is independent of this body-local condition.
 4. Before the real `SetMassProperties` dry-run, a checked preflight runs the
    same float Jacobi eigensolver, with its **unchanged** normalization/eigenpair
-   tolerances, and the same sorted matrix reconstruction test. Numerical
-   diagnostic or convergence failures return false **in every build**, without
-   invoking the assertion callback. Exactly diagonal tensors use the decoder's
-   existing diagonal shortcut. The temporary `MotionProperties` then decodes the
-   proposed settings through the real path; zero-inverse count must be unchanged
-   and every decoded inverse must remain finite and nonnegative. Preflight does
-   not alter global assertion state or the ordinary creation decoder.
+   tolerances, and the same sorted matrix reconstruction test. Checked Jacobi
+   first requires every entry finite and `abs(M_ij) <= sqrt(FLT_MAX)/(16*n*n)`
+   (`n=4` for mass decomposition). This deliberately conservative intermediate-
+   range restriction leaves headroom for float Jacobi arithmetic and squared
+   residuals; it is **not** a rank cutoff or relaxed residual tolerance. It also
+   checks the double-evaluated theta ratio before the ordinary float division
+   and square. Unsupported ranges return false **before** overflow, including
+   with traps enabled. Both eigenpair and reconstruction diagnostics explicitly
+   require finite squared norms: infinity must not become a passing tolerance.
+   Numerical diagnostic or convergence failures return false **in every build**,
+   without invoking the assertion callback. Exactly diagonal tensors use the
+   decoder's existing diagonal shortcut (and do not need the Jacobi range cap).
+   The temporary `MotionProperties` then decodes the proposed settings through
+   the real path; zero-inverse count must be unchanged and every decoded inverse
+   must remain finite and nonnegative. Checked success retains the ordinary
+   solver's float operations and reconstruction criterion for that rerun.
+   This adds no exception masking: the solver's existing scoped invalid-operation
+   guard is unchanged, and the caller's trap masks are restored. The ordinary
+   creation decoder's historical diagnostics/tolerances remain unchanged.
 5. Let A and B be the original and decoded **unmasked body-local 6x6 inverse
    response operators**, evaluated on all six coordinate bivectors using the
    actual float rotor/adjoint path. Export requires
@@ -146,10 +158,22 @@ must succeed.
   orthonormal completion, proper orientation and three exact zero planar inverses;
 - mass-2 `x x^T + 2^-8 Identity`, `x=(-4,-3,3,-3)`: successful creation followed
   by atomic checked-export rejection, with zero assertion callbacks throughout;
-- a Linux self-subprocess legacy death test requiring **SIGABRT**, not just a
-  nonzero exit. An assertion callback exits with a distinct non-signal status.
-  Its helper case is skipped except when explicitly spawned by the parent; even
-  `--no-skip` without the parent's marker cannot accidentally trigger the death;
+- mass-2 `x x^T + 4 Identity`, `x=(1,2,3,4)`, created normally and then scaled by
+  public `MotionProperties::ScaleToMass(ldexp(2.f,70))`: all stored mass/inertia
+  inverses remain normal; checked export rejects atomically, raises no overflow,
+  invalid-operation or divide-by-zero flags, and preserves the caller's trap
+  masks. Linux and native Windows self-subprocesses enable real overflow traps
+  and require a zero exit within a bounded wait (20 seconds);
+- the same physical mass-scaling fixture at exponents `-100,0,40,50,54,70,100`:
+  accepted exports recreate through the ordinary Body API with zero assertion
+  callbacks and the unchanged `64*FLT_EPSILON` response budget; the larger
+  unsupported non-diagonal tensors reject without flags;
+- a Linux self-subprocess legacy death test requiring **SIGABRT** plus a pipe
+  marker emitted only by the legacy API's specific failure trace. A sanitizer
+  or other abort before that trace cannot pass. An assertion callback exits
+  with a distinct non-signal status. Its helper case is skipped except when
+  explicitly spawned by the parent; even `--no-skip` without the parent's
+  marker cannot accidentally trigger the death. The wait is bounded;
 - every coordinate null-plane choice of diagonal rank-two M;
 - positive skinny diagonals with entries down to `2^-80`: creation keeps every
   rotational inverse positive; export either preserves them or explicitly
@@ -159,7 +183,9 @@ must succeed.
 - the existing full-rank particle tensors, mass scales, static/kinematic latent
   state, shape/COM offsets, DOF masks and sphere quadrature.
 
-The isolated assertions-enabled GCC 13 Release build uses `-ffp-contract=off`
+### Earlier structural-zero verification (before the overflow repair)
+
+The isolated assertions-enabled GCC 13 Release build used `-ffp-contract=off`
 and `-j2` at `/home/brkdrd/mover-rank-mass-build`. The two assertion-path
 regressions were each executed RED before their respective fixes. Evidence and
 final verification are in `review-artifacts/cycle2-*.log`:
@@ -191,3 +217,48 @@ Native probe sources, command and log are
 The historical normal-creation eigenpair assertion on unsupported ill-conditioned
 non-rank-one inputs remains intentional; for example the independent skinny
 non-diagonal probe at exponent 16 still diagnoses insufficient accuracy.
+
+### Overflow-trap repair verification
+
+The exact public-Body regression was executed RED before the range guard:
+Linux returned true while setting `FE_OVERFLOW` with exceptions masked, and
+terminated with **SIGFPE** under overflow traps. A native full-Body replay
+compiled against the original solver header (confirmed by `/showIncludes`)
+likewise set the overflow flag and terminated with **0xc0000091** when trapped.
+The repair does not mask that fault or accept an infinite comparison tolerance:
+it rejects the unsupported range before entering the float diagnostics.
+
+Verification reused the same isolated GCC build, verified its CMake source
+path, and rebuilt with **`-j1`**. Results:
+
+- registered mass suite: **16 cases / 4,259 assertions pass**, plus the
+  overflow-trapped child (**21 assertions**) and the marked legacy death child;
+- full suite: **543 of 544 executed cases pass**, two child-only cases skipped.
+  The only failure remains `GyroscopicClampFailStopsEvenWithoutAnyDelivery`
+  with its same 12 assertions; HelloWorld passes;
+- an additional trapped public-Body sweep of **512 SPD fixtures over 10 mass
+  scales** accepts 2,653 exports and rejects 2,467, with zero assertion callbacks
+  or overflow/invalid/divide-by-zero flags. Accepted exports recreate normally;
+  the largest measured relative response error is `7.56616691e-6`, below the
+  unchanged `64*FLT_EPSILON` budget;
+- the earlier independent rank-one/SPD/conditioning probes still pass: all
+  512 well-conditioned exports remain accepted, and the 1,664 successfully
+  created conditioning cases produce zero export assertion callbacks;
+- a negative control replacing the legacy call with an unrelated `abort()`
+  produces SIGABRT but **fails** the hardened death test for its missing pipe
+  marker. The unchanged ordinary eigensolver still diagnoses the unsupported
+  skinny non-diagonal exponent-16 input;
+- native MSVC **`/O2 /fp:precise` full public Body API**: **15 cases / 4,234
+  assertions pass**, plus the Windows trapped child (**19 assertions**).
+  Only Body/MassProperties/MotionProperties and this test translation unit
+  were rebuilt into scratch artifacts, linked against the existing native-
+  precise library/framework with its matching defines (assertions disabled,
+  cross-platform deterministic, FP exceptions enabled). The native runner's
+  trap masks are restored exactly; no shared native build was modified.
+
+Logs and reproducible standalone commands/scripts are under
+`C:/Users/goliy/AppData/Local/hermes/cache/scratch/mass-overflow-*`.
+The original independent `final-mass-overflow-review-{masked,traps}.log` now
+also confirms false with **zero** `FE_OVERFLOW`, `FE_INVALID` and `FE_DIVBYZERO`.
+This repair does not add whole-engine sanitizer or double-position certification;
+those shared configurations are verified independently by the integrator.

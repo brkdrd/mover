@@ -10,12 +10,20 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <cmath>
+#include <cfenv>
+#include <chrono>
 #include <cstdlib>
+#include <cstring>
+#include <thread>
 #include <vector>
+#if defined(JPH_PLATFORM_WINDOWS) && !defined(JPH_PLATFORM_WINDOWS_UWP)
+#include <Jolt/Core/IncludeWindows.h>
+#endif
 #if defined(JPH_PLATFORM_LINUX)
 #include <spawn.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
+#include <unistd.h>
 #include <cerrno>
 #include <csignal>
 extern char **environ;
@@ -356,7 +364,237 @@ TEST_SUITE("MassRoundTripTests")
 				}
 	}
 
+	// Exercise the real Body API, starting from ordinary successful creation:
+	// no inverse setters and no standalone substitute for the decoder.
+	static void sCheckMassScaledOverflowExport(bool inTrapOverflow, int inExponent = 70, bool inExpectAccepted = false)
+	{
+		PhysicsTestContext context;
+		JPH_IF_ENABLE_ASSERTS(ExpectAssert no_asserts(0);)
+		BodyCreationSettings settings(new SphereShape(0.5f), RVec4::sZero(), Rotor::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
+		settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
+		settings.mMassPropertiesOverride.mMass = 2.0f;
+		const float x[] = { 1, 2, 3, 4 };
+		for (int i = 0; i < 4; ++i)
+			for (int j = 0; j < 4; ++j)
+				settings.mMassPropertiesOverride.mInertia(i, j) = x[i] * x[j] + (i == j? 4.0f : 0.0f);
+		Body &body = context.CreateBody(settings, EActivation::DontActivate);
+		body.GetMotionProperties()->ScaleToMass(std::ldexp(2.0f, inExponent));
+		const Bivec inverse = body.GetMotionProperties()->GetInverseInertiaDiagonal();
+		const Rotor principal = body.GetMotionProperties()->GetInertiaRotation();
+		const float inv_mass = body.GetMotionProperties()->GetInverseMass();
+		CHECK(std::isnormal(inv_mass));
+		for (int i = 0; i < 6; ++i)
+			CHECK(std::isnormal(inverse[i]));
+		BodyCreationSettings exported(new SphereShape(0.75f), RVec4(9, 8, 7, 6), Rotor::sIdentity(), EMotionType::Kinematic, Layers::MOVING);
+		exported.mUserData = 0xfeedbeef;
+		exported.mMassPropertiesOverride.mMass = 53.0f;
+		const Shape *shape = exported.GetShape();
+
+		// Save/restore MXCSR directly on SSE: MSVC's feholdexcept can report
+		// failure when the native runner already has SIMD traps enabled.
+		// Both masked and trapped calls must preserve the caller's trap masks.
+#if defined(JPH_USE_SSE)
+		const uint saved = _mm_getcsr();
+		_mm_setcsr((saved | _MM_MASK_MASK) & ~_MM_EXCEPT_MASK);
+		if (inTrapOverflow)
+			_mm_setcsr(_mm_getcsr() & ~(_MM_MASK_OVERFLOW | _MM_MASK_INVALID | _MM_MASK_DIV_ZERO));
+		const uint masks = _mm_getcsr() & _MM_MASK_MASK;
+#else
+		std::fenv_t saved;
+		int held = std::feholdexcept(&saved);
+		CHECK(held == 0);
+		if (held != 0)
+			return;
 #if defined(JPH_PLATFORM_LINUX)
+		if (inTrapOverflow)
+			feenableexcept(FE_OVERFLOW | FE_INVALID | FE_DIVBYZERO);
+#else
+		JPH_UNUSED(inTrapOverflow);
+#endif
+#endif
+		bool accepted = body.TryGetBodyCreationSettings(exported);
+#if defined(JPH_USE_SSE)
+		int raised = _mm_getcsr() & (_MM_EXCEPT_OVERFLOW | _MM_EXCEPT_INVALID | _MM_EXCEPT_DIV_ZERO);
+		const uint masks_after = _mm_getcsr() & _MM_MASK_MASK;
+		_mm_setcsr(saved);
+		const uint restored = _mm_getcsr();
+		CHECK(restored == saved);
+		CHECK(masks_after == masks);
+#else
+		int raised = std::fetestexcept(FE_OVERFLOW | FE_INVALID | FE_DIVBYZERO);
+		int restored = std::fesetenv(&saved);
+		CHECK(restored == 0);
+#endif
+		CHECK(raised == 0);
+		CHECK(accepted == inExpectAccepted);
+		if (!accepted)
+		{
+			CHECK(exported.GetShape() == shape);
+			CHECK(exported.mPosition == RVec4(9, 8, 7, 6));
+			CHECK(exported.mMotionType == EMotionType::Kinematic);
+			CHECK(exported.mUserData == 0xfeedbeef);
+			CHECK(exported.mMassPropertiesOverride.mMass == 53.0f);
+		}
+		else
+		{
+			// Preflight success must survive actual ordinary body creation with
+			// its unchanged assertions, and retain the full response budget.
+			Body &recreated = context.CreateBody(exported, EActivation::DontActivate);
+			double error_sq = 0.0, reference_sq = 0.0;
+			for (int input = 0; input < 6; ++input)
+			{
+				float v[6] = {};
+				v[input] = 1.0f;
+				Bivec basis(v[0], v[1], v[2], v[3], v[4], v[5]);
+				Bivec expected = body.GetMotionProperties()->MultiplyWorldSpaceInverseInertiaByVector(body.GetRotation(), basis);
+				Bivec actual = recreated.GetMotionProperties()->MultiplyWorldSpaceInverseInertiaByVector(recreated.GetRotation(), basis);
+				for (int output = 0; output < 6; ++output)
+				{
+					CHECK(std::isfinite(actual[output]));
+					error_sq += Square(double(actual[output]) - expected[output]);
+					reference_sq += Square(double(expected[output]));
+				}
+			}
+			CHECK(error_sq <= Square(64.0 * FLT_EPSILON) * reference_sq);
+		}
+		CHECK(body.GetMotionProperties()->GetInverseMass() == inv_mass);
+		CHECK(body.GetMotionProperties()->GetInverseInertiaDiagonal() == inverse);
+		CHECK(body.GetMotionProperties()->GetInertiaRotation() == principal);
+	}
+
+	TEST_CASE("CheckedMassScaledExportDoesNotRaiseMaskedOverflow")
+	{
+		sCheckMassScaledOverflowExport(false);
+	}
+
+	TEST_CASE("CheckedMassScaledExportPreservesAcceptedResponseAcrossRange")
+	{
+		for (int exponent : { -100, 0, 40, 50, 54, 70, 100 })
+		{
+			CAPTURE(exponent);
+			sCheckMassScaledOverflowExport(false, exponent, exponent <= 50);
+		}
+	}
+
+#if defined(JPH_PLATFORM_WINDOWS) && !defined(JPH_PLATFORM_WINDOWS_UWP)
+	TEST_CASE("CheckedMassScaledExportOverflowTrapChild" * doctest::skip())
+	{
+		// Explicit child selection only: --no-skip on its own is harmless.
+		if (std::strstr(GetCommandLineA(), "--test-case=CheckedMassScaledExportOverflowTrapChild") == nullptr)
+			return;
+		SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
+		sCheckMassScaledOverflowExport(true);
+	}
+
+	TEST_CASE("CheckedMassScaledExportSurvivesOverflowTrapsInSubprocess")
+	{
+		char executable[MAX_PATH];
+		DWORD length = GetModuleFileNameA(nullptr, executable, MAX_PATH);
+		CHECK(length > 0);
+		CHECK(length < MAX_PATH);
+		if (length == 0 || length >= MAX_PATH)
+			return;
+		std::string command = std::string("\"") + executable
+			+ "\" --test-case=CheckedMassScaledExportOverflowTrapChild --no-skip=true --no-colors=true";
+		STARTUPINFOA startup {};
+		startup.cb = sizeof(startup);
+		PROCESS_INFORMATION process {};
+		BOOL spawned = CreateProcessA(executable, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process);
+		CHECK(spawned != FALSE);
+		if (!spawned)
+			return;
+		DWORD waited = WaitForSingleObject(process.hProcess, 20000);
+		if (waited != WAIT_OBJECT_0)
+		{
+			TerminateProcess(process.hProcess, 96);
+			WaitForSingleObject(process.hProcess, 5000);
+		}
+		DWORD exit_code = 97;
+		BOOL got_exit = GetExitCodeProcess(process.hProcess, &exit_code);
+		CloseHandle(process.hThread);
+		CloseHandle(process.hProcess);
+		CHECK(waited == WAIT_OBJECT_0);
+		CHECK(got_exit != FALSE);
+		CHECK(exit_code == 0); // In particular, 0xc0000091 must not pass.
+	}
+#endif
+
+#if defined(JPH_PLATFORM_LINUX)
+	// Every self-subprocess has a deadline; a numerical convergence hang must
+	// fail the parent instead of stalling the entire test run.
+	static bool sWaitForMassChild(pid_t inChild, int &outStatus)
+	{
+		auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+		for (;;)
+		{
+			pid_t waited = waitpid(inChild, &outStatus, WNOHANG);
+			if (waited == inChild)
+				return true;
+			if (waited == -1 && errno != EINTR)
+				return false;
+			if (std::chrono::steady_clock::now() >= deadline)
+			{
+				kill(inChild, SIGKILL);
+				do { waited = waitpid(inChild, &outStatus, 0); } while (waited == -1 && errno == EINTR);
+				return false;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+	}
+
+	TEST_CASE("CheckedMassScaledExportOverflowTrapChild" * doctest::skip())
+	{
+		const char *marker = std::getenv("JPH_MASS_EXPORT_OVERFLOW_CHILD");
+		if (marker == nullptr || std::strcmp(marker, "1") != 0)
+			return;
+		const rlimit no_core { 0, 0 };
+		if (setrlimit(RLIMIT_CORE, &no_core) != 0)
+			std::_Exit(92);
+		sCheckMassScaledOverflowExport(true);
+	}
+
+	TEST_CASE("CheckedMassScaledExportSurvivesOverflowTrapsInSubprocess")
+	{
+		char executable[] = "/proc/self/exe";
+		char filter[] = "--test-case=CheckedMassScaledExportOverflowTrapChild";
+		char unskip[] = "--no-skip=true";
+		char no_colors[] = "--no-colors=true";
+		char *args[] = { executable, filter, unskip, no_colors, nullptr };
+		char marker[] = "JPH_MASS_EXPORT_OVERFLOW_CHILD=1";
+		std::vector<char *> child_env;
+		for (char **env = environ; *env != nullptr; ++env)
+			if (std::strncmp(*env, "JPH_MASS_EXPORT_OVERFLOW_CHILD=", sizeof("JPH_MASS_EXPORT_OVERFLOW_CHILD=") - 1) != 0)
+				child_env.push_back(*env);
+		child_env.push_back(marker);
+		child_env.push_back(nullptr);
+		pid_t child;
+		int spawned = posix_spawn(&child, executable, nullptr, nullptr, args, child_env.data());
+		CHECK(spawned == 0);
+		if (spawned != 0)
+			return;
+		int status = 0;
+		bool waited = sWaitForMassChild(child, status);
+		CHECK(waited);
+		CHECK(WIFEXITED(status));
+		if (WIFEXITED(status))
+			CHECK(WEXITSTATUS(status) == 0);
+	}
+
+	// The parent requires both SIGABRT and evidence that the legacy API reached
+	// its specific failure trace. A sanitizer abort during setup is NOT success.
+	static void sLegacyMassFailureTrace(const char *inFormat, ...)
+	{
+		if (std::strcmp(inFormat, "Body::GetBodyCreationSettings: unrepresentable mass state; use TryGetBodyCreationSettings") != 0)
+			std::_Exit(93);
+		const char *fd_string = std::getenv("JPH_MASS_EXPORT_DEATH_FD");
+		if (fd_string == nullptr)
+			std::_Exit(94);
+		char *end;
+		long fd = std::strtol(fd_string, &end, 10);
+		if (*end != '\0' || fd <= STDERR_FILENO || fd > INT_MAX || write(int(fd), "L", 1) != 1)
+			std::_Exit(95);
+	}
+
 	// Only the parent test enables this case in a fresh executable. A mere
 	// nonzero child exit is NOT success: only the legacy API's SIGABRT is.
 	TEST_CASE("LegacyUnrepresentableMassExportDeathChild" * doctest::skip())
@@ -377,6 +615,7 @@ TEST_SUITE("MassRoundTripTests")
 		inertia = Mat44::sZero();
 		inertia(2, 2) = inertia(2, 3) = inertia(3, 2) = inertia(3, 3) = 2.0f;
 		Body &body = context.CreateBody(settings, EActivation::DontActivate);
+		Trace = sLegacyMassFailureTrace;
 		(void)body.GetBodyCreationSettings();
 		CHECK(false); // Returning invented settings must not pass the death test.
 	}
@@ -390,20 +629,37 @@ TEST_SUITE("MassRoundTripTests")
 		char quiet[] = "--quiet=true"; // Expected child SIGABRT is checked by waitpid, not its reporter.
 		char *args[] = { executable, filter, unskip, no_colors, quiet, nullptr };
 		char marker[] = "JPH_MASS_EXPORT_DEATH_CHILD=1";
+		int trace_pipe[2];
+		int piped = pipe(trace_pipe);
+		CHECK(piped == 0);
+		if (piped != 0)
+			return;
+		std::string fd_entry = "JPH_MASS_EXPORT_DEATH_FD=" + std::to_string(trace_pipe[1]);
 		std::vector<char *> child_env;
 		for (char **env = environ; *env != nullptr; ++env)
-			child_env.push_back(*env);
+			if (std::strncmp(*env, "JPH_MASS_EXPORT_DEATH_CHILD=", sizeof("JPH_MASS_EXPORT_DEATH_CHILD=") - 1) != 0
+				&& std::strncmp(*env, "JPH_MASS_EXPORT_DEATH_FD=", sizeof("JPH_MASS_EXPORT_DEATH_FD=") - 1) != 0)
+				child_env.push_back(*env);
 		child_env.push_back(marker);
+		child_env.push_back(fd_entry.data());
 		child_env.push_back(nullptr);
 		pid_t child;
 		int spawned = posix_spawn(&child, executable, nullptr, nullptr, args, child_env.data());
+		close(trace_pipe[1]);
 		CHECK(spawned == 0);
 		if (spawned != 0)
+		{
+			close(trace_pipe[0]);
 			return;
+		}
 		int status = 0;
-		pid_t waited;
-		do { waited = waitpid(child, &status, 0); } while (waited == -1 && errno == EINTR);
-		CHECK(waited == child);
+		bool waited = sWaitForMassChild(child, status);
+		CHECK(waited);
+		char reached[2] = {};
+		ssize_t bytes = waited? read(trace_pipe[0], reached, sizeof(reached)) : -1;
+		close(trace_pipe[0]);
+		CHECK(bytes == 1);
+		CHECK(reached[0] == 'L');
 		CHECK(WIFSIGNALED(status));
 		if (WIFSIGNALED(status))
 			CHECK(WTERMSIG(status) == SIGABRT);

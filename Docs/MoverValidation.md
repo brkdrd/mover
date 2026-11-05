@@ -32,7 +32,7 @@ Sanitizer configuration: GCC Release, precise math, LTO off, assertions on, `OVE
 
 Native precise math avoids two inherited fast-math EPA failures. Presets/CI disable C4866/C4868 evaluation-order diagnostics and C5246 standard-conforming aggregate brace-elision warnings; numerical assertions/FP exceptions remain enabled. The build option `CROSS_PLATFORM_DETERMINISTIC` is not evidence of cross-platform simulation determinism.
 
-The complete final-tree matrix, combined gameplay scenario, performance manifest and outstanding independent reviews remain required. A workflow definition is not hosted-CI evidence; isolated branch counts must not be summed into a final result.
+The combined gameplay scenario, parent integrated matrix and scoped independent reviews passed. The benchmark was rebuilt from clean source `e503e2db` and all eight runs / 9,600 steps passed the unchanged checks; raw artifacts and dense-pile timings are archived in MoverPerformance.md. Hosted CI remains to be executed. These are bounded implementation gates, not production workload/network/accuracy acceptance; isolated branch counts must not be summed into a final result.
 
 ## Early validation history
 

@@ -29,7 +29,10 @@ The headless v1 milestone builds and runs a 4D simulation. This is an independen
 - **Rendering is deferred.** Build with the debug renderer disabled. The inherited 3D Samples and JoltViewer are not a supported 4D viewer.
 - General joint constraints, character controllers, upstream vehicle systems, soft bodies, ragdolls, hair, and mesh/height-field collision are excluded from the current v1 build. Source files remaining in the tree do not imply 4D support.
 - Large-world precision, all upstream platforms and configurations, and cross-platform determinism have not been comprehensively validated for this port.
+- MassModel accuracy guarantees exclude subnormal intermediate arithmetic; this exclusion is not comprehensive runtime rejection. Checked mass export may reject unsupported conditioning/ranges rather than invent inertia.
 - A reliable full-workload 120 Hz deadline has **not** been established. Higher average throughput in some measurements does not remove collision-burst latency.
+
+Current Mover local validation: **586 native tests**, **586 whole-engine ASan/UBSan tests**, and **588 double-position tests** passed; HelloWorld passed in all three configurations. The standalone collision diagnostic passed **18,432 unique queries**, and the frozen-source space benchmark passed all **8 runs / 9,600 measured steps**. See [current validation](Docs/MoverValidation.md) and [full-run performance evidence](Docs/MoverPerformance.md), including dense-contact deadline misses and numerical-domain limits.
 
 Historical upstream validation on 2026-11-04 (not the Mover final-tree result): WSL/GCC Release and assertions-enabled ASAN/UBSAN passed **389 cases / 2,397,320 assertions**. Native MSVC passed **389 of 390 cases**, with the known GJK failure above. These counts describe the enabled 4D suite, not all upstream Jolt features. Full evidence and conditions are in the [performance report](Docs/PerformanceOptimization.md) and [machine-readable results](Docs/PerformanceOptimizationResults.json).
 

@@ -1,0 +1,49 @@
+{
+  "source_commit": "e503e2db3d653072e0e45e12e29f44f48ca73609",
+  "binary_sha256": "51b43a42e62f3923eab66130b1d51d9cb6eb55e83af6d91c2df6bad75cba5b97",
+  "platform": "native Windows MSVC precise, FP traps enabled",
+  "configuration": {
+    "precision": "float",
+    "cross_platform_deterministic": true,
+    "library_lto": false,
+    "profiler": false,
+    "scene": "Pyramid",
+    "motion_quality": "Discrete",
+    "rate_hz": 120,
+    "sleeping": false,
+    "warmup_discarded": false,
+    "percentiles": "nearest-rank"
+  },
+  "runs": [
+    {
+      "threads_including_main": 6,
+      "steps": 1200,
+      "mean_ms": 8.209507416666668,
+      "p50_ms": 7.4147,
+      "p95_ms": 13.5951,
+      "p99_ms": 20.4625,
+      "max_ms": 163.386,
+      "misses_120hz": 164,
+      "misses_150hz": 1155,
+      "observed_final_hash": "0x1a5f81a7674216e6",
+      "csv": "per_frame_discrete_th6.csv"
+    },
+    {
+      "threads_including_main": 12,
+      "steps": 1200,
+      "mean_ms": 6.660679333333333,
+      "p50_ms": 6.0899,
+      "p95_ms": 10.4682,
+      "p99_ms": 15.2729,
+      "max_ms": 85.183,
+      "misses_120hz": 108,
+      "misses_150hz": 210,
+      "observed_final_hash": "0x1a5f81a7674216e6",
+      "csv": "per_frame_discrete_th12.csv"
+    }
+  ],
+  "limits": [
+    "One run per thread count; not a reliability certification or matched upstream speedup comparison.",
+    "The 120 Hz and 150 Hz deadline budgets were not met on every step."
+  ]
+}

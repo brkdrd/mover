@@ -15,7 +15,37 @@ the numbers below is in
 
 The final harness passed independent review after repairs to exact time serialization, compile-command provenance validation and artifact destination aliasing. All 47 permanent regressions passed on Linux and NTFS through WSL; independent dangling-link, filesystem-error and valid-path probes also passed. Numerical workloads, reference calculations and the `1e-4` separated-scene gates are unchanged. No protection against concurrent adversarial filesystem mutations is claimed.
 
-The historical measurements below are retained with their original provenance. Final-source benchmark capture is still pending; approval of the harness does not retroactively make an older binary a measurement of the final tree.
+The historical measurements below are retained with their original provenance. Final-source capture is recorded in the next section; it supersedes older measurements for the current source without rewriting their provenance.
+
+## Final-source capture (`e503e2db`)
+
+The parent reconfigured and rebuilt the approved harness from clean commit `e503e2db3d653072e0e45e12e29f44f48ca73609` (zero dirty entries). All **8 runs / 9,600 measured steps** passed the unchanged gates; both repeats and the separated 256-body thread-count comparison have matching state hashes. CTest passed the 47-regression suite again. Raw JSON, CSV, logs and environment/compile-command metadata are archived under `Tools/SpaceSimBenchmark/results/final-e503e2db/`.
+
+Binary SHA-256: `71069ca796123d9b5fb1965b8011eb547d16118c2904c83d55ef83465e6660ed`. Core source fingerprint: `ffdd3318db5698795ea1722e46eac16e028ea7cabed3eaecc48b6f338b8ca1ba`. GCC 13.3, float positions, no fast-math, library LTO on and cross-platform-deterministic option off; exact per-target commands are retained. This measurement configuration differs from the precise validation presets.
+
+| Run | p50 ms | p95 ms | p99 ms | Max ms | Misses at 120 Hz |
+|---|---:|---:|---:|---:|---:|
+| interacting-128.rep1 | 0.147 | 0.223 | 0.447 | 0.533 | 0 |
+| interacting-128.rep2 | 0.146 | 0.189 | 0.220 | 0.411 | 0 |
+| separated-128.rep1 | 0.137 | 0.167 | 0.416 | 0.448 | 0 |
+| separated-128.rep2 | 0.137 | 0.153 | 0.193 | 0.309 | 0 |
+| separated-256-4t.rep1 | 0.456 | 0.513 | 0.738 | 0.879 | 0 |
+| separated-256-4t.rep2 | 0.448 | 0.529 | 0.621 | 0.907 | 0 |
+| separated-256.rep1 | 0.267 | 0.374 | 0.555 | 0.699 | 0 |
+| separated-256.rep2 | 0.267 | 0.320 | 0.553 | 0.623 | 0 |
+
+Zero deadline misses in these small workloads do not establish population capacity or server-level headroom. The interacting runs measured total energy drift `0.003217738`; that field is reported but not gated for contacts, as specified before the run. Separated-scene energy/spin gates remain `1e-4`.
+
+### Retained dense-contact stress workload
+
+The native precise/FP-traps `PerformanceTest` was also rebuilt from the same engine source and ran the existing Pyramid scene at an actual 120 Hz for 1,200 steps, with no warmup samples discarded. Both thread counts completed with identical final hash `0x1a5f81a7674216e6`. Raw timings and manifest are in `Docs/benchmark-results/pyramid-e503e2db/`; a preliminary six-thread run made during concurrent review is also retained separately.
+
+| Total threads (including main) | Mean ms | p95 ms | p99 ms | Max ms | Misses at 120 Hz |
+|---|---:|---:|---:|---:|---:|
+| 6 | 8.210 | 13.595 | 20.463 | 163.386 | 164 / 1,200 |
+| 12 | 6.661 | 10.468 | 15.273 | 85.183 | 108 / 1,200 |
+
+**The dense-contact workload does not meet a hard 120 Hz deadline.** One run per configuration is not a reliability estimate; these are not matched upstream speedup measurements. The much lighter space-dynamics results must not replace or conceal these stress results.
 
 ## What was measured
 
@@ -191,7 +221,7 @@ The working tree kept moving during this work (`Jolt/SpaceSim/Simulation.h` and
 `Jolt/SpaceSim/PhysicsBridge.h` were edited at 18:40Z and 18:44Z, after the library was
 built at 18:39Z). The fingerprints above identify the **configure-time content the
 binary was built from**, not the later tree; they are not a claim about the frozen
-sources. The parent's source-freeze rerun will produce the final numbers.
+sources. The parent's subsequent source-freeze rerun is recorded in the final-source section above.
 
 The state hashes and drifts differ from the historical capture (`85c794c0eeb3435f` /
 `01b2945a285796cd`, per-body energy drift 5.9–6.2e-5): this is a **different core

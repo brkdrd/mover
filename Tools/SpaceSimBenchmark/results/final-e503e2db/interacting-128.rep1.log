@@ -1,0 +1,22 @@
+instrument: steady_clock pair cost 17.3 ns (mean of 200000)
+scenario=interacting bodies=128 steps=1200 rate=120.0 Hz dt=0.008333334 s threads=0
+setup: 0.115 ms
+run:   194.077 ms total, 193.798 ms sum(steps), sampling 0.241 ms
+step ns: min=133878 p50=146572 p95=222653 p99=446828 max=533471 mean=161498
+throughput: 6192.0 steps/s; deadline misses 8.333 ms: 0, 6.667 ms: 0
+checks: energy_rel=0.000e+00 total_energy_rel=3.218e-03 spin_L_rel=0.000e+00 total_L_rel=6.007e-07 total_p_rel=1.357e-08 contacts(added/persisted/removed)=342/201/341
+reference scales: sum|E0|=7.796208e+06 sum|L0|=2.071807e+07 sum m|v0|=2.981888e+06
+state hash: f86af8530ee92cba
+  ok   finite_state                         value=0.000000e+00 limit=0.000000e+00 1 = violation
+  ok   reference_rotation_orthogonal        value=0.000000e+00 limit=0.000000e+00 harness reference: |Q^T Q - I| < 1e-5
+  ok   rotation_normalized                  value=0.000000e+00 limit=0.000000e+00 non-normalized observations
+  ok   all_bodies_active                    value=0.000000e+00 limit=0.000000e+00 sleeping disabled
+  ok   velocity_not_clamped                 value=0.000000e+00 limit=0.000000e+00 1 = clamp seen
+  ok   core_nonfinite_velocity              value=0.000000e+00 limit=0.000000e+00 MotionProperties sticky diagnostic
+  info energy_rel_drift_per_body            value=0.000000e+00 limit=1.000000e-04 gyro free rotation
+  info total_energy_rel_drift               value=3.217738e-03 limit=1.000000e-04 sum |E0| scale
+  info spin_angular_momentum_rel_drift      value=0.000000e+00 limit=1.000000e-04 per body, separated
+  ok   total_angular_momentum_rel_drift     value=6.007485e-07 limit=1.000000e-03 L about origin
+  ok   total_linear_momentum_rel_drift      value=1.357456e-08 limit=1.000000e-05 no external force
+  ok   contacts_observed                    value=3.420000e+02 limit=1.000000e+00 interacting workload must actually interact
+RESULT: PASS

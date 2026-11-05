@@ -1,0 +1,70 @@
+Start testing: Nov 05 14:06 +10
+----------------------------------------------------------
+1/1 Testing: SpaceSimBenchmark.CliAndArtifacts
+1/1 Test: SpaceSimBenchmark.CliAndArtifacts
+Command: "/usr/bin/python3" "/mnt/c/Users/goliy/mover/Tools/SpaceSimBenchmark/tests/test_cli_and_artifacts.py" "/home/brkdrd/mover-perf-build-verified/SpaceSimBenchmark"
+Directory: /home/brkdrd/mover-perf-build-verified
+"SpaceSimBenchmark.CliAndArtifacts" start time: Nov 05 14:06 +10
+Output:
+----------------------------------------------------------
+test_checks_cover_sampled_states_not_every_step (__main__.ArtifactContentTests.test_checks_cover_sampled_states_not_every_step) ... ok
+test_csv_has_one_row_per_step (__main__.ArtifactContentTests.test_csv_has_one_row_per_step) ... ok
+test_json_is_strict_and_finite (__main__.ArtifactContentTests.test_json_is_strict_and_finite) ... ok
+test_manifest_records_build_provenance (__main__.ArtifactContentTests.test_manifest_records_build_provenance) ... ok
+test_repeat_hashes_match_and_threads_do_not_change_state (__main__.ArtifactContentTests.test_repeat_hashes_match_and_threads_do_not_change_state) ... ok
+test_time_fields_round_trip_the_actual_float_timestep (__main__.ArtifactContentTests.test_time_fields_round_trip_the_actual_float_timestep) ... ok
+test_dangling_csv_alias_to_json_target_is_rejected (__main__.ArtifactDestinationTests.test_dangling_csv_alias_to_json_target_is_rejected) ... ok
+test_dangling_json_alias_to_csv_target_is_rejected (__main__.ArtifactDestinationTests.test_dangling_json_alias_to_csv_target_is_rejected) ... ok
+test_dangling_symlink_chain_is_rejected (__main__.ArtifactDestinationTests.test_dangling_symlink_chain_is_rejected) ... ok
+test_dangling_symlink_parent_is_rejected (__main__.ArtifactDestinationTests.test_dangling_symlink_parent_is_rejected) ... ok
+test_distinct_existing_files_and_resolving_symlinks_remain_valid (__main__.ArtifactDestinationTests.test_distinct_existing_files_and_resolving_symlinks_remain_valid) ... ok
+test_dot_relative_alias_is_rejected (__main__.ArtifactDestinationTests.test_dot_relative_alias_is_rejected) ... ok
+test_existing_hardlink_alias_is_rejected_without_mutation (__main__.ArtifactDestinationTests.test_existing_hardlink_alias_is_rejected_without_mutation) ... ok
+test_existing_symlink_alias_is_rejected_without_mutation (__main__.ArtifactDestinationTests.test_existing_symlink_alias_is_rejected_without_mutation) ... ok
+test_identical_paths_are_rejected (__main__.ArtifactDestinationTests.test_identical_paths_are_rejected) ... ok
+test_nondirectory_ancestor_is_rejected_before_workload (__main__.ArtifactDestinationTests.test_nondirectory_ancestor_is_rejected_before_workload) ... ok
+test_parent_normalized_alias_is_rejected (__main__.ArtifactDestinationTests.test_parent_normalized_alias_is_rejected) ... ok
+test_single_dangling_destination_is_rejected (__main__.ArtifactDestinationTests.test_single_dangling_destination_is_rejected) ... ok
+test_symlink_loops_are_rejected (__main__.ArtifactDestinationTests.test_symlink_loops_are_rejected) ... ok
+test_symlink_parent_alias_is_rejected_before_creation (__main__.ArtifactDestinationTests.test_symlink_parent_alias_is_rejected_before_creation) ... ok
+test_two_dangling_aliases_to_common_target_are_rejected (__main__.ArtifactDestinationTests.test_two_dangling_aliases_to_common_target_are_rejected) ... ok
+test_csv_dev_full_fails (__main__.ArtifactFailureTests.test_csv_dev_full_fails) ... ok
+test_csv_missing_parent_directory_fails (__main__.ArtifactFailureTests.test_csv_missing_parent_directory_fails) ... ok
+test_csv_path_is_a_directory_fails (__main__.ArtifactFailureTests.test_csv_path_is_a_directory_fails) ... ok
+test_json_dev_full_fails (__main__.ArtifactFailureTests.test_json_dev_full_fails) ... ok
+test_json_missing_parent_directory_fails (__main__.ArtifactFailureTests.test_json_missing_parent_directory_fails) ... ok
+test_json_path_is_a_directory_fails (__main__.ArtifactFailureTests.test_json_path_is_a_directory_fails) ... ok
+test_bodies_out_of_range_is_rejected (__main__.CliValidationTests.test_bodies_out_of_range_is_rejected) ... ok
+test_help_exits_zero (__main__.CliValidationTests.test_help_exits_zero) ... ok
+test_minimal_valid_workload_still_runs (__main__.CliValidationTests.test_minimal_valid_workload_still_runs) ... ok
+test_missing_scenario_value_exits_2 (__main__.CliValidationTests.test_missing_scenario_value_exits_2) ... ok
+test_rate_inf_is_rejected (__main__.CliValidationTests.test_rate_inf_is_rejected) ... ok
+test_rate_missing_value_is_rejected (__main__.CliValidationTests.test_rate_missing_value_is_rejected) ... ok
+test_rate_nan_is_rejected (__main__.CliValidationTests.test_rate_nan_is_rejected) ... ok
+test_rate_negative_is_rejected (__main__.CliValidationTests.test_rate_negative_is_rejected) ... ok
+test_rate_overflowing_timestep_is_rejected (__main__.CliValidationTests.test_rate_overflowing_timestep_is_rejected) ... ok
+test_rate_underflowing_timestep_is_rejected (__main__.CliValidationTests.test_rate_underflowing_timestep_is_rejected) ... ok
+test_rate_with_trailing_junk_is_rejected (__main__.CliValidationTests.test_rate_with_trailing_junk_is_rejected) ... ok
+test_rate_zero_is_rejected (__main__.CliValidationTests.test_rate_zero_is_rejected) ... ok
+test_seed_trailing_junk_is_rejected (__main__.CliValidationTests.test_seed_trailing_junk_is_rejected) ... ok
+test_steps_out_of_range_is_rejected (__main__.CliValidationTests.test_steps_out_of_range_is_rejected) ... ok
+test_threads_out_of_range_is_rejected (__main__.CliValidationTests.test_threads_out_of_range_is_rejected) ... ok
+test_unknown_argument_exits_2 (__main__.CliValidationTests.test_unknown_argument_exits_2) ... ok
+test_both_compile_targets_are_required_before_runs (__main__.CompileCommandPreflightTests.test_both_compile_targets_are_required_before_runs) ... ok
+test_malformed_or_nonstrict_commands_are_rejected_before_runs (__main__.CompileCommandPreflightTests.test_malformed_or_nonstrict_commands_are_rejected_before_runs) ... ok
+test_missing_compile_commands_is_rejected_before_runs (__main__.CompileCommandPreflightTests.test_missing_compile_commands_is_rejected_before_runs) ... ok
+test_valid_commands_record_distinct_target_metadata (__main__.CompileCommandPreflightTests.test_valid_commands_record_distinct_target_metadata) ... ok
+
+----------------------------------------------------------------------
+Ran 47 tests in 33.384s
+
+OK
+<end of output>
+Test time =  33.47 sec
+----------------------------------------------------------
+Test Passed.
+"SpaceSimBenchmark.CliAndArtifacts" end time: Nov 05 14:06 +10
+"SpaceSimBenchmark.CliAndArtifacts" time elapsed: 00:00:33
+----------------------------------------------------------
+
+End testing: Nov 05 14:06 +10

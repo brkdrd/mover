@@ -15,6 +15,8 @@ the numbers below is in
 
 The final harness passed independent review after repairs to exact time serialization, compile-command provenance validation and artifact destination aliasing. All 47 permanent regressions passed on Linux and NTFS through WSL; independent dangling-link, filesystem-error and valid-path probes also passed. Numerical workloads, reference calculations and the `1e-4` separated-scene gates are unchanged. No protection against concurrent adversarial filesystem mutations is claimed.
 
+The final artifact-consistency audit passed: all eight JSON/CSV runs, both final Pyramid timing summaries, and source/binary fingerprints reproduced from the archived evidence. The actual 47-test CTest transcript is archived as `final-e503e2db/cli-ctest.log`; the native Pyramid console values are retained as an explicitly transcribed parent-tool record, not an independent rerun.
+
 The historical measurements below are retained with their original provenance. Final-source capture is recorded in the next section; it supersedes older measurements for the current source without rewriting their provenance.
 
 ## Final-source capture (`e503e2db`)
@@ -42,7 +44,7 @@ The native precise/FP-traps `PerformanceTest` was also rebuilt from the same eng
 
 | Total threads (including main) | Mean ms | p95 ms | p99 ms | Max ms | Misses at 120 Hz |
 |---|---:|---:|---:|---:|---:|
-| 6 | 8.210 | 13.595 | 20.463 | 163.386 | 164 / 1,200 |
+| 6 | 8.210 | 13.595 | 20.4625 | 163.386 | 164 / 1,200 |
 | 12 | 6.661 | 10.468 | 15.273 | 85.183 | 108 / 1,200 |
 
 **The dense-contact workload does not meet a hard 120 Hz deadline.** One run per configuration is not a reliability estimate; these are not matched upstream speedup measurements. The much lighter space-dynamics results must not replace or conceal these stress results.

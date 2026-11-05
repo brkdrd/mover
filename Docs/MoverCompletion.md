@@ -1,6 +1,6 @@
 # Mover requirements and implementation boundary
 
-**Status: bounded engine foundation implemented and independently reviewed; final publication checks are in progress. This is not a declaration that every product/specification gate passes.**
+**Status: bounded engine foundation implemented, independently reviewed and published through PR #6 with passing hosted CI. This is not a declaration that every product/specification gate passes.**
 
 The user-approved public repository preserves the history of `brkdrd/4dJolt`; it is a standalone derivative, with the source retained as `upstream`. The implementation plan is [MoverImplementationPlan.md](MoverImplementationPlan.md). Executed results, exact configurations, unresolved findings and compatibility changes belong in [MoverValidation.md](MoverValidation.md), not in inferred feature claims.
 

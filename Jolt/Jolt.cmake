@@ -10,6 +10,9 @@ set(JOLT_PHYSICS_ROOT ${PHYSICS_REPO_ROOT}/Jolt)
 set(JOLT_PHYSICS_SRC_FILES
 	${JOLT_PHYSICS_ROOT}/SpaceSim/Combat.h
 	${JOLT_PHYSICS_ROOT}/SpaceSim/Authority.h
+	${JOLT_PHYSICS_ROOT}/SpaceSim/World.h
+	${JOLT_PHYSICS_ROOT}/SpaceSim/PhysicsBridge.h
+	${JOLT_PHYSICS_ROOT}/SpaceSim/Simulation.h
 	# TODO(4D): triangle-mesh collision support. These serve the cut Mesh/HeightField/Triangle
 	# shapes (a 4D 'mesh' is a tetrahedral boundary mesh - conceptual gap 3), and internal edge
 	# removal is inherently a triangle-mesh adjacency concept. Cut for v1.
